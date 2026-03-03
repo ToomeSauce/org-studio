@@ -25,6 +25,8 @@ export interface Task {
 
 const PROJECTS_KEY = 'mc_projects';
 const TASKS_KEY = 'mc_tasks';
+const SEED_VERSION_KEY = 'mc_seed_version';
+const CURRENT_SEED_VERSION = 2; // Bump this to force re-seed
 
 function generateId(): string {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
@@ -69,8 +71,22 @@ const DEFAULT_TASKS: Task[] = [
 ];
 
 // === Storage helpers ===
+function checkSeedVersion() {
+  if (typeof window === 'undefined') return;
+  try {
+    const stored = parseInt(localStorage.getItem(SEED_VERSION_KEY) || '0', 10);
+    if (stored < CURRENT_SEED_VERSION) {
+      // Clear stale data so defaults re-seed
+      localStorage.removeItem(PROJECTS_KEY);
+      localStorage.removeItem(TASKS_KEY);
+      localStorage.setItem(SEED_VERSION_KEY, String(CURRENT_SEED_VERSION));
+    }
+  } catch {}
+}
+
 function load<T>(key: string, defaults: T[]): T[] {
   if (typeof window === 'undefined') return defaults;
+  checkSeedVersion();
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return defaults;

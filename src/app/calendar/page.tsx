@@ -127,10 +127,10 @@ export default function CalendarPage() {
         isPast && 'opacity-60', `stagger-${Math.min(idx+1,6)}`
       )}>
         <div className={clsx('px-3 py-2.5 border-b border-[var(--border-subtle)] flex items-center gap-2', isToday && 'border-b-[rgba(255,92,92,0.2)]')}>
-          <span className={clsx('inline-flex items-center justify-center w-7 h-7 text-xs font-bold rounded-full',
+          <span className={clsx('inline-flex items-center justify-center w-7 h-7 text-[var(--text-xs)] font-bold rounded-full',
             isToday ? 'bg-[var(--accent-primary)] text-white' : 'text-[var(--text-secondary)]'
           )}>{day.getDate()}</span>
-          <span className={clsx('text-xs font-medium', isToday ? 'text-[var(--accent-primary)]' : 'text-[var(--text-tertiary)]')}>
+          <span className={clsx('text-[var(--text-xs)] font-medium', isToday ? 'text-[var(--accent-primary)]' : 'text-[var(--text-tertiary)]')}>
             {DAYS_SHORT[day.getDay()]}
           </span>
         </div>
@@ -139,14 +139,14 @@ export default function CalendarPage() {
             <div key={ev.id} className="px-2.5 py-2 rounded-[var(--radius-md)] border border-[rgba(245,158,11,0.2)] bg-[rgba(245,158,11,0.06)] hover:bg-[rgba(245,158,11,0.1)] transition-colors">
               <div className="flex items-center gap-1.5 mb-0.5">
                 <Clock size={10} className="text-[var(--warning)] shrink-0" />
-                <span className="text-[10px] font-medium text-[var(--warning)]">{ev.timeFormatted}</span>
+                <span className="text-[var(--text-xs)] font-medium text-[var(--warning)]">{ev.timeFormatted}</span>
               </div>
-              <p className="text-[11px] text-[var(--text-secondary)] leading-snug">{ev.title}</p>
+              <p className="text-[var(--text-xs)] text-[var(--text-secondary)] leading-snug">{ev.title}</p>
             </div>
           ))}
           {events.length === 0 && (
             <div className="flex items-center justify-center h-full">
-              <span className="text-[11px] text-[var(--text-muted)]">No events</span>
+              <span className="text-[var(--text-xs)] text-[var(--text-muted)]">No events</span>
             </div>
           )}
         </div>
@@ -165,13 +165,13 @@ export default function CalendarPage() {
             <div className="flex border border-[var(--border-default)] rounded-[var(--radius-md)] overflow-hidden">
               {(['week','day'] as const).map(v => (
                 <button key={v} onClick={() => setView(v)}
-                  className={clsx('px-3 py-1 text-[12px] font-medium transition-colors',
+                  className={clsx('px-3 py-1 text-[var(--text-sm)] font-medium transition-colors',
                     view===v ? 'bg-[var(--accent-muted)] text-[var(--accent-primary)]' : 'text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
                   )}>{v === 'week' ? 'Week' : 'Day'}</button>
               ))}
             </div>
             <button onClick={() => setOffset(0)}
-              className={clsx('px-3 py-1.5 text-sm rounded-[var(--radius-md)] transition-all',
+              className={clsx('px-3 py-1.5 text-[var(--text-sm)] rounded-[var(--radius-md)] transition-all',
                 offset===0 ? 'text-[var(--accent-primary)] bg-[var(--accent-muted)] border border-[rgba(255,92,92,0.3)]'
                   : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-[var(--border-default)] hover:border-[var(--border-strong)]'
               )}>Today</button>
@@ -190,10 +190,10 @@ export default function CalendarPage() {
       {alwaysRunning.length > 0 && (
         <div className="flex items-center gap-3 px-4 py-2.5 bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-md)]">
           <div className="w-1.5 h-1.5 rounded-full bg-[var(--success)] animate-pulse" />
-          <span className="text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wide">Always Running</span>
+          <span className="text-[var(--text-xs)] font-semibold text-[var(--text-muted)] uppercase tracking-wide">Always Running</span>
           <div className="flex flex-wrap gap-2">
             {alwaysRunning.map((j: any) => (
-              <span key={j.id} className="text-[11px] px-2 py-0.5 rounded-full border border-[rgba(34,197,94,0.2)] bg-[var(--success-subtle)] text-[var(--success)]">
+              <span key={j.id} className="text-[var(--text-xs)] px-2 py-0.5 rounded-full border border-[rgba(34,197,94,0.2)] bg-[var(--success-subtle)] text-[var(--success)]">
                 {j.name || j.label || j.id?.slice(0,8)}
               </span>
             ))}
@@ -201,7 +201,7 @@ export default function CalendarPage() {
         </div>
       )}
 
-      <h2 className="text-base font-semibold text-[var(--text-primary)] tracking-tight">{weekLabel}</h2>
+      <h2 className="text-[var(--text-base)] font-semibold text-[var(--text-primary)] tracking-tight">{weekLabel}</h2>
 
       {/* Calendar grid */}
       {view === 'week' ? (

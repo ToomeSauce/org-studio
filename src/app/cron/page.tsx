@@ -2,7 +2,7 @@
 
 import { PageHeader } from '@/components/PageHeader';
 import { useGateway, useGatewayQuery } from '@/lib/hooks';
-import { Clock, Play, Pause, RotateCcw, Circle, Plus } from 'lucide-react';
+import { Clock, Play, Pause, RotateCcw } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useState } from 'react';
 
@@ -40,72 +40,72 @@ function CronJobCard({ job, onToggle, onRun, stagger }: {
 
   return (
     <div className={clsx(
-      'animate-rise bg-[var(--card)] border border-[var(--border-default)] rounded-[var(--radius-lg)] p-4',
+      'animate-rise bg-[var(--card)] border border-[var(--border-default)] rounded-[var(--radius-lg)] p-5',
       'hover:border-[var(--border-strong)] transition-all duration-200',
       'shadow-[var(--shadow-sm),inset_0_1px_0_var(--card-highlight)]',
       `stagger-${stagger}`
     )}>
       {/* Header */}
       <div className="flex items-start justify-between mb-3">
-        <div className="flex items-center gap-2.5 min-w-0">
+        <div className="flex items-center gap-3 min-w-0">
           <div className={clsx(
-            'w-[8px] h-[8px] rounded-full shrink-0',
+            'w-2.5 h-2.5 rounded-full shrink-0',
             !isEnabled ? 'bg-zinc-600'
-              : lastStatus === 'error' ? 'bg-[var(--error)] shadow-[0_0_8px_rgba(239,68,68,0.5)] animate-[pulse-subtle_2s_ease-in-out_infinite]'
-              : 'bg-[var(--success)] shadow-[0_0_8px_rgba(34,197,94,0.5)]'
+              : lastStatus === 'error' ? 'bg-[var(--error)] shadow-[0_0_8px_rgba(248,113,113,0.5)] animate-[pulse-subtle_2s_ease-in-out_infinite]'
+              : 'bg-[var(--success)] shadow-[0_0_8px_rgba(52,211,153,0.5)]'
           )} />
-          <span className="text-sm font-semibold text-[var(--text-primary)] truncate tracking-tight">{name}</span>
+          <span className="text-[var(--text-base)] font-semibold text-[var(--text-primary)] truncate">{name}</span>
         </div>
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="flex items-center gap-1.5 shrink-0">
           <button
             onClick={handleRun}
             disabled={running}
-            className="p-1.5 rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors disabled:opacity-50"
+            className="p-2 rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors disabled:opacity-50"
             title="Run now"
           >
-            {running ? <RotateCcw size={14} className="animate-spin" /> : <Play size={14} />}
+            {running ? <RotateCcw size={15} className="animate-spin" /> : <Play size={15} />}
           </button>
           <button
             onClick={() => onToggle(job.id, !isEnabled)}
             className={clsx(
-              'p-1.5 rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] transition-colors',
+              'p-2 rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] transition-colors',
               isEnabled ? 'text-[var(--success)] hover:text-[var(--warning)]' : 'text-zinc-500 hover:text-[var(--success)]'
             )}
             title={isEnabled ? 'Disable' : 'Enable'}
           >
-            {isEnabled ? <Pause size={14} /> : <Play size={14} />}
+            {isEnabled ? <Pause size={15} /> : <Play size={15} />}
           </button>
         </div>
       </div>
 
       {/* Schedule info */}
-      <div className="flex items-center gap-2 text-[11px] text-[var(--text-tertiary)] mb-3">
-        <Clock size={11} className="shrink-0" />
+      <div className="flex items-center gap-2.5 text-[var(--text-sm)] text-[var(--text-tertiary)] mb-3">
+        <Clock size={13} className="shrink-0" />
         <span className="font-[var(--font-mono)]">{scheduleExpr}</span>
         {tz && <span className="text-[var(--text-muted)]">({tz})</span>}
       </div>
 
       {/* Chips */}
-      <div className="flex flex-wrap gap-1.5">
+      <div className="flex flex-wrap gap-2">
         {model && (
-          <span className="text-[10px] font-medium px-2 py-0.5 rounded-full border border-[var(--border-default)] bg-[var(--bg-tertiary)] text-[var(--text-muted)]">
+          <span className="text-[var(--text-xs)] font-medium px-2.5 py-1 rounded-full border border-[var(--border-default)] bg-[var(--bg-tertiary)] text-[var(--text-muted)]">
             {model}
           </span>
         )}
         {delivery && (
           <span className={clsx(
-            'text-[10px] font-medium px-2 py-0.5 rounded-full border',
+            'text-[var(--text-xs)] font-medium px-2.5 py-1 rounded-full border',
             delivery === 'none' ? 'border-[var(--border-default)] bg-[var(--bg-tertiary)] text-[var(--text-muted)]'
-              : 'border-[rgba(59,130,246,0.3)] bg-[var(--info-subtle)] text-[var(--info)]'
+              : 'border-[rgba(96,165,250,0.3)] bg-[var(--info-subtle)] text-[var(--info)]'
           )}>
             {delivery}
           </span>
         )}
         {lastStatus && (
           <span className={clsx(
-            'text-[10px] font-semibold px-2 py-0.5 rounded-full border',
-            lastStatus === 'ok' ? 'border-[rgba(34,197,94,0.3)] bg-[var(--success-subtle)] text-[var(--success)]'
-              : lastStatus === 'error' ? 'border-[rgba(239,68,68,0.3)] bg-[var(--error-subtle)] text-[var(--error)]'
+            'text-[var(--text-xs)] font-semibold px-2.5 py-1 rounded-full border',
+            lastStatus === 'ok' ? 'border-[rgba(52,211,153,0.3)] bg-[var(--success-subtle)] text-[var(--success)]'
+              : lastStatus === 'error' ? 'border-[rgba(248,113,113,0.3)] bg-[var(--error-subtle)] text-[var(--error)]'
               : 'border-[var(--border-default)] bg-[var(--bg-tertiary)] text-[var(--text-muted)]'
           )}>
             {lastStatus}
@@ -115,7 +115,7 @@ function CronJobCard({ job, onToggle, onRun, stagger }: {
 
       {/* Last run */}
       {lastRun && (
-        <div className="mt-3 pt-3 border-t border-[var(--border-subtle)] flex items-center justify-between text-[11px] text-[var(--text-muted)]">
+        <div className="mt-4 pt-3 border-t border-[var(--border-subtle)] flex items-center justify-between text-[var(--text-sm)] text-[var(--text-muted)]">
           <span>Last run: {formatRelative(lastRun)}</span>
           {lastDuration && <span>{(lastDuration / 1000).toFixed(1)}s</span>}
         </div>
@@ -152,31 +152,29 @@ export default function CronPage() {
   const disabled = Array.isArray(cronJobs) ? cronJobs.filter((j: any) => j.enabled === false) : [];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <PageHeader
         title="Cron Jobs"
         description={`${enabled.length} active, ${disabled.length} disabled`}
       />
 
-      {/* Active */}
       <div>
-        <h2 className="text-[11px] uppercase tracking-[0.04em] font-semibold text-[var(--text-muted)] mb-3">
+        <h2 className="text-[var(--text-xs)] uppercase tracking-[0.05em] font-semibold text-[var(--text-muted)] mb-4">
           Active ({enabled.length})
         </h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {enabled.map((job: any, i: number) => (
             <CronJobCard key={job.id || i} job={job} onToggle={handleToggle} onRun={handleRun} stagger={Math.min(i + 1, 6)} />
           ))}
         </div>
       </div>
 
-      {/* Disabled */}
       {disabled.length > 0 && (
         <div>
-          <h2 className="text-[11px] uppercase tracking-[0.04em] font-semibold text-[var(--text-muted)] mb-3">
+          <h2 className="text-[var(--text-xs)] uppercase tracking-[0.05em] font-semibold text-[var(--text-muted)] mb-4">
             Disabled ({disabled.length})
           </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 opacity-60">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 opacity-60">
             {disabled.map((job: any, i: number) => (
               <CronJobCard key={job.id || i} job={job} onToggle={handleToggle} onRun={handleRun} stagger={Math.min(i + 1, 6)} />
             ))}

@@ -4,7 +4,7 @@ import { PageHeader } from '@/components/PageHeader';
 import { StatusCard } from '@/components/StatusCard';
 import { useGateway, useGatewayQuery } from '@/lib/hooks';
 import {
-  Bot, Clock, Activity, Wifi, WifiOff, Zap, Circle,
+  Bot, Clock, Wifi, WifiOff, Zap,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 
@@ -22,18 +22,18 @@ function SessionRow({ session }: { session: any }) {
   };
 
   return (
-    <div className="flex items-center gap-3 py-2.5 px-3.5 rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] transition-colors">
-      <div className={clsx('w-[6px] h-[6px] rounded-full shrink-0', kindDot[kind] || 'bg-zinc-500',
+    <div className="flex items-center gap-3 py-3 px-4 rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] transition-colors">
+      <div className={clsx('w-2 h-2 rounded-full shrink-0', kindDot[kind] || 'bg-zinc-500',
         isActive && 'shadow-[0_0_6px_rgba(255,92,92,0.4)]'
       )} />
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-[var(--text-primary)] truncate tracking-tight">{displayName}</p>
-        <p className="text-[11px] text-[var(--text-muted)] truncate font-[var(--font-mono)]">
+        <p className="text-[var(--text-sm)] font-medium text-[var(--text-primary)] truncate">{displayName}</p>
+        <p className="text-[var(--text-xs)] text-[var(--text-muted)] truncate font-[var(--font-mono)] mt-0.5">
           {model}{session.channel ? ` · ${session.channel}` : ''}
         </p>
       </div>
       <span className={clsx(
-        'text-[10px] font-semibold px-2 py-0.5 rounded-full',
+        'text-[var(--text-xs)] font-semibold px-2.5 py-1 rounded-full',
         isActive ? 'text-[var(--success)] bg-[var(--success-subtle)]' : 'text-[var(--text-muted)] bg-[var(--bg-tertiary)]'
       )}>
         {isActive ? 'Active' : 'Idle'}
@@ -49,20 +49,20 @@ function CronJobRow({ job }: { job: any }) {
   const scheduleExpr = typeof job.schedule === 'string' ? job.schedule : job.schedule?.expr || job.cron || '';
 
   return (
-    <div className="flex items-center gap-3 py-2.5 px-3.5 rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] transition-colors">
+    <div className="flex items-center gap-3 py-3 px-4 rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] transition-colors">
       <div className={clsx(
-        'w-[6px] h-[6px] rounded-full shrink-0',
+        'w-2 h-2 rounded-full shrink-0',
         !isEnabled ? 'bg-zinc-600'
-          : lastStatus === 'ok' ? 'bg-[var(--success)] shadow-[0_0_6px_rgba(34,197,94,0.4)]'
-          : lastStatus === 'error' ? 'bg-[var(--error)] shadow-[0_0_6px_rgba(239,68,68,0.4)]'
+          : lastStatus === 'ok' ? 'bg-[var(--success)] shadow-[0_0_6px_rgba(52,211,153,0.4)]'
+          : lastStatus === 'error' ? 'bg-[var(--error)] shadow-[0_0_6px_rgba(248,113,113,0.4)]'
           : 'bg-[var(--warning)]'
       )} />
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-[var(--text-primary)] truncate tracking-tight">{name}</p>
-        <p className="text-[11px] text-[var(--text-muted)] truncate font-[var(--font-mono)]">{scheduleExpr}</p>
+        <p className="text-[var(--text-sm)] font-medium text-[var(--text-primary)] truncate">{name}</p>
+        <p className="text-[var(--text-xs)] text-[var(--text-muted)] truncate font-[var(--font-mono)] mt-0.5">{scheduleExpr}</p>
       </div>
       <span className={clsx(
-        'text-[10px] font-semibold px-2 py-0.5 rounded-full',
+        'text-[var(--text-xs)] font-semibold px-2.5 py-1 rounded-full',
         isEnabled
           ? 'text-[var(--success)] bg-[var(--success-subtle)]'
           : 'text-[var(--text-muted)] bg-[var(--bg-tertiary)]'
@@ -89,14 +89,14 @@ export default function DashboardPage() {
     : [];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <PageHeader
         title="Dashboard"
         description="System overview and live status"
       />
 
       {/* Status cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
         <StatusCard
           title="Gateway"
           value={state === 'connected' ? 'Online' : state}
@@ -132,22 +132,22 @@ export default function DashboardPage() {
       </div>
 
       {/* Two-column layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Recent sessions */}
         <div className="animate-rise stagger-5 bg-[var(--card)] border border-[var(--border-default)] rounded-[var(--radius-lg)] shadow-[var(--shadow-sm),inset_0_1px_0_var(--card-highlight)] hover:border-[var(--border-strong)] transition-all">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-subtle)]">
-            <h2 className="text-[13px] font-semibold text-[var(--text-primary)] tracking-tight">Recent Sessions</h2>
-            <span className="text-[11px] text-[var(--text-muted)] font-medium">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border-subtle)]">
+            <h2 className="text-[var(--text-md)] font-semibold text-[var(--text-primary)]">Recent Sessions</h2>
+            <span className="text-[var(--text-xs)] text-[var(--text-muted)] font-medium">
               {Array.isArray(sessionList) ? sessionList.length : 0} total
             </span>
           </div>
-          <div className="divide-y divide-[var(--border-subtle)] max-h-[380px] overflow-y-auto">
+          <div className="divide-y divide-[var(--border-subtle)] max-h-[420px] overflow-y-auto">
             {Array.isArray(sessionList) && sessionList.length > 0 ? (
               sessionList.slice(0, 10).map((session: any, i: number) => (
                 <SessionRow key={session.key || session.sessionKey || i} session={session} />
               ))
             ) : (
-              <div className="p-6 text-sm text-[var(--text-muted)] text-center">
+              <div className="p-8 text-[var(--text-base)] text-[var(--text-muted)] text-center">
                 {state !== 'connected' ? 'Connecting to Gateway...' : 'No sessions'}
               </div>
             )}
@@ -156,19 +156,19 @@ export default function DashboardPage() {
 
         {/* Cron jobs */}
         <div className="animate-rise stagger-6 bg-[var(--card)] border border-[var(--border-default)] rounded-[var(--radius-lg)] shadow-[var(--shadow-sm),inset_0_1px_0_var(--card-highlight)] hover:border-[var(--border-strong)] transition-all">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-subtle)]">
-            <h2 className="text-[13px] font-semibold text-[var(--text-primary)] tracking-tight">Cron Jobs</h2>
-            <span className="text-[11px] text-[var(--text-muted)] font-medium">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border-subtle)]">
+            <h2 className="text-[var(--text-md)] font-semibold text-[var(--text-primary)]">Cron Jobs</h2>
+            <span className="text-[var(--text-xs)] text-[var(--text-muted)] font-medium">
               {enabledCrons.length} active
             </span>
           </div>
-          <div className="divide-y divide-[var(--border-subtle)] max-h-[380px] overflow-y-auto">
+          <div className="divide-y divide-[var(--border-subtle)] max-h-[420px] overflow-y-auto">
             {Array.isArray(cronJobs) && cronJobs.length > 0 ? (
               cronJobs.slice(0, 10).map((job: any, i: number) => (
                 <CronJobRow key={job.id || i} job={job} />
               ))
             ) : (
-              <div className="p-6 text-sm text-[var(--text-muted)] text-center">
+              <div className="p-8 text-[var(--text-base)] text-[var(--text-muted)] text-center">
                 {state !== 'connected' ? 'Connecting to Gateway...' : 'No cron jobs'}
               </div>
             )}
