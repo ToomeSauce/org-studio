@@ -2,137 +2,195 @@
 
 import { PageHeader } from '@/components/PageHeader';
 import { useGateway, useGatewayQuery } from '@/lib/hooks';
-import { Bot, Circle, Clock, MessageSquare, Plus, X, Send, Loader2 } from 'lucide-react';
+import { Bot, Send, MessageCircle, Clock, Zap, Circle, Activity, ChevronRight, Loader2, X } from 'lucide-react';
 import { clsx } from 'clsx';
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 
-function AgentCard({ session, stagger }: { session: any; stagger: number }) {
-  const isActive = session.status === 'active' || (session.updatedAt && Date.now() - session.updatedAt < 300000);
-  const kind: string = session.kind || 'direct';
+interface AgentDef {
+  id: string;
+  name: string;
+  emoji: string;
+  title: string;
+  color: string;
+  bg: string;
+}
 
-  const kindConfig: Record<string, { label: string; color: string; dotColor: string }> = {
-    direct:  { label: 'Main', color: 'text-[var(--accent-primary)] bg-[var(--accent-muted)] border-[rgba(255,92,92,0.3)]', dotColor: 'bg-[var(--accent-primary)]' },
-    run:     { label: 'Sub-agent', color: 'text-[var(--info)] bg-[var(--info-subtle)] border-[rgba(59,130,246,0.3)]', dotColor: 'bg-[var(--info)]' },
-    session: { label: 'Persistent', color: 'text-[var(--success)] bg-[var(--success-subtle)] border-[rgba(34,197,94,0.3)]', dotColor: 'bg-[var(--success)]' },
-    cron:    { label: 'Cron', color: 'text-[var(--warning)] bg-[var(--warning-subtle)] border-[rgba(245,158,11,0.3)]', dotColor: 'bg-[var(--warning)]' },
-  };
-  const kc = kindConfig[kind] || { label: kind, color: 'text-[var(--text-muted)] bg-[var(--bg-tertiary)] border-[var(--border-default)]', dotColor: 'bg-zinc-500' };
+const AGENT_DEFS: AgentDef[] = [
+  { id: 'main', name: 'Henry', emoji: '🧄', title: 'Chief of Staff', color: 'text-[var(--accent-primary)]', bg: 'bg-[rgba(255,92,92,0.12)]' },
+  { id: 'ana', name: 'Ana', emoji: '⚡', title: 'Catpilot Dev', color: 'text-yellow-400', bg: 'bg-[rgba(250,204,21,0.1)]' },
+  { id: 'mikey', name: 'Mikey', emoji: '🔬', title: 'Labs Dev', color: 'text-cyan-400', bg: 'bg-[rgba(34,211,238,0.1)]' },
+  { id: 'sam', name: 'Sam', emoji: '⚖️', title: 'Legal Counsel', color: 'text-purple-400', bg: 'bg-[rgba(168,85,247,0.1)]' },
+];
 
-  const displayName = session.displayName || session.label || session.agentId || session.key?.split(':').pop() || 'Agent';
-  const model = session.model?.split('/').pop() || '';
-  const tokens = session.totalTokens ? `${Math.round(session.totalTokens / 1000)}k tokens` : '';
+function formatTokens(n: number): string {
+  if (!n) return '0';
+  if (n < 1000) return String(n);
+  return `${(n / 1000).toFixed(1)}k`;
+}
+
+function formatRelative(ms: number): string {
+  if (!ms) return 'never';
+  const diff = Date.now() - ms;
+  if (diff < 60000) return 'just now';
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+  return `${Math.floor(diff / 86400000)}d ago`;
+}
+
+function AgentPanel({ agent, sessions, onPing }: {
+  agent: AgentDef;
+  sessions: any[];
+  onPing: (agentId: string) => void;
+}) {
+  // Find sessions belonging to this agent
+  const agentSessions = sessions.filter((s: any) => {
+    const key = s.key || s.sessionKey || '';
+    return key.includes(`agent:${agent.id}:`) || key.startsWith(`${agent.id}:`);
+  });
+
+  const mainSession = agentSessions.find((s: any) => s.kind === 'direct') || agentSessions[0];
+  const isActive = mainSession?.updatedAt && Date.now() - mainSession.updatedAt < 300000;
+  const totalTokens = agentSessions.reduce((sum: number, s: any) => sum + (s.totalTokens || 0), 0);
+  const model = mainSession?.model?.split('/').pop() || '—';
+  const lastActive = mainSession?.updatedAt ? formatRelative(mainSession.updatedAt) : 'no sessions';
+  const subSessions = agentSessions.filter((s: any) => s.kind === 'run' || s.kind === 'cron');
 
   return (
     <div className={clsx(
-      'animate-rise bg-[var(--card)] border border-[var(--border-default)] rounded-[var(--radius-lg)] p-4',
+      'animate-rise bg-[var(--card)] border border-[var(--border-default)] rounded-[var(--radius-lg)]',
       'hover:border-[var(--border-strong)] transition-all duration-200',
       'shadow-[var(--shadow-sm),inset_0_1px_0_var(--card-highlight)]',
-      `stagger-${stagger}`
+      isActive && 'border-[rgba(34,197,94,0.3)]'
     )}>
-      <div className="flex items-start justify-between mb-3">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className="w-8 h-8 rounded-[var(--radius-md)] bg-[var(--bg-tertiary)] flex items-center justify-center shrink-0">
-            <Bot size={15} className="text-[var(--text-tertiary)]" />
+      {/* Header */}
+      <div className="px-5 py-4 border-b border-[var(--border-subtle)] flex items-center gap-3">
+        <div className={clsx('w-10 h-10 rounded-full flex items-center justify-center text-lg shrink-0', agent.bg)}>
+          {agent.emoji}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <h3 className="text-[15px] font-bold text-[var(--text-primary)] tracking-tight">{agent.name}</h3>
+            <div className={clsx(
+              'w-2 h-2 rounded-full',
+              isActive ? 'bg-[var(--success)] shadow-[0_0_6px_rgba(34,197,94,0.5)]' : 'bg-zinc-600'
+            )} />
+            <span className="text-[10px] text-[var(--text-muted)]">{isActive ? 'Active' : 'Idle'}</span>
           </div>
-          <span className="text-sm font-semibold text-[var(--text-primary)] truncate tracking-tight">
-            {displayName}
-          </span>
+          <p className={clsx('text-[12px] font-medium', agent.color)}>{agent.title}</p>
         </div>
-        <span className={clsx('text-[10px] px-2 py-0.5 rounded-full font-semibold border', kc.color)}>
-          {kc.label}
-        </span>
+        <button
+          onClick={() => onPing(agent.id)}
+          className={clsx(
+            'flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium rounded-[var(--radius-md)] transition-all',
+            'border border-[var(--border-default)] hover:border-[var(--border-strong)]',
+            'hover:bg-[var(--bg-hover)] text-[var(--text-secondary)]'
+          )}
+        >
+          <Send size={12} /> Message
+        </button>
       </div>
 
-      <div className="space-y-2">
-        {session.task && (
-          <p className="text-xs text-[var(--text-tertiary)] line-clamp-2 leading-relaxed">
-            {session.task}
-          </p>
-        )}
-
-        <div className="flex items-center gap-3 text-[11px] text-[var(--text-muted)]">
-          <span className="flex items-center gap-1.5">
-            <div className={clsx('w-[5px] h-[5px] rounded-full', isActive ? 'bg-[var(--success)] shadow-[0_0_6px_rgba(34,197,94,0.5)]' : 'bg-zinc-600')} />
-            {isActive ? 'Active' : 'Idle'}
-          </span>
-          {model && <span className="font-[var(--font-mono)] text-[10px]">{model}</span>}
-          {tokens && <span>{tokens}</span>}
-          {session.channel && <span>{session.channel}</span>}
+      {/* Stats */}
+      <div className="px-5 py-3 grid grid-cols-4 gap-4">
+        <div>
+          <p className="text-[10px] font-semibold text-[var(--text-muted)] uppercase tracking-wide">Last Active</p>
+          <p className="text-[13px] font-medium text-[var(--text-primary)] mt-0.5">{lastActive}</p>
+        </div>
+        <div>
+          <p className="text-[10px] font-semibold text-[var(--text-muted)] uppercase tracking-wide">Model</p>
+          <p className="text-[13px] font-medium text-[var(--text-primary)] mt-0.5 font-[var(--font-mono)] text-[11px]">{model}</p>
+        </div>
+        <div>
+          <p className="text-[10px] font-semibold text-[var(--text-muted)] uppercase tracking-wide">Tokens</p>
+          <p className="text-[13px] font-medium text-[var(--text-primary)] mt-0.5">{formatTokens(totalTokens)}</p>
+        </div>
+        <div>
+          <p className="text-[10px] font-semibold text-[var(--text-muted)] uppercase tracking-wide">Sessions</p>
+          <p className="text-[13px] font-medium text-[var(--text-primary)] mt-0.5">{agentSessions.length}</p>
         </div>
       </div>
+
+      {/* Active sub-sessions */}
+      {subSessions.length > 0 && (
+        <div className="px-5 pb-3">
+          <p className="text-[10px] font-semibold text-[var(--text-muted)] uppercase tracking-wide mb-1.5">Active Runs</p>
+          <div className="space-y-1">
+            {subSessions.slice(0, 4).map((s: any, i: number) => {
+              const name = s.displayName || s.label || s.key?.split(':').pop() || 'run';
+              const kind = s.kind || 'run';
+              return (
+                <div key={s.key || i} className="flex items-center gap-2 px-2.5 py-1.5 rounded-[var(--radius-sm)] bg-[var(--bg-primary)]">
+                  <div className={clsx('w-1.5 h-1.5 rounded-full',
+                    kind === 'cron' ? 'bg-[var(--warning)]' : 'bg-[var(--info)]'
+                  )} />
+                  <span className="text-[11px] text-[var(--text-secondary)] truncate flex-1">{name}</span>
+                  <span className={clsx(
+                    'text-[9px] font-semibold px-1.5 py-px rounded-full',
+                    kind === 'cron' ? 'bg-[var(--warning-subtle)] text-[var(--warning)]' : 'bg-[var(--info-subtle)] text-[var(--info)]'
+                  )}>{kind}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function NewAgentDialog({ onClose, onSend }: { onClose: () => void; onSend: (msg: string) => Promise<void> }) {
-  const [message, setMessage] = useState('');
+function MessageDialog({ agentId, agentName, onClose, gateway }: {
+  agentId: string; agentName: string; onClose: () => void; gateway: any;
+}) {
+  const [msg, setMsg] = useState('');
   const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
 
   const handleSend = async () => {
-    if (!message.trim() || sending) return;
+    if (!msg.trim() || sending || !gateway) return;
     setSending(true);
     try {
-      await onSend(message.trim());
-      onClose();
+      await gateway.sendChat(msg.trim(), `agent:${agentId}:main`);
+      setSent(true);
+      setTimeout(onClose, 1500);
     } catch (e) {
-      console.error('Failed to send:', e);
+      console.error('Send failed:', e);
       setSending(false);
     }
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm" onClick={onClose}>
-      <div
-        className="w-full max-w-lg bg-[var(--card)] border border-[var(--border-default)] rounded-[var(--radius-lg)] shadow-[var(--shadow-lg)] animate-rise"
-        onClick={e => e.stopPropagation()}
-      >
+      <div className="w-full max-w-lg bg-[var(--card)] border border-[var(--border-default)] rounded-[var(--radius-lg)] shadow-[var(--shadow-lg)] animate-rise"
+        onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border-default)]">
-          <h2 className="text-base font-semibold tracking-tight">New Chat Session</h2>
-          <button onClick={onClose} className="p-1.5 rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)] transition-colors">
-            <X size={16} />
-          </button>
+          <h2 className="text-base font-semibold tracking-tight">Message {agentName}</h2>
+          <button onClick={onClose} className="p-1.5 rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)]"><X size={16} /></button>
         </div>
-
         <div className="p-5 space-y-4">
-          <div>
-            <label className="text-xs font-medium text-[var(--text-tertiary)] uppercase tracking-wide mb-2 block">
-              Message
-            </label>
-            <textarea
-              value={message}
-              onChange={e => setMessage(e.target.value)}
-              placeholder="Send a message to start a new session..."
-              rows={4}
-              className="w-full px-3.5 py-2.5 bg-[var(--bg-primary)] border border-[var(--border-strong)] rounded-[var(--radius-md)] text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] resize-none outline-none focus:border-[var(--accent-primary)] focus:shadow-[0_0_0_2px_var(--bg-primary),0_0_0_4px_var(--accent-primary)] transition-all"
-              autoFocus
-              onKeyDown={e => { if (e.key === 'Enter' && e.metaKey) handleSend(); }}
-            />
-          </div>
-
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] text-[var(--text-muted)]">⌘+Enter to send</span>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={onClose}
-                className="px-3 py-1.5 text-sm text-[var(--text-secondary)] border border-[var(--border-default)] hover:border-[var(--border-strong)] rounded-[var(--radius-md)] transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSend}
-                disabled={!message.trim() || sending}
-                className={clsx(
-                  'flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium text-white rounded-[var(--radius-md)] transition-all',
-                  'bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)]',
-                  'shadow-[0_1px_2px_rgba(0,0,0,0.3)] hover:shadow-[var(--shadow-md),0_0_20px_var(--accent-glow)]',
-                  'disabled:opacity-50 disabled:cursor-not-allowed'
-                )}
-              >
-                {sending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-                Send
-              </button>
+          {sent ? (
+            <div className="text-center py-6">
+              <div className="text-[var(--success)] text-lg mb-2">✓</div>
+              <p className="text-sm text-[var(--text-secondary)]">Message sent to {agentName}</p>
             </div>
-          </div>
+          ) : (
+            <>
+              <textarea
+                value={msg} onChange={e => setMsg(e.target.value)}
+                placeholder={`Send a task or message to ${agentName}...`}
+                rows={4}
+                className="w-full px-3.5 py-2.5 bg-[var(--bg-primary)] border border-[var(--border-strong)] rounded-[var(--radius-md)] text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] resize-none outline-none focus:border-[var(--accent-primary)] transition-all"
+                autoFocus
+                onKeyDown={e => { if (e.key === 'Enter' && e.metaKey) handleSend(); }}
+              />
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-[var(--text-muted)]">⌘+Enter to send</span>
+                <button onClick={handleSend} disabled={!msg.trim() || sending}
+                  className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium text-white rounded-[var(--radius-md)] bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)] disabled:opacity-50 transition-all">
+                  {sending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />} Send
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -141,73 +199,55 @@ function NewAgentDialog({ onClose, onSend }: { onClose: () => void; onSend: (msg
 
 export default function AgentsPage() {
   const { gateway } = useGateway();
-  const { data: sessions } = useGatewayQuery<any>('sessions.list', { limit: 50 }, 10000);
-  const sessionList = sessions?.sessions || sessions || [];
-  const [showNewAgent, setShowNewAgent] = useState(false);
+  const { data: sessions } = useGatewayQuery<any>('sessions.list', { limit: 50 }, 8000);
+  const sessionList = sessions?.sessions || [];
+  const [messagingAgent, setMessagingAgent] = useState<AgentDef | null>(null);
 
-  const mainSessions = Array.isArray(sessionList) ? sessionList.filter((s: any) => s.kind !== 'cron') : [];
-  const cronSessions = Array.isArray(sessionList) ? sessionList.filter((s: any) => s.kind === 'cron') : [];
-
-  const handleSendChat = async (message: string) => {
-    if (!gateway) throw new Error('Not connected');
-    await gateway.sendChat(message);
-  };
+  // Summary stats
+  const allSessions = Array.isArray(sessionList) ? sessionList : [];
+  const activeSessions = allSessions.filter((s: any) => s.updatedAt && Date.now() - s.updatedAt < 300000);
+  const totalTokens = allSessions.reduce((sum: number, s: any) => sum + (s.totalTokens || 0), 0);
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Agents"
-        description="Active agents, sub-agents, and sessions"
-        actions={
-          <button
-            onClick={() => setShowNewAgent(true)}
-            className={clsx(
-              'flex items-center gap-1.5 px-3.5 py-1.5 text-sm font-medium text-white rounded-[var(--radius-md)] transition-all',
-              'bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)]',
-              'shadow-[0_1px_2px_rgba(0,0,0,0.3)] hover:shadow-[var(--shadow-md),0_0_20px_var(--accent-glow)]'
-            )}
-          >
-            <Plus size={14} />
-            New Agent
-          </button>
-        }
+        description="Operational status and control for each agent"
       />
 
-      {/* Main sessions */}
-      <div>
-        <h2 className="text-[11px] uppercase tracking-[0.04em] font-semibold text-[var(--text-muted)] mb-3">
-          Sessions ({mainSessions.length})
-        </h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-          {mainSessions.map((session: any, i: number) => (
-            <AgentCard key={session.key || session.sessionKey || i} session={session} stagger={Math.min(i + 1, 6)} />
-          ))}
-          {mainSessions.length === 0 && (
-            <p className="text-sm text-[var(--text-muted)] col-span-full text-center py-8">
-              No active sessions
-            </p>
-          )}
-        </div>
+      {/* Summary strip */}
+      <div className="flex items-center gap-6">
+        {[
+          { label: 'Agents', value: AGENT_DEFS.length, color: 'text-[var(--accent-primary)]' },
+          { label: 'Active Sessions', value: activeSessions.length, color: 'text-[var(--success)]' },
+          { label: 'Total Sessions', value: allSessions.length, color: 'text-[var(--text-primary)]' },
+          { label: 'Total Tokens', value: formatTokens(totalTokens), color: 'text-[var(--warning)]' },
+        ].map(stat => (
+          <div key={stat.label} className="flex items-baseline gap-2">
+            <span className={clsx('text-xl font-bold tracking-tight', stat.color)}>{stat.value}</span>
+            <span className="text-[11px] font-medium text-[var(--text-muted)] uppercase tracking-wide">{stat.label}</span>
+          </div>
+        ))}
       </div>
 
-      {/* Cron sessions */}
-      {cronSessions.length > 0 && (
-        <div>
-          <h2 className="text-[11px] uppercase tracking-[0.04em] font-semibold text-[var(--text-muted)] mb-3">
-            Cron Sessions ({cronSessions.length})
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {cronSessions.map((session: any, i: number) => (
-              <AgentCard key={session.key || session.sessionKey || i} session={session} stagger={Math.min(i + 1, 6)} />
-            ))}
-          </div>
-        </div>
-      )}
+      {/* Agent panels */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {AGENT_DEFS.map((agent, i) => (
+          <AgentPanel
+            key={agent.id}
+            agent={agent}
+            sessions={allSessions}
+            onPing={() => setMessagingAgent(agent)}
+          />
+        ))}
+      </div>
 
-      {showNewAgent && (
-        <NewAgentDialog
-          onClose={() => setShowNewAgent(false)}
-          onSend={handleSendChat}
+      {messagingAgent && gateway && (
+        <MessageDialog
+          agentId={messagingAgent.id}
+          agentName={messagingAgent.name}
+          onClose={() => setMessagingAgent(null)}
+          gateway={gateway}
         />
       )}
     </div>

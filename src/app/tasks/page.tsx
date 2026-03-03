@@ -125,7 +125,7 @@ export default function TasksPage() {
     });
   }, [tasks, filterProject, filterAgent]);
 
-  const agents = useMemo(() => [...new Set(tasks.map(t => t.assignee))], [tasks]);
+  const agents = useMemo(() => [...new Set(tasks.map(t => t.assignee).filter(Boolean))], [tasks]);
 
   // Stats
   const now = Date.now();
