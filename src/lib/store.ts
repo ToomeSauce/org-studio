@@ -26,7 +26,7 @@ export interface Task {
 const PROJECTS_KEY = 'mc_projects';
 const TASKS_KEY = 'mc_tasks';
 const SEED_VERSION_KEY = 'mc_seed_version';
-const CURRENT_SEED_VERSION = 2; // Bump this to force re-seed
+const CURRENT_SEED_VERSION = 3; // Bump this to force re-seed
 
 function generateId(): string {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
@@ -64,10 +64,54 @@ const DEFAULT_TASKS: Task[] = [
   { id: 't13', title: 'Short-Form Module 343 — 35/35 test suite passing', status: 'review', projectId: 'proj-shortform', assignee: 'Henry', createdAt: Date.now() - 86400000 * 1 },
   { id: 't14', title: 'Grader v2 global rollout — 29 team-modules updated', status: 'review', projectId: 'proj-catpilot', assignee: 'Henry', createdAt: Date.now() - 86400000 * 5 },
 
-  // Done
-  { id: 't15', title: 'Gateway proxy — stable WS connection + token auth', status: 'done', projectId: 'proj-mc', assignee: 'Henry', createdAt: Date.now() - 86400000 * 1 },
-  { id: 't16', title: 'Voice service deployed on App Service with CI/CD', status: 'done', projectId: 'proj-voice', assignee: 'Henry', createdAt: Date.now() - 86400000 * 15 },
-  { id: 't17', title: 'Reset button fix + transition suppression for short-form', status: 'done', projectId: 'proj-shortform', assignee: 'Henry', createdAt: Date.now() - 86400000 * 1 },
+  // Done — Catpilot Platform
+  { id: 'd01', title: 'Grader v2 — pure LLM grading, no embeddings', status: 'done', projectId: 'proj-catpilot', assignee: 'Henry', createdAt: Date.now() - 86400000 * 14 },
+  { id: 'd02', title: 'Server-side pass enforcement + JSON injection fix', status: 'done', projectId: 'proj-catpilot', assignee: 'Henry', createdAt: Date.now() - 86400000 * 12 },
+  { id: 'd03', title: 'Grader v2 global rollout — all 29 team-modules updated', status: 'done', projectId: 'proj-catpilot', assignee: 'Henry', createdAt: Date.now() - 86400000 * 7 },
+  { id: 'd04', title: 'Module 333 test suites — 9 classes, 97-100% accuracy', status: 'done', projectId: 'proj-catpilot', assignee: 'Henry', createdAt: Date.now() - 86400000 * 12 },
+  { id: 'd05', title: 'Module 341/342 seed SQL — clean clones for prod', status: 'done', projectId: 'proj-catpilot', assignee: 'Henry', createdAt: Date.now() - 86400000 * 10 },
+  { id: 'd06', title: 'Dedicated test user grader-test@catpilot.ai (user 456)', status: 'done', projectId: 'proj-catpilot', assignee: 'Henry', createdAt: Date.now() - 86400000 * 10 },
+  { id: 'd07', title: 'Studio V2 Quick Create — single text box → AI module', status: 'done', projectId: 'proj-catpilot', assignee: 'Henry', createdAt: Date.now() - 86400000 * 16 },
+  { id: 'd08', title: 'Reference module injection for quality generation', status: 'done', projectId: 'proj-catpilot', assignee: 'Henry', createdAt: Date.now() - 86400000 * 16 },
+  { id: 'd09', title: 'TQF v1.0 pushed + Module 333 learning objectives populated', status: 'done', projectId: 'proj-catpilot', assignee: 'Henry', createdAt: Date.now() - 86400000 * 14 },
+  { id: 'd10', title: 'Remove embeddings from generation pipeline', status: 'done', projectId: 'proj-catpilot', assignee: 'Henry', createdAt: Date.now() - 86400000 * 14 },
+
+  // Done — Short-Form Learning
+  { id: 'd11', title: 'Short-Form design spec v1.1 — all 11 questions resolved', status: 'done', projectId: 'proj-shortform', assignee: 'Henry', createdAt: Date.now() - 86400000 * 4 },
+  { id: 'd12', title: 'Phase 0-6: DB migration, seed, progress bar, speed round', status: 'done', projectId: 'proj-shortform', assignee: 'Henry', createdAt: Date.now() - 86400000 * 3 },
+  { id: 'd13', title: 'Module 343 Slack handlers — 5 speed round actions', status: 'done', projectId: 'proj-shortform', assignee: 'Henry', createdAt: Date.now() - 86400000 * 3 },
+  { id: 'd14', title: 'Module 343 test suite — 35/35 passing (100%)', status: 'done', projectId: 'proj-shortform', assignee: 'Henry', createdAt: Date.now() - 86400000 * 2 },
+  { id: 'd15', title: 'Reset button fix — clear completions, transitions, speed round', status: 'done', projectId: 'proj-shortform', assignee: 'Henry', createdAt: Date.now() - 86400000 * 2 },
+  { id: 'd16', title: 'Transition suppression fix for last checkpoint', status: 'done', projectId: 'proj-shortform', assignee: 'Henry', createdAt: Date.now() - 86400000 * 2 },
+
+  // Done — Voice Service
+  { id: 'd17', title: 'OpenAI Realtime API integration (gpt-realtime-1.5)', status: 'done', projectId: 'proj-voice', assignee: 'Henry', createdAt: Date.now() - 86400000 * 18 },
+  { id: 'd18', title: 'Voice service deployed on App Service with CI/CD', status: 'done', projectId: 'proj-voice', assignee: 'Henry', createdAt: Date.now() - 86400000 * 17 },
+  { id: 'd19', title: 'VoIP web client — /demo browser mic → Realtime API', status: 'done', projectId: 'proj-voice', assignee: 'Henry', createdAt: Date.now() - 86400000 * 16 },
+  { id: 'd20', title: 'POST /call endpoint with custom system_prompt + context', status: 'done', projectId: 'proj-voice', assignee: 'Henry', createdAt: Date.now() - 86400000 * 15 },
+  { id: 'd21', title: 'Security hardening — auth, rate limiting, audit logging', status: 'done', projectId: 'proj-voice', assignee: 'Henry', createdAt: Date.now() - 86400000 * 14 },
+  { id: 'd22', title: 'Twilio PSTN integration + SMS inbound/outbound', status: 'done', projectId: 'proj-voice', assignee: 'Henry', createdAt: Date.now() - 86400000 * 2 },
+  { id: 'd23', title: 'Whisper hallucination filter — 25 phrases suppressed', status: 'done', projectId: 'proj-voice', assignee: 'Henry', createdAt: Date.now() - 86400000 * 15 },
+  { id: 'd24', title: 'Caller greetings + known caller prompts (PII externalized)', status: 'done', projectId: 'proj-voice', assignee: 'Henry', createdAt: Date.now() - 86400000 * 2 },
+
+  // Done — Mission Control
+  { id: 'd25', title: 'Mission Control scaffolded — Next.js 16 + Tailwind', status: 'done', projectId: 'proj-mc', assignee: 'Henry', createdAt: Date.now() - 86400000 * 2 },
+  { id: 'd26', title: 'Server-side Gateway proxy — WS with auto-reconnect', status: 'done', projectId: 'proj-mc', assignee: 'Henry', createdAt: Date.now() - 86400000 * 2 },
+  { id: 'd27', title: 'Gateway proxy fix — Ed25519 + dangerouslyDisableDeviceAuth', status: 'done', projectId: 'proj-mc', assignee: 'Henry', createdAt: Date.now() - 86400000 * 1 },
+  { id: 'd28', title: '10 pages built — Dashboard, Projects, Tasks, Agents, Cron, Calendar, Memory, Docs, Team, Activity', status: 'done', projectId: 'proj-mc', assignee: 'Henry', createdAt: Date.now() - 86400000 * 1 },
+  { id: 'd29', title: 'Readability overhaul — typography scale, spacing, contrast', status: 'done', projectId: 'proj-mc', assignee: 'Henry', createdAt: Date.now() },
+  { id: 'd30', title: 'Team page with org chart + 3 new agents configured', status: 'done', projectId: 'proj-mc', assignee: 'Henry', createdAt: Date.now() },
+
+  // Done — Agent Operations
+  { id: 'd31', title: 'Gmail API + Calendar API — OAuth, writer access', status: 'done', projectId: 'proj-ops', assignee: 'Henry', createdAt: Date.now() - 86400000 * 19 },
+  { id: 'd32', title: 'Email crons — market hours, after hours, weekends', status: 'done', projectId: 'proj-ops', assignee: 'Henry', createdAt: Date.now() - 86400000 * 8 },
+  { id: 'd33', title: 'Daily Take 5 email digest — 7 PM ET cron', status: 'done', projectId: 'proj-ops', assignee: 'Henry', createdAt: Date.now() - 86400000 * 18 },
+  { id: 'd34', title: 'Slack DMs working — reinstalled app with im:write', status: 'done', projectId: 'proj-ops', assignee: 'Henry', createdAt: Date.now() - 86400000 * 19 },
+  { id: 'd35', title: 'reMarkable tablet — rmapi auth, archive cleanup, PDF push', status: 'done', projectId: 'proj-ops', assignee: 'Henry', createdAt: Date.now() - 86400000 * 6 },
+  { id: 'd36', title: 'Moltbook presence — 22 communities, weekly reports pipeline', status: 'done', projectId: 'proj-ops', assignee: 'Henry', createdAt: Date.now() - 86400000 * 5 },
+  { id: 'd37', title: 'Research crons — Mon/Tue/Wed/Fri 8pm + daily 1am', status: 'done', projectId: 'proj-ops', assignee: 'Henry', createdAt: Date.now() - 86400000 * 5 },
+  { id: 'd38', title: 'TTS voice configured — Steffan DragonHDLatestNeural', status: 'done', projectId: 'proj-ops', assignee: 'Henry', createdAt: Date.now() - 86400000 * 19 },
+  { id: 'd39', title: 'Model provider chain — Foundry → Sweden → OpenAI → Copilot', status: 'done', projectId: 'proj-ops', assignee: 'Henry', createdAt: Date.now() - 86400000 * 18 },
 ];
 
 // === Storage helpers ===
