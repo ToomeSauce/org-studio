@@ -85,7 +85,7 @@ export default function DocsPage() {
         {/* File list */}
         <div className="w-[280px] shrink-0 overflow-y-auto pr-2 space-y-1">
           {filteredDocs.map(doc => (
-            <button key={doc.path} onClick={() => loadDoc(doc.path)}
+            <button key={doc.id} onClick={() => loadDoc(doc.path)}
               className={clsx(
                 'w-full text-left px-3 py-2.5 rounded-[var(--radius-md)] border transition-all',
                 selectedDoc === doc.path

@@ -21,21 +21,25 @@ interface Doc {
   modifiedAt: number;
 }
 
-function scanDir(dir: string, category: string, prefix: string, pattern?: RegExp, maxDepth = 2, depth = 0): Doc[] {
+function scanDir(baseDir: string, dir: string, category: string, prefix: string, pattern?: RegExp, maxDepth = 2, depth = 0, exclude?: string[]): Doc[] {
   const docs: Doc[] = [];
   if (!fs.existsSync(dir) || depth > maxDepth) return docs;
   try {
     for (const entry of fs.readdirSync(dir)) {
       if (entry.startsWith('.') || entry === 'node_modules') continue;
       const full = path.join(dir, entry);
+      // Skip excluded subdirs (avoids double-scanning)
+      if (exclude?.some(e => full.startsWith(e))) continue;
       const stat = fs.statSync(full);
       if (stat.isDirectory() && depth < maxDepth) {
-        docs.push(...scanDir(full, category, prefix, pattern, maxDepth, depth + 1));
+        docs.push(...scanDir(baseDir, full, category, prefix, pattern, maxDepth, depth + 1, exclude));
       } else if (stat.isFile()) {
         const matchPattern = pattern || /\.(md|txt|sql)$/i;
         if (matchPattern.test(entry)) {
+          // Use path relative to baseDir for unique id
+          const relPath = path.relative(baseDir, full);
           docs.push({
-            id: `${prefix}/${entry}`,
+            id: `${prefix}/${relPath}`,
             name: entry,
             category,
             path: full,
@@ -55,11 +59,15 @@ export async function GET(request: NextRequest) {
   const filePath = searchParams.get('path');
   const query = searchParams.get('q');
 
+  const allDirs = DOC_SOURCES.map(s => s.dir);
+
   try {
     if (action === 'list') {
       const allDocs: Doc[] = [];
       for (const src of DOC_SOURCES) {
-        allDocs.push(...scanDir(src.dir, src.category, src.prefix, src.pattern));
+        // Exclude other sources that are subdirs of this source
+        const exclude = allDirs.filter(d => d !== src.dir && d.startsWith(src.dir));
+        allDocs.push(...scanDir(src.dir, src.dir, src.category, src.prefix, src.pattern, (src as any).maxDepth, 0, exclude));
       }
       allDocs.sort((a, b) => b.modifiedAt - a.modifiedAt);
       const categories = [...new Set(allDocs.map(d => d.category))];
@@ -79,7 +87,8 @@ export async function GET(request: NextRequest) {
       const q = query.toLowerCase();
       const results: { name: string; category: string; path: string; line: number; text: string }[] = [];
       for (const src of DOC_SOURCES) {
-        const docs = scanDir(src.dir, src.category, src.prefix, src.pattern);
+        const exclude = allDirs.filter(d => d !== src.dir && d.startsWith(src.dir));
+        const docs = scanDir(src.dir, src.dir, src.category, src.prefix, src.pattern, (src as any).maxDepth, 0, exclude);
         for (const doc of docs) {
           try {
             const lines = fs.readFileSync(doc.path, 'utf-8').split('\n');
