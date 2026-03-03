@@ -6,7 +6,7 @@ import { clsx } from 'clsx';
 import {
   LayoutDashboard, FolderKanban, CheckSquare, Bot, Clock, Calendar,
   Activity, Settings, ChevronLeft, ChevronRight, Circle, Flame,
-  Brain, FileText,
+  Brain, FileText, Users,
 } from 'lucide-react';
 import { useState } from 'react';
 import { useGateway } from '@/lib/hooks';
@@ -20,6 +20,7 @@ const navigation = [
   { name: 'Calendar', href: '/calendar', icon: Calendar },
   { name: 'Memory', href: '/memory', icon: Brain },
   { name: 'Docs', href: '/docs', icon: FileText },
+  { name: 'Team', href: '/team', icon: Users },
   { name: 'Activity', href: '/activity', icon: Activity },
 ];
 
