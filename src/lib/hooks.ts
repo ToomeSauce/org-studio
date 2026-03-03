@@ -63,15 +63,5 @@ export function useGatewayQuery<T>(
   return { data, error, loading, refetch: fetch };
 }
 
-/**
- * Hook to subscribe to Gateway events
- */
-export function useGatewayEvent(event: string, handler: (data: any) => void) {
-  const { gateway } = useGateway();
-
-  useEffect(() => {
-    if (!gateway) return;
-    const unsub = gateway.on(event, handler);
-    return () => { unsub(); };
-  }, [gateway, event, handler]);
-}
+// Note: live event streaming (SSE/WS) will be added later via /api/gateway/events
+// For now, all data is fetched via polling through the server-side proxy

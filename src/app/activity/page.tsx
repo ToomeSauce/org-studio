@@ -1,9 +1,9 @@
 'use client';
 
 import { PageHeader } from '@/components/PageHeader';
-import { useGatewayQuery, useGatewayEvent } from '@/lib/hooks';
+import { useGatewayQuery } from '@/lib/hooks';
 import { Activity, Bot, Clock, MessageSquare, CheckCircle2, XCircle, Zap } from 'lucide-react';
-import { useState, useCallback } from 'react';
+// polling-based activity view
 import { clsx } from 'clsx';
 
 interface ActivityEvent {
@@ -50,27 +50,18 @@ function ActivityRow({ event }: { event: ActivityEvent }) {
 }
 
 export default function ActivityPage() {
-  const [events, setEvents] = useState<ActivityEvent[]>([]);
+  // Poll sessions as activity source (events will need SSE endpoint later)
+  const { data: sessions } = useGatewayQuery<any>('sessions.list', { limit: 20 }, 10000);
+  const sessionList = sessions?.sessions || sessions || [];
 
-  // Subscribe to live gateway events
-  useGatewayEvent('*', useCallback((msg: any) => {
-    const event: ActivityEvent = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      type: msg.event || msg.type || 'unknown',
-      title: msg.event || msg.type || 'Gateway Event',
-      detail: msg.data ? JSON.stringify(msg.data).slice(0, 200) : undefined,
-      timestamp: new Date().toISOString(),
-      icon: 'system',
-    };
-
-    // Classify events
-    if (event.type.includes('chat')) event.icon = 'message';
-    else if (event.type.includes('cron')) event.icon = 'cron';
-    else if (event.type.includes('session') || event.type.includes('agent')) event.icon = 'bot';
-    else if (event.type.includes('error')) event.icon = 'error';
-
-    setEvents(prev => [event, ...prev].slice(0, 200));
-  }, []));
+  const events: ActivityEvent[] = (Array.isArray(sessionList) ? sessionList : []).map((s: any, i: number) => ({
+    id: s.sessionKey || `s-${i}`,
+    type: s.kind || 'session',
+    title: s.label || s.task || s.sessionKey?.slice(0, 16) || 'Session',
+    detail: s.model || s.agentId || undefined,
+    timestamp: s.lastActive || s.createdAt || new Date().toISOString(),
+    icon: (s.kind === 'cron' ? 'cron' : s.kind === 'run' ? 'bot' : 'message') as ActivityEvent['icon'],
+  }));
 
   return (
     <div className="space-y-6">
@@ -78,12 +69,7 @@ export default function ActivityPage() {
         title="Activity"
         description="Live event stream from Gateway"
         actions={
-          <button
-            onClick={() => setEvents([])}
-            className="px-3 py-1.5 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-[var(--border-default)] hover:border-[var(--border-strong)] rounded-md transition-colors"
-          >
-            Clear
-          </button>
+          <span className="text-xs text-[var(--text-muted)]">Auto-refreshes every 10s</span>
         }
       />
 

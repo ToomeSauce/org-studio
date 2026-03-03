@@ -1,38 +1,24 @@
 /**
- * OpenClaw Gateway WebSocket client
- * Connects to the local Gateway on port 18789
+ * OpenClaw Gateway client — server-side proxy mode
+ * 
+ * Browser talks to /api/gateway (Next.js API route),
+ * which proxies to the Gateway WS on localhost:18789.
+ * Gateway stays bound to localhost — no LAN exposure.
  */
 
-type GatewayEventHandler = (data: any) => void;
 type ConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error';
 
-interface PendingRequest {
-  resolve: (value: any) => void;
-  reject: (reason: any) => void;
-  timeout: ReturnType<typeof setTimeout>;
-}
-
 class GatewayClient {
-  private ws: WebSocket | null = null;
-  private url: string;
-  private token: string | null;
-  private requestId = 0;
-  private pending = new Map<number, PendingRequest>();
-  private listeners = new Map<string, Set<GatewayEventHandler>>();
   private stateListeners = new Set<(state: ConnectionState) => void>();
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private _state: ConnectionState = 'disconnected';
-
-  constructor(url = 'ws://127.0.0.1:18789', token: string | null = null) {
-    this.url = url;
-    this.token = token;
-  }
+  private pollTimer: ReturnType<typeof setInterval> | null = null;
 
   get state(): ConnectionState {
     return this._state;
   }
 
   private setState(state: ConnectionState) {
+    if (this._state === state) return;
     this._state = state;
     this.stateListeners.forEach(fn => fn(state));
   }
@@ -43,113 +29,47 @@ class GatewayClient {
   }
 
   connect() {
-    if (this.ws?.readyState === WebSocket.OPEN) return;
-
+    // Test connection with a status call
     this.setState('connecting');
+    this.rpc('status')
+      .then(() => this.setState('connected'))
+      .catch(() => this.setState('error'));
 
-    const params = new URLSearchParams();
-    if (this.token) params.set('token', this.token);
-
-    const wsUrl = params.toString()
-      ? `${this.url}?${params.toString()}`
-      : this.url;
-
-    this.ws = new WebSocket(wsUrl);
-
-    this.ws.onopen = () => {
-      this.setState('connected');
-      if (this.reconnectTimer) {
-        clearTimeout(this.reconnectTimer);
-        this.reconnectTimer = null;
-      }
-    };
-
-    this.ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        // RPC response
-        if (msg.id !== undefined && this.pending.has(msg.id)) {
-          const { resolve, reject, timeout } = this.pending.get(msg.id)!;
-          clearTimeout(timeout);
-          this.pending.delete(msg.id);
-          if (msg.error) reject(msg.error);
-          else resolve(msg.result ?? msg.data ?? msg);
-        }
-        // Event broadcast
-        if (msg.event || msg.type) {
-          const eventName = msg.event || msg.type;
-          this.listeners.get(eventName)?.forEach(fn => fn(msg));
-          this.listeners.get('*')?.forEach(fn => fn(msg));
-        }
-      } catch {
-        // ignore parse errors
-      }
-    };
-
-    this.ws.onclose = () => {
-      this.setState('disconnected');
-      this.scheduleReconnect();
-    };
-
-    this.ws.onerror = () => {
-      this.setState('error');
-    };
+    // Poll for connection health every 30s
+    if (!this.pollTimer) {
+      this.pollTimer = setInterval(() => {
+        this.rpc('status')
+          .then(() => this.setState('connected'))
+          .catch(() => this.setState('disconnected'));
+      }, 30000);
+    }
   }
 
   disconnect() {
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
     }
-    this.ws?.close();
-    this.ws = null;
     this.setState('disconnected');
   }
 
-  private scheduleReconnect() {
-    if (this.reconnectTimer) return;
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null;
-      this.connect();
-    }, 3000);
-  }
-
   /**
-   * Send an RPC request to the Gateway
+   * Send an RPC request via the server-side proxy
    */
-  async rpc(method: string, params: Record<string, any> = {}, timeoutMs = 15000): Promise<any> {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error('Gateway not connected');
-    }
-
-    const id = ++this.requestId;
-
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`RPC timeout: ${method}`));
-      }, timeoutMs);
-
-      this.pending.set(id, { resolve, reject, timeout });
-
-      this.ws!.send(JSON.stringify({
-        jsonrpc: '2.0',
-        id,
-        method,
-        params,
-      }));
+  async rpc(method: string, params: Record<string, any> = {}): Promise<any> {
+    const resp = await fetch('/api/gateway', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ method, params }),
     });
-  }
 
-  /**
-   * Subscribe to gateway events
-   */
-  on(event: string, handler: GatewayEventHandler) {
-    if (!this.listeners.has(event)) {
-      this.listeners.set(event, new Set());
+    const data = await resp.json();
+
+    if (!resp.ok || data.error) {
+      throw new Error(data.error || `HTTP ${resp.status}`);
     }
-    this.listeners.get(event)!.add(handler);
-    return () => this.listeners.get(event)?.delete(handler);
+
+    return data.result;
   }
 
   // === Convenience methods ===
@@ -214,25 +134,11 @@ class GatewayClient {
 // Singleton instance
 let instance: GatewayClient | null = null;
 
-export function getGateway(url?: string, token?: string): GatewayClient {
+export function getGateway(): GatewayClient {
   if (!instance) {
-    const savedToken = typeof window !== 'undefined'
-      ? localStorage.getItem('mc_gateway_token')
-      : null;
-    instance = new GatewayClient(url, token || savedToken);
+    instance = new GatewayClient();
   }
   return instance;
-}
-
-export function setGatewayToken(token: string) {
-  if (typeof window !== 'undefined') {
-    localStorage.setItem('mc_gateway_token', token);
-  }
-  // Reconnect with new token
-  if (instance) {
-    instance.disconnect();
-    instance = null;
-  }
 }
 
 export type { ConnectionState, GatewayClient };

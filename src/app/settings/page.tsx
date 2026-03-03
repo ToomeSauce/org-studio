@@ -11,20 +11,7 @@ export default function SettingsPage() {
   const { data: health } = useGatewayQuery<any>('health', {}, 0);
   const { data: status } = useGatewayQuery<any>('status', {}, 0);
 
-  const [token, setToken] = useState('');
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      setToken(localStorage.getItem('mc_gateway_token') || '');
-    }
-  }, []);
-
-  const saveToken = () => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('mc_gateway_token', token);
-      window.location.reload();
-    }
-  };
+  // Token is now server-side (GATEWAY_TOKEN env var) — no browser config needed
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -46,23 +33,10 @@ export default function SettingsPage() {
           </div>
 
           <div>
-            <label className="block text-xs text-[var(--text-tertiary)] mb-1">Auth Token</label>
-            <div className="flex gap-2">
-              <input
-                type="password"
-                value={token}
-                onChange={e => setToken(e.target.value)}
-                placeholder="Paste gateway token..."
-                className="flex-1 px-3 py-2 text-sm bg-[var(--bg-primary)] border border-[var(--border-default)] rounded-md text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--accent-primary)]"
-              />
-              <button
-                onClick={saveToken}
-                className="flex items-center gap-1.5 px-3 py-2 text-sm bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)] text-white rounded-md transition-colors"
-              >
-                <Save size={14} />
-                Save
-              </button>
-            </div>
+            <label className="block text-xs text-[var(--text-tertiary)] mb-1">Auth</label>
+            <p className="text-sm text-[var(--text-secondary)]">
+              Server-side proxy — token configured via <code className="text-xs bg-[var(--bg-tertiary)] px-1 py-0.5 rounded">GATEWAY_TOKEN</code> env var
+            </p>
           </div>
 
           <div className="flex items-center gap-2 text-xs">
