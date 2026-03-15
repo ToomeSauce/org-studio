@@ -1,0 +1,229 @@
+{
+  "projects": [
+    {
+      "id": "proj-platform",
+      "name": "Product Platform",
+      "title": "Product Platform",
+      "owner": "Alice",
+      "phase": "active",
+      "priority": "high",
+      "createdAt": 1700000000000
+    },
+    {
+      "id": "proj-ops",
+      "name": "Team Operations",
+      "title": "Team Operations",
+      "owner": "Charlie",
+      "phase": "active",
+      "priority": "medium",
+      "createdAt": 1700100000000
+    }
+  ],
+  "tasks": [
+    {
+      "id": "task-001",
+      "title": "Design onboarding flow",
+      "projectId": "proj-platform",
+      "status": "done",
+      "assignee": "Scout",
+      "priority": "high",
+      "createdAt": 1700000000000,
+      "statusHistory": [
+        {"status": "backlog", "timestamp": 1700000000000},
+        {"status": "in-progress", "timestamp": 1700010000000, "changedBy": "scout"},
+        {"status": "review", "timestamp": 1700050000000, "changedBy": "scout"},
+        {"status": "done", "timestamp": 1700060000000, "changedBy": "alice"}
+      ],
+      "initiatedBy": "alice"
+    },
+    {
+      "id": "task-002",
+      "title": "Set up CI/CD pipeline",
+      "projectId": "proj-platform",
+      "status": "done",
+      "assignee": "Scout",
+      "priority": "high",
+      "createdAt": 1700010000000,
+      "statusHistory": [
+        {"status": "backlog", "timestamp": 1700010000000},
+        {"status": "in-progress", "timestamp": 1700020000000, "changedBy": "scout"},
+        {"status": "done", "timestamp": 1700040000000, "changedBy": "scout"}
+      ],
+      "initiatedBy": "alice"
+    },
+    {
+      "id": "task-003",
+      "title": "Write API documentation",
+      "projectId": "proj-platform",
+      "status": "in-progress",
+      "assignee": "Scout",
+      "priority": "medium",
+      "createdAt": 1700020000000,
+      "statusHistory": [
+        {"status": "backlog", "timestamp": 1700020000000},
+        {"status": "in-progress", "timestamp": 1700070000000, "changedBy": "scout"}
+      ],
+      "initiatedBy": "charlie"
+    },
+    {
+      "id": "task-004",
+      "title": "Add user analytics dashboard",
+      "projectId": "proj-platform",
+      "status": "backlog",
+      "assignee": "Scout",
+      "priority": "medium",
+      "createdAt": 1700030000000,
+      "statusHistory": [
+        {"status": "backlog", "timestamp": 1700030000000}
+      ],
+      "initiatedBy": "alice"
+    },
+    {
+      "id": "task-005",
+      "title": "Define team mission statement",
+      "projectId": "proj-ops",
+      "status": "done",
+      "assignee": "Alice",
+      "priority": "high",
+      "createdAt": 1700000000000,
+      "statusHistory": [
+        {"status": "in-progress", "timestamp": 1700000000000},
+        {"status": "done", "timestamp": 1700005000000, "changedBy": "alice"}
+      ],
+      "initiatedBy": "alice"
+    },
+    {
+      "id": "task-006",
+      "title": "Set up cultural values",
+      "projectId": "proj-ops",
+      "status": "done",
+      "assignee": "Charlie",
+      "priority": "medium",
+      "createdAt": 1700010000000,
+      "statusHistory": [
+        {"status": "in-progress", "timestamp": 1700010000000},
+        {"status": "done", "timestamp": 1700015000000, "changedBy": "charlie"}
+      ],
+      "initiatedBy": "alice"
+    },
+    {
+      "id": "task-007",
+      "title": "Draft weekly standup format",
+      "projectId": "proj-ops",
+      "status": "in-progress",
+      "assignee": "Charlie",
+      "priority": "low",
+      "createdAt": 1700040000000,
+      "statusHistory": [
+        {"status": "backlog", "timestamp": 1700040000000},
+        {"status": "in-progress", "timestamp": 1700060000000, "changedBy": "charlie"}
+      ],
+      "initiatedBy": "charlie"
+    },
+    {
+      "id": "task-008",
+      "title": "Implement dark mode toggle",
+      "projectId": "proj-platform",
+      "status": "review",
+      "assignee": "Scout",
+      "priority": "low",
+      "createdAt": 1700050000000,
+      "statusHistory": [
+        {"status": "backlog", "timestamp": 1700050000000},
+        {"status": "in-progress", "timestamp": 1700060000000, "changedBy": "scout"},
+        {"status": "review", "timestamp": 1700080000000, "changedBy": "scout"}
+      ],
+      "initiatedBy": "alice"
+    },
+    {
+      "id": "task-009",
+      "title": "Research competitor landscape",
+      "projectId": "proj-ops",
+      "status": "backlog",
+      "assignee": "Sage",
+      "priority": "medium",
+      "createdAt": 1700060000000,
+      "statusHistory": [
+        {"status": "backlog", "timestamp": 1700060000000}
+      ],
+      "initiatedBy": "alice"
+    },
+    {
+      "id": "task-010",
+      "title": "Security audit of auth flow",
+      "projectId": "proj-platform",
+      "status": "planning",
+      "assignee": "Alice",
+      "priority": "high",
+      "createdAt": 1700070000000,
+      "statusHistory": [
+        {"status": "planning", "timestamp": 1700070000000}
+      ],
+      "initiatedBy": "alice"
+    }
+  ],
+  "settings": {
+    "missionStatement": "Build tools that make hybrid human-agent teams work better together.",
+    "teammates": [
+      {
+        "id": "alice",
+        "agentId": "",
+        "name": "Alice",
+        "emoji": "💡",
+        "title": "Founder",
+        "domain": "Product & Strategy",
+        "description": "Sets the vision, prioritizes work, and makes final calls.",
+        "color": "amber",
+        "isHuman": true
+      },
+      {
+        "id": "charlie",
+        "agentId": "",
+        "name": "Charlie",
+        "emoji": "📋",
+        "title": "Operations Lead",
+        "domain": "Team Ops",
+        "description": "Keeps the team running — process, coordination, culture.",
+        "color": "purple",
+        "isHuman": true
+      },
+      {
+        "id": "scout",
+        "agentId": "scout",
+        "name": "Scout",
+        "emoji": "⚡",
+        "title": "Fullstack Developer",
+        "domain": "Engineering",
+        "description": "Ships features, fixes bugs, handles CI/CD. Fast and autonomous.",
+        "color": "cyan",
+        "isHuman": false,
+        "owns": "Frontend, backend, CI/CD pipeline, staging deployments",
+        "defers": "Production releases, architecture decisions, external API contracts"
+      },
+      {
+        "id": "sage",
+        "agentId": "sage",
+        "name": "Sage",
+        "emoji": "🔍",
+        "title": "Research Analyst",
+        "domain": "Research & Analysis",
+        "description": "Deep dives, competitive analysis, data synthesis. Thinks before acting.",
+        "color": "emerald",
+        "isHuman": false,
+        "owns": "Market research, data analysis, competitor tracking, report generation",
+        "defers": "Strategic decisions, budget allocation, external communications"
+      }
+    ],
+    "values": {
+      "name": "Values",
+      "items": [
+        {"letter": "T", "icon": "🤝", "title": "Teamwork", "description": "We communicate openly and keep each other accountable. No silos, no blame."},
+        {"letter": "O", "icon": "🎯", "title": "Ownership", "description": "We own our domains and take initiative. No permission needed — act on what matters."},
+        {"letter": "Q", "icon": "✨", "title": "Quality", "description": "We ship work we're proud of. Prototype fast, but polish before release."},
+        {"letter": "C", "icon": "🔍", "title": "Curiosity", "description": "We ask why, dig deeper, and never stop learning. If something can be better, we explore it."}
+      ]
+    },
+    "nodePhysics": {},
+    "agentOverrides": {}
+  }
+}

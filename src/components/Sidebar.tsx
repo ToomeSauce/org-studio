@@ -4,24 +4,25 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { clsx } from 'clsx';
 import {
-  LayoutDashboard, FolderKanban, CheckSquare, Bot, Clock, Calendar,
-  Activity, Settings, ChevronLeft, ChevronRight, Flame,
-  Brain, FileText, Users,
+  LayoutDashboard, FolderKanban, Layers, Bot, Zap, Calendar,
+  Activity, Settings, ChevronLeft, ChevronRight, Atom,
+  Brain, FileText, Users, Eye, Timer,
 } from 'lucide-react';
 import { useState } from 'react';
 import { useGateway } from '@/lib/hooks';
 
 const navigation = [
   { name: 'Dashboard', href: '/', icon: LayoutDashboard },
-  { name: 'Projects', href: '/projects', icon: FolderKanban },
-  { name: 'Tasks', href: '/tasks', icon: CheckSquare },
-  { name: 'Agents', href: '/agents', icon: Bot },
-  { name: 'Cron Jobs', href: '/cron', icon: Clock },
+  { name: 'Team', href: '/team', icon: Users },
+  { name: 'Scheduler', href: '/scheduler', icon: Timer },
+  { name: 'Context', href: '/context', icon: Layers },
+  { name: 'Vision', href: '/vision', icon: Eye },
   { name: 'Calendar', href: '/calendar', icon: Calendar },
+  { name: 'Agents', href: '/agents', icon: Bot },
+  { name: 'Automations', href: '/cron', icon: Zap },
+  { name: 'Activity', href: '/activity', icon: Activity },
   { name: 'Memory', href: '/memory', icon: Brain },
   { name: 'Docs', href: '/docs', icon: FileText },
-  { name: 'Team', href: '/team', icon: Users },
-  { name: 'Activity', href: '/activity', icon: Activity },
 ];
 
 const bottomNav = [
@@ -43,9 +44,9 @@ export function Sidebar() {
       <div className="flex items-center gap-2.5 h-14 px-3.5 border-b border-[var(--border-default)]">
         {!collapsed && (
           <>
-            <Flame size={18} className="text-[var(--accent-primary)] shrink-0" />
+            <Atom size={18} className="text-[var(--accent-primary)] shrink-0" />
             <span className="text-[var(--text-base)] font-bold tracking-tight text-[var(--text-primary)] leading-tight truncate">
-              Mission Control
+              Org Studio
             </span>
           </>
         )}

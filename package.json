@@ -1,16 +1,19 @@
 {
-  "name": "mission-control",
+  "name": "org-studio",
   "version": "0.1.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^18.0.1",
     "clsx": "^2.1.1",
+    "geist": "^1.7.0",
     "lucide-react": "^0.576.0",
     "next": "16.1.6",
     "react": "19.2.3",
@@ -26,6 +29,13 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.0"
+  },
+  "description": "Org design and team management for hybrid human + AI agent teams",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/orgstudio/org-studio"
   }
 }

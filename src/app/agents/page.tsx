@@ -1,10 +1,12 @@
 'use client';
 
 import { PageHeader } from '@/components/PageHeader';
-import { useGateway, useGatewayQuery } from '@/lib/hooks';
+import { useWSData } from '@/lib/ws';
+import { getGateway } from '@/lib/gateway';
 import { Bot, Send, Clock, Circle, X, Loader2 } from 'lucide-react';
 import { clsx } from 'clsx';
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
+import { Teammate, resolveColor } from '@/lib/teammates';
 
 interface AgentDef {
   id: string;
@@ -14,13 +16,6 @@ interface AgentDef {
   color: string;
   bg: string;
 }
-
-const AGENT_DEFS: AgentDef[] = [
-  { id: 'main', name: 'Henry', emoji: '🧄', title: 'Chief of Staff', color: 'text-[var(--accent-primary)]', bg: 'bg-[rgba(255,92,92,0.12)]' },
-  { id: 'ana', name: 'Ana', emoji: '⚡', title: 'Catpilot Dev', color: 'text-yellow-400', bg: 'bg-[rgba(250,204,21,0.1)]' },
-  { id: 'mikey', name: 'Mikey', emoji: '🔬', title: 'Labs Dev', color: 'text-cyan-400', bg: 'bg-[rgba(34,211,238,0.1)]' },
-  { id: 'sam', name: 'Sam', emoji: '⚖️', title: 'Legal Counsel', color: 'text-purple-400', bg: 'bg-[rgba(168,85,247,0.1)]' },
-];
 
 function formatTokens(n: number): string {
   if (!n) return '0';
@@ -192,10 +187,18 @@ function MessageDialog({ agentId, agentName, onClose, gateway }: {
 }
 
 export default function AgentsPage() {
-  const { gateway } = useGateway();
-  const { data: sessions } = useGatewayQuery<any>('sessions.list', { limit: 50 }, 8000);
+  const gateway = getGateway();
+  const sessions = useWSData<any>('sessions');
   const sessionList = sessions?.sessions || [];
   const [messagingAgent, setMessagingAgent] = useState<AgentDef | null>(null);
+
+  const storeData = useWSData<any>('store');
+  const teammates: Teammate[] = storeData?.settings?.teammates || [];
+  const agentDefs: AgentDef[] = useMemo(() =>
+    teammates.filter(t => !t.isHuman && t.agentId).map(t => {
+      const c = resolveColor(t.color);
+      return { id: t.agentId, name: t.name, emoji: t.emoji, title: t.title, color: c.text, bg: c.bg };
+    }), [teammates]);
 
   const allSessions = Array.isArray(sessionList) ? sessionList : [];
   const activeSessions = allSessions.filter((s: any) => s.updatedAt && Date.now() - s.updatedAt < 300000);
@@ -211,7 +214,7 @@ export default function AgentsPage() {
       {/* Summary strip */}
       <div className="flex items-center gap-8">
         {[
-          { label: 'Agents', value: AGENT_DEFS.length, color: 'text-[var(--accent-primary)]' },
+          { label: 'Agents', value: agentDefs.length, color: 'text-[var(--accent-primary)]' },
           { label: 'Active Sessions', value: activeSessions.length, color: 'text-[var(--success)]' },
           { label: 'Total Sessions', value: allSessions.length, color: 'text-[var(--text-primary)]' },
           { label: 'Total Tokens', value: formatTokens(totalTokens), color: 'text-[var(--warning)]' },
@@ -225,7 +228,7 @@ export default function AgentsPage() {
 
       {/* Agent panels */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        {AGENT_DEFS.map(agent => (
+        {agentDefs.map(agent => (
           <AgentPanel
             key={agent.id}
             agent={agent}

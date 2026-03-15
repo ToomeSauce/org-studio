@@ -1,7 +1,8 @@
 'use client';
 
 import { PageHeader } from '@/components/PageHeader';
-import { useGateway, useGatewayQuery } from '@/lib/hooks';
+import { useWSData } from '@/lib/ws';
+import { getGateway } from '@/lib/gateway';
 import { Clock, Play, Pause, RotateCcw } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useState } from 'react';
@@ -125,22 +126,19 @@ function CronJobCard({ job, onToggle, onRun, stagger }: {
 }
 
 export default function CronPage() {
-  const { gateway } = useGateway();
-  const { data: cronData, refetch } = useGatewayQuery<any>('cron.list', {}, 30000);
+  const cronData = useWSData<any>('cron');
   const cronJobs = cronData?.jobs || cronData || [];
+  const gateway = getGateway();
 
   const handleToggle = async (jobId: string, enabled: boolean) => {
-    if (!gateway) return;
     try {
       await gateway.toggleCronJob(jobId, enabled);
-      refetch();
     } catch (e) {
       console.error('Failed to toggle:', e);
     }
   };
 
   const handleRun = async (jobId: string) => {
-    if (!gateway) return;
     try {
       await gateway.runCronJob(jobId);
     } catch (e) {

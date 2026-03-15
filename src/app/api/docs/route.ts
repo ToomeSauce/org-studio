@@ -2,15 +2,23 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 
-// Known doc locations
-const DOC_SOURCES = [
-  { dir: '/home/openclaw_user/catpilot/2026_DOCS', category: 'Catpilot Design', prefix: 'catpilot' },
-  { dir: '/home/openclaw_user/.openclaw/workspace', category: 'Workspace', prefix: 'workspace', pattern: /\.(md|txt)$/i, maxDepth: 1 },
-  { dir: '/home/openclaw_user/.openclaw/workspace/research', category: 'Research', prefix: 'research' },
-  { dir: '/home/openclaw_user/catpilot/tests', category: 'Test Docs', prefix: 'tests', pattern: /README\.md$/i },
-  { dir: '/home/openclaw_user/catpilot/migrations', category: 'Migrations', prefix: 'migrations', pattern: /\.sql$/i },
-  { dir: '/home/openclaw_user/catpilot/scripts', category: 'Scripts', prefix: 'scripts', pattern: /\.sql$/i },
-];
+// Doc sources — configure via DOC_SOURCES env var (JSON array) or use defaults
+const DOC_SOURCES: { dir: string; category: string; prefix: string; pattern?: RegExp; maxDepth?: number }[] = (() => {
+  const env = process.env.DOC_SOURCES;
+  if (env) {
+    try {
+      return JSON.parse(env).map((s: any) => ({
+        ...s,
+        pattern: s.pattern ? new RegExp(s.pattern, 'i') : undefined,
+      }));
+    } catch {}
+  }
+  // Default: scan workspace markdown files
+  const home = process.env.HOME || '/home/user';
+  return [
+    { dir: path.join(home, '.openclaw/workspace'), category: 'Workspace', prefix: 'workspace', pattern: /\.(md|txt)$/i, maxDepth: 1 },
+  ];
+})();
 
 interface Doc {
   id: string;
