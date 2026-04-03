@@ -109,6 +109,43 @@ async function handleGET(req: NextRequest) {
     // Deduplicate
     signals = await deduplicateSignals(signals);
 
+    // Auto-confirm mode: immediately create kudos/flags, return empty suggestions
+    const autoConfirm = store?.settings?.autoConfirmSignals !== false; // default: true
+    if (autoConfirm && signals.length > 0) {
+      for (const signal of signals) {
+        try {
+          await fetch('http://localhost:4501/api/kudos', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Internal-Request': 'true',
+            },
+            body: JSON.stringify({
+              agentId: signal.agentId,
+              givenBy: 'system',
+              values: signal.values,
+              note: signal.note,
+              type: signal.type,
+              taskId: signal.taskId,
+              projectId: signal.projectId,
+              autoDetected: true,
+              confirmed: true,
+            }),
+          });
+          // Mark as dismissed so it doesn't re-fire
+          const dismissed = loadDismissedSignals();
+          if (!dismissed.includes(signal.id)) {
+            dismissed.push(signal.id);
+            saveDismissedSignals(dismissed);
+          }
+        } catch (err) {
+          console.error(`[Signals] Auto-confirm failed for ${signal.id}:`, err);
+        }
+      }
+      // Return empty — all auto-confirmed
+      return NextResponse.json({ signals: [], autoConfirmed: signals.length });
+    }
+
     // Sort by type (flags first), then by recency
     signals.sort((a, b) => {
       if (a.type !== b.type) return a.type === 'flag' ? -1 : 1;
