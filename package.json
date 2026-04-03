@@ -1,0 +1,68 @@
+{
+  "name": "org-studio",
+  "version": "1.0.0",
+  "description": "Org design and management for human-in-the-loop agent organizations",
+  "license": "MIT",
+  "bin": {
+    "org-studio": "./bin/org-studio.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ToomeSauce/org-studio"
+  },
+  "keywords": [
+    "agents",
+    "ai",
+    "openclaw",
+    "org-design",
+    "project-management",
+    "human-in-the-loop"
+  ],
+  "files": [
+    ".next",
+    "server.mjs",
+    "data",
+    "public",
+    "package.json",
+    "bin"
+  ],
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@hello-pangea/dnd": "^18.0.1",
+    "clsx": "^2.1.1",
+    "geist": "^1.7.0",
+    "lucide-react": "^0.576.0",
+    "next": "^16.2.2",
+    "pg": "^8.20.0",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-markdown": "^10.1.0",
+    "react-toastify": "^11.0.5",
+    "remark-gfm": "^4.0.1",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/pg": "^8.20.0",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/ws": "^8.18.1",
+    "eslint": "^9",
+    "eslint-config-next": "16.1.6",
+    "gif-encoder-2": "^1.0.5",
+    "png-js": "^1.0.0",
+    "pngjs": "^7.0.0",
+    "puppeteer-core": "^24.39.1",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "vitest": "^4.1.0"
+  }
+}

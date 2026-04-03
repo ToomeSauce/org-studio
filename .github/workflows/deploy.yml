@@ -1,0 +1,55 @@
+name: Build and Deploy Org Studio
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  ACR_SERVER: acrcatstaging.azurecr.io
+  IMAGE_NAME: org-studio
+  CONTAINER_APP: staging-org-studio
+  RESOURCE_GROUP: rg-cat-staging
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
+
+      - name: ACR Login
+        run: az acr login --name acrcatstaging
+
+      - name: Build and Push
+        run: |
+          COMMIT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          docker build -t $ACR_SERVER/$IMAGE_NAME:$COMMIT_SHA -t $ACR_SERVER/$IMAGE_NAME:latest .
+          docker push $ACR_SERVER/$IMAGE_NAME:$COMMIT_SHA
+          docker push $ACR_SERVER/$IMAGE_NAME:latest
+
+      - name: Deploy to Container App
+        run: |
+          COMMIT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          az containerapp update \
+            --name $CONTAINER_APP \
+            --resource-group $RESOURCE_GROUP \
+            --image $ACR_SERVER/$IMAGE_NAME:$COMMIT_SHA
+
+      - name: Notify Telegram
+        if: always()
+        env:
+          TG_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT" ]; then echo "TG secrets not set, skipping"; exit 0; fi
+          [ "${{ job.status }}" = "success" ] && EMOJI="✅" || EMOJI="❌"
+          MSG=$(echo "${{ github.event.head_commit.message }}" | head -1 | cut -c1-80)
+          TEXT="${EMOJI} <b>${{ github.workflow }}</b> — ${{ job.status }}%0A📦 <code>${{ github.repository }}</code>%0A🔀 <code>${MSG}</code>%0A🔗 <a href='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'>View run</a>"
+          curl -sf -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+            -d chat_id="${TG_CHAT}" -d parse_mode=HTML -d disable_web_page_preview=true \
+            --data-urlencode "text=${TEXT}" || echo "Telegram notify failed"

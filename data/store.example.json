@@ -1,0 +1,771 @@
+{
+  "mission": "Build tools that make hybrid human-agent teams work better together.",
+  "projects": [
+    {
+      "id": "proj-mobile-app",
+      "name": "Mobile App",
+      "title": "Mobile App",
+      "lifecycle": "building",
+      "devOwner": "Alex",
+      "visionOwner": "Jordan",
+      "qaOwner": "Sam",
+      "currentVersion": "0.3",
+      "priority": "high",
+      "createdAt": 1745049600000,
+      "phase": "active"
+    },
+    {
+      "id": "proj-api-platform",
+      "name": "API Platform",
+      "title": "API Platform",
+      "lifecycle": "mature",
+      "devOwner": "Riley",
+      "visionOwner": "Jordan",
+      "currentVersion": "2.1",
+      "priority": "high",
+      "createdAt": 1744963200000,
+      "phase": "active"
+    },
+    {
+      "id": "proj-marketing-site",
+      "name": "Marketing Site",
+      "title": "Marketing Site",
+      "lifecycle": "bau",
+      "devOwner": "Alex",
+      "currentVersion": "1.0",
+      "priority": "medium",
+      "createdAt": 1744876800000,
+      "phase": "active"
+    }
+  ],
+  "teammates": [
+    {
+      "id": "jordan",
+      "name": "Jordan",
+      "emoji": "👤",
+      "title": "Founder",
+      "domain": "Strategy & Vision",
+      "description": "Human founder, sets direction",
+      "isHuman": true,
+      "color": "blue"
+    },
+    {
+      "id": "alex",
+      "name": "Alex",
+      "agentId": "alex",
+      "emoji": "🤖",
+      "title": "Full-Stack Developer",
+      "domain": "Frontend & Mobile",
+      "description": "AI agent — builds user-facing features",
+      "color": "purple"
+    },
+    {
+      "id": "riley",
+      "name": "Riley",
+      "agentId": "riley",
+      "emoji": "⚙️",
+      "title": "Backend Developer",
+      "domain": "Infra & APIs",
+      "description": "AI agent — builds backend services",
+      "color": "green"
+    },
+    {
+      "id": "sam",
+      "name": "Sam",
+      "agentId": "sam",
+      "emoji": "🧪",
+      "title": "QA Engineer",
+      "role": "qa",
+      "domain": "Quality & Testing",
+      "description": "AI agent — validates releases",
+      "color": "orange"
+    },
+    {
+      "id": "casey",
+      "name": "Casey",
+      "agentId": "casey",
+      "emoji": "📋",
+      "title": "Chief of Staff",
+      "domain": "Operations & Coordination",
+      "description": "AI agent — keeps the team running",
+      "color": "red"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "task-001",
+      "title": "User authentication flow",
+      "projectId": "proj-mobile-app",
+      "version": "0.3",
+      "ticketNumber": 1,
+      "status": "done",
+      "assignee": "Alex",
+      "priority": "high",
+      "createdAt": 1745049600000,
+      "statusHistory": [
+        {
+          "status": "backlog",
+          "timestamp": 1745049600000
+        },
+        {
+          "status": "in-progress",
+          "timestamp": 1745136000000,
+          "changedBy": "alex"
+        },
+        {
+          "status": "review",
+          "timestamp": 1745222400000,
+          "changedBy": "alex"
+        },
+        {
+          "status": "done",
+          "timestamp": 1745308800000,
+          "changedBy": "jordan"
+        }
+      ],
+      "initiatedBy": "jordan"
+    },
+    {
+      "id": "task-002",
+      "title": "Push notification service",
+      "projectId": "proj-mobile-app",
+      "version": "0.3",
+      "ticketNumber": 2,
+      "status": "done",
+      "assignee": "Alex",
+      "priority": "high",
+      "createdAt": 1745136000000,
+      "statusHistory": [
+        {
+          "status": "backlog",
+          "timestamp": 1745136000000
+        },
+        {
+          "status": "in-progress",
+          "timestamp": 1745222400000,
+          "changedBy": "alex"
+        },
+        {
+          "status": "done",
+          "timestamp": 1745395200000,
+          "changedBy": "jordan"
+        }
+      ],
+      "initiatedBy": "jordan"
+    },
+    {
+      "id": "task-003",
+      "title": "Offline sync engine",
+      "projectId": "proj-mobile-app",
+      "version": "0.3",
+      "ticketNumber": 3,
+      "status": "in-progress",
+      "assignee": "Alex",
+      "priority": "high",
+      "createdAt": 1745222400000,
+      "statusHistory": [
+        {
+          "status": "backlog",
+          "timestamp": 1745222400000
+        },
+        {
+          "status": "in-progress",
+          "timestamp": 1745308800000,
+          "changedBy": "alex"
+        }
+      ],
+      "initiatedBy": "jordan"
+    },
+    {
+      "id": "task-004",
+      "title": "Profile settings page",
+      "projectId": "proj-mobile-app",
+      "version": "0.3",
+      "ticketNumber": 4,
+      "status": "in-progress",
+      "assignee": "Alex",
+      "priority": "medium",
+      "createdAt": 1745308800000,
+      "statusHistory": [
+        {
+          "status": "backlog",
+          "timestamp": 1745308800000
+        },
+        {
+          "status": "in-progress",
+          "timestamp": 1745395200000,
+          "changedBy": "alex"
+        }
+      ],
+      "initiatedBy": "jordan"
+    },
+    {
+      "id": "task-005",
+      "title": "App store screenshots",
+      "projectId": "proj-mobile-app",
+      "version": "0.3",
+      "ticketNumber": 5,
+      "status": "review",
+      "assignee": "Alex",
+      "priority": "medium",
+      "createdAt": 1745395200000,
+      "statusHistory": [
+        {
+          "status": "backlog",
+          "timestamp": 1745395200000
+        },
+        {
+          "status": "in-progress",
+          "timestamp": 1745481600000,
+          "changedBy": "alex"
+        },
+        {
+          "status": "review",
+          "timestamp": 1745568000000,
+          "changedBy": "alex"
+        }
+      ],
+      "initiatedBy": "jordan"
+    },
+    {
+      "id": "task-006",
+      "title": "Deep linking support",
+      "projectId": "proj-mobile-app",
+      "version": "0.3",
+      "ticketNumber": 6,
+      "status": "review",
+      "assignee": "Alex",
+      "priority": "medium",
+      "createdAt": 1745481600000,
+      "statusHistory": [
+        {
+          "status": "backlog",
+          "timestamp": 1745481600000
+        },
+        {
+          "status": "in-progress",
+          "timestamp": 1745568000000,
+          "changedBy": "alex"
+        },
+        {
+          "status": "review",
+          "timestamp": 1745654400000,
+          "changedBy": "alex"
+        }
+      ],
+      "initiatedBy": "jordan"
+    },
+    {
+      "id": "task-007",
+      "title": "Crash reporting integration",
+      "projectId": "proj-mobile-app",
+      "version": "0.3",
+      "ticketNumber": 7,
+      "status": "backlog",
+      "assignee": "Alex",
+      "priority": "medium",
+      "createdAt": 1745568000000,
+      "statusHistory": [
+        {
+          "status": "backlog",
+          "timestamp": 1745568000000
+        }
+      ],
+      "initiatedBy": "jordan"
+    },
+    {
+      "id": "task-008",
+      "title": "Localization for 5 languages",
+      "projectId": "proj-mobile-app",
+      "version": "0.3",
+      "ticketNumber": 8,
+      "status": "backlog",
+      "assignee": "Alex",
+      "priority": "low",
+      "createdAt": 1745654400000,
+      "statusHistory": [
+        {
+          "status": "backlog",
+          "timestamp": 1745654400000
+        }
+      ],
+      "initiatedBy": "jordan"
+    },
+    {
+      "id": "task-009",
+      "title": "Performance profiling & optimization",
+      "projectId": "proj-mobile-app",
+      "version": "0.3",
+      "ticketNumber": 9,
+      "status": "backlog",
+      "assignee": "Alex",
+      "priority": "low",
+      "createdAt": 1745740800000,
+      "statusHistory": [
+        {
+          "status": "backlog",
+          "timestamp": 1745740800000
+        }
+      ],
+      "initiatedBy": "jordan"
+    },
+    {
+      "id": "task-010",
+      "title": "iOS/Android version testing matrix",
+      "projectId": "proj-mobile-app",
+      "version": "0.3",
+      "ticketNumber": 10,
+      "status": "backlog",
+      "assignee": "Sam",
+      "priority": "high",
+      "createdAt": 1745827200000,
+      "statusHistory": [
+        {
+          "status": "backlog",
+          "timestamp": 1745827200000
+        }
+      ],
+      "initiatedBy": "jordan"
+    },
+    {
+      "id": "task-011",
+      "title": "Rate limiting middleware",
+      "projectId": "proj-api-platform",
+      "version": "2.1",
+      "ticketNumber": 11,
+      "status": "done",
+      "assignee": "Riley",
+      "priority": "high",
+      "createdAt": 1744963200000,
+      "statusHistory": [
+        {
+          "status": "backlog",
+          "timestamp": 1744963200000
+        },
+        {
+          "status": "in-progress",
+          "timestamp": 1745049600000,
+          "changedBy": "riley"
+        },
+        {
+          "status": "done",
+          "timestamp": 1745136000000,
+          "changedBy": "jordan"
+        }
+      ],
+      "initiatedBy": "jordan"
+    },
+    {
+      "id": "task-012",
+      "title": "WebSocket event bus",
+      "projectId": "proj-api-platform",
+      "version": "2.1",
+      "ticketNumber": 12,
+      "status": "done",
+      "assignee": "Riley",
+      "priority": "high",
+      "createdAt": 1745049600000,
+      "statusHistory": [
+        {
+          "status": "backlog",
+          "timestamp": 1745049600000
+        },
+        {
+          "status": "in-progress",
+          "timestamp": 1745136000000,
+          "changedBy": "riley"
+        },
+        {
+          "status": "done",
+          "timestamp": 1745222400000,
+          "changedBy": "jordan"
+        }
+      ],
+      "initiatedBy": "jordan"
+    },
+    {
+      "id": "task-013",
+      "title": "OpenAPI documentation",
+      "projectId": "proj-api-platform",
+      "version": "2.1",
+      "ticketNumber": 13,
+      "status": "done",
+      "assignee": "Riley",
+      "priority": "high",
+      "createdAt": 1745136000000,
+      "statusHistory": [
+        {
+          "status": "backlog",
+          "timestamp": 1745136000000
+        },
+        {
+          "status": "in-progress",
+          "timestamp": 1745222400000,
+          "changedBy": "riley"
+        },
+        {
+          "status": "done",
+          "timestamp": 1745308800000,
+          "changedBy": "jordan"
+        }
+      ],
+      "initiatedBy": "jordan"
+    },
+    {
+      "id": "task-014",
+      "title": "Database connection pooling",
+      "projectId": "proj-api-platform",
+      "version": "2.1",
+      "ticketNumber": 14,
+      "status": "done",
+      "assignee": "Riley",
+      "priority": "medium",
+      "createdAt": 1745222400000,
+      "statusHistory": [
+        {
+          "status": "backlog",
+          "timestamp": 1745222400000
+        },
+        {
+          "status": "in-progress",
+          "timestamp": 1745308800000,
+          "changedBy": "riley"
+        },
+        {
+          "status": "done",
+          "timestamp": 1745395200000,
+          "changedBy": "jordan"
+        }
+      ],
+      "initiatedBy": "jordan"
+    },
+    {
+      "id": "task-015",
+      "title": "Caching layer with Redis",
+      "projectId": "proj-api-platform",
+      "version": "2.1",
+      "ticketNumber": 15,
+      "status": "done",
+      "assignee": "Riley",
+      "priority": "medium",
+      "createdAt": 1745308800000,
+      "statusHistory": [
+        {
+          "status": "backlog",
+          "timestamp": 1745308800000
+        },
+        {
+          "status": "in-progress",
+          "timestamp": 1745395200000,
+          "changedBy": "riley"
+        },
+        {
+          "status": "done",
+          "timestamp": 1745481600000,
+          "changedBy": "jordan"
+        }
+      ],
+      "initiatedBy": "jordan"
+    },
+    {
+      "id": "task-016",
+      "title": "OAuth2 provider integration",
+      "projectId": "proj-api-platform",
+      "version": "2.1",
+      "ticketNumber": 16,
+      "status": "in-progress",
+      "assignee": "Riley",
+      "priority": "medium",
+      "createdAt": 1745395200000,
+      "statusHistory": [
+        {
+          "status": "backlog",
+          "timestamp": 1745395200000
+        },
+        {
+          "status": "in-progress",
+          "timestamp": 1745481600000,
+          "changedBy": "riley"
+        }
+      ],
+      "initiatedBy": "jordan"
+    },
+    {
+      "id": "task-017",
+      "title": "Error handling & recovery protocols",
+      "projectId": "proj-api-platform",
+      "version": "2.1",
+      "ticketNumber": 17,
+      "status": "backlog",
+      "assignee": "Riley",
+      "priority": "medium",
+      "createdAt": 1745481600000,
+      "statusHistory": [
+        {
+          "status": "backlog",
+          "timestamp": 1745481600000
+        }
+      ],
+      "initiatedBy": "jordan"
+    },
+    {
+      "id": "task-018",
+      "title": "Hero section redesign",
+      "projectId": "proj-marketing-site",
+      "version": "1.0",
+      "ticketNumber": 18,
+      "status": "done",
+      "assignee": "Alex",
+      "priority": "high",
+      "createdAt": 1744876800000,
+      "statusHistory": [
+        {
+          "status": "backlog",
+          "timestamp": 1744876800000
+        },
+        {
+          "status": "in-progress",
+          "timestamp": 1744963200000,
+          "changedBy": "alex"
+        },
+        {
+          "status": "done",
+          "timestamp": 1745049600000,
+          "changedBy": "jordan"
+        }
+      ],
+      "initiatedBy": "jordan"
+    },
+    {
+      "id": "task-019",
+      "title": "SEO meta tags & structured data",
+      "projectId": "proj-marketing-site",
+      "version": "1.0",
+      "ticketNumber": 19,
+      "status": "done",
+      "assignee": "Alex",
+      "priority": "high",
+      "createdAt": 1744963200000,
+      "statusHistory": [
+        {
+          "status": "backlog",
+          "timestamp": 1744963200000
+        },
+        {
+          "status": "in-progress",
+          "timestamp": 1745049600000,
+          "changedBy": "alex"
+        },
+        {
+          "status": "done",
+          "timestamp": 1745136000000,
+          "changedBy": "jordan"
+        }
+      ],
+      "initiatedBy": "jordan"
+    },
+    {
+      "id": "task-020",
+      "title": "Blog pagination & search",
+      "projectId": "proj-marketing-site",
+      "version": "1.0",
+      "ticketNumber": 20,
+      "status": "done",
+      "assignee": "Alex",
+      "priority": "medium",
+      "createdAt": 1745049600000,
+      "statusHistory": [
+        {
+          "status": "backlog",
+          "timestamp": 1745049600000
+        },
+        {
+          "status": "in-progress",
+          "timestamp": 1745136000000,
+          "changedBy": "alex"
+        },
+        {
+          "status": "done",
+          "timestamp": 1745222400000,
+          "changedBy": "jordan"
+        }
+      ],
+      "initiatedBy": "jordan"
+    },
+    {
+      "id": "task-021",
+      "title": "Contact form with email notifications",
+      "projectId": "proj-marketing-site",
+      "version": "1.0",
+      "ticketNumber": 21,
+      "status": "done",
+      "assignee": "Alex",
+      "priority": "medium",
+      "createdAt": 1745136000000,
+      "statusHistory": [
+        {
+          "status": "backlog",
+          "timestamp": 1745136000000
+        },
+        {
+          "status": "in-progress",
+          "timestamp": 1745222400000,
+          "changedBy": "alex"
+        },
+        {
+          "status": "done",
+          "timestamp": 1745308800000,
+          "changedBy": "jordan"
+        }
+      ],
+      "initiatedBy": "jordan"
+    },
+    {
+      "id": "task-022",
+      "title": "Mobile responsive layout",
+      "projectId": "proj-marketing-site",
+      "version": "1.0",
+      "ticketNumber": 22,
+      "status": "done",
+      "assignee": "Alex",
+      "priority": "high",
+      "createdAt": 1745222400000,
+      "statusHistory": [
+        {
+          "status": "backlog",
+          "timestamp": 1745222400000
+        },
+        {
+          "status": "in-progress",
+          "timestamp": 1745308800000,
+          "changedBy": "alex"
+        },
+        {
+          "status": "done",
+          "timestamp": 1745395200000,
+          "changedBy": "jordan"
+        }
+      ],
+      "initiatedBy": "jordan"
+    },
+    {
+      "id": "task-023",
+      "title": "Analytics integration (GA4)",
+      "projectId": "proj-marketing-site",
+      "version": "1.0",
+      "ticketNumber": 23,
+      "status": "done",
+      "assignee": "Alex",
+      "priority": "medium",
+      "createdAt": 1745308800000,
+      "statusHistory": [
+        {
+          "status": "backlog",
+          "timestamp": 1745308800000
+        },
+        {
+          "status": "in-progress",
+          "timestamp": 1745395200000,
+          "changedBy": "alex"
+        },
+        {
+          "status": "done",
+          "timestamp": 1745481600000,
+          "changedBy": "jordan"
+        }
+      ],
+      "initiatedBy": "jordan"
+    },
+    {
+      "id": "task-024",
+      "title": "Performance optimization & image lazy loading",
+      "projectId": "proj-marketing-site",
+      "version": "1.0",
+      "ticketNumber": 24,
+      "status": "done",
+      "assignee": "Alex",
+      "priority": "medium",
+      "createdAt": 1745395200000,
+      "statusHistory": [
+        {
+          "status": "backlog",
+          "timestamp": 1745395200000
+        },
+        {
+          "status": "in-progress",
+          "timestamp": 1745481600000,
+          "changedBy": "alex"
+        },
+        {
+          "status": "done",
+          "timestamp": 1745568000000,
+          "changedBy": "jordan"
+        }
+      ],
+      "initiatedBy": "jordan"
+    },
+    {
+      "id": "task-025",
+      "title": "Dark mode toggle & theme persistence",
+      "projectId": "proj-marketing-site",
+      "version": "1.0",
+      "ticketNumber": 25,
+      "status": "done",
+      "assignee": "Alex",
+      "priority": "low",
+      "createdAt": 1745481600000,
+      "statusHistory": [
+        {
+          "status": "backlog",
+          "timestamp": 1745481600000
+        },
+        {
+          "status": "in-progress",
+          "timestamp": 1745568000000,
+          "changedBy": "alex"
+        },
+        {
+          "status": "done",
+          "timestamp": 1745654400000,
+          "changedBy": "jordan"
+        }
+      ],
+      "initiatedBy": "jordan"
+    }
+  ],
+  "settings": {
+    "missionStatement": "Build tools that make hybrid human-agent teams work better together.",
+    "loopPreamble": "Always check for PR review comments before starting new work. Prefer small, focused commits.",
+    "onboardingComplete": false,
+    "teammates": [],
+    "values": {
+      "name": "P.A.C.T.",
+      "items": [
+        {
+          "letter": "P",
+          "icon": "📣",
+          "title": "People-First",
+          "description": "We're obsessed with the people we serve. Their feedback drives our projects, priorities, and what we ship next."
+        },
+        {
+          "letter": "A",
+          "icon": "🔥",
+          "title": "Autonomy",
+          "description": "We own our domains and make decisions that align with our mission. No permission needed — act on what matters."
+        },
+        {
+          "letter": "C",
+          "icon": "🔍",
+          "title": "Curiosity",
+          "description": "We ask why, dig deeper, and never stop learning. If something can be better, we explore it."
+        },
+        {
+          "letter": "T",
+          "icon": "🤝",
+          "title": "Teamwork",
+          "description": "We work together across domains, communicate openly, and share wins and failures alike. We keep each other accountable — no silos, no blame."
+        }
+      ]
+    }
+  }
+}
