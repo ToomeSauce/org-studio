@@ -1,78 +1,196 @@
 /**
- * Hermes Runtime — connects to a local Hermes instance
+ * Hermes Runtime — connects to local Hermes instances (multi-profile)
  * 
- * Hermes runs one agent per gateway (one profile). If Hermes is running,
- * discover() returns a single agent representing that Hermes instance.
+ * Hermes supports multiple profiles, each running its own gateway + API server.
+ * This runtime discovers all profiles with an active api_server and returns
+ * one agent per profile.
  * 
  * Config via env:
- * - HERMES_URL: http://127.0.0.1:8642 (optional OpenAI-compatible API server)
- * - If not set, this runtime is inactive.
+ * - HERMES_URL: http://127.0.0.1:8642 (default profile, optional)
+ *   Accepts comma-separated URLs for explicit multi-profile:
+ *   HERMES_URL=http://127.0.0.1:8642,http://127.0.0.1:8643
+ * 
+ * Auto-discovery:
+ * - Scans ~/.hermes/profiles/ for profiles with api_server configs
+ * - Also checks ~/.hermes/config.yaml (default profile)
+ * - Each profile with api_server.enabled becomes a discoverable agent
  */
 import type { AgentRuntime, RuntimeAgent } from './types';
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync, existsSync } from 'fs';
 import { join } from 'path';
-import { existsSync } from 'fs';
 
-const HERMES_URL = process.env.HERMES_URL || '';
-const HERMES_HOST = HERMES_URL ? new URL(HERMES_URL).hostname : '127.0.0.1';
+interface HermesProfile {
+  name: string;
+  url: string;       // http://host:port
+  soulName?: string;  // Name from SOUL.md
+  configPath: string;
+}
+
+/**
+ * Scan local Hermes installation for profiles with api_server enabled.
+ * Returns a list of profile endpoints to probe.
+ */
+function discoverLocalProfiles(): HermesProfile[] {
+  const profiles: HermesProfile[] = [];
+  const hermesHome = join(process.env.HOME || '', '.hermes');
+
+  // Helper: extract api_server port from config.yaml content
+  function parseApiServer(content: string, profileName: string, configDir: string): HermesProfile | null {
+    // Look for api_server platform config
+    // Simple YAML parsing — look for the port under api_server.extra
+    const apiMatch = content.match(/api_server[\s\S]*?enabled:\s*true/);
+    if (!apiMatch) return null;
+
+    // Extract port (default 8642)
+    const portMatch = content.match(/api_server[\s\S]*?port:\s*(\d+)/);
+    const port = portMatch ? parseInt(portMatch[1], 10) : 8642;
+
+    // Extract host (default 127.0.0.1)
+    const hostMatch = content.match(/api_server[\s\S]*?host:\s*["']?([^"'\s]+)/);
+    const host = hostMatch ? hostMatch[1] : '127.0.0.1';
+
+    // Try to get name from SOUL.md
+    let soulName: string | undefined;
+    try {
+      const soulPath = join(configDir, 'SOUL.md');
+      if (existsSync(soulPath)) {
+        const soul = readFileSync(soulPath, 'utf-8');
+        // Look for "Your name is X" or "Name: X" patterns
+        const nameMatch = soul.match(/(?:your name is|name:\s*|you are\s+)(\w+)/i);
+        if (nameMatch) soulName = nameMatch[1];
+      }
+    } catch {}
+
+    return {
+      name: profileName,
+      url: `http://${host}:${port}`,
+      soulName,
+      configPath: configDir,
+    };
+  }
+
+  // Check default profile (~/.hermes/config.yaml)
+  try {
+    const defaultConfig = join(hermesHome, 'config.yaml');
+    if (existsSync(defaultConfig)) {
+      const content = readFileSync(defaultConfig, 'utf-8');
+      const profile = parseApiServer(content, 'default', hermesHome);
+      if (profile) profiles.push(profile);
+    }
+  } catch {}
+
+  // Check named profiles (~/.hermes/profiles/*/config.yaml)
+  try {
+    const profilesDir = join(hermesHome, 'profiles');
+    if (existsSync(profilesDir)) {
+      for (const name of readdirSync(profilesDir)) {
+        const profileDir = join(profilesDir, name);
+        const configPath = join(profileDir, 'config.yaml');
+        if (existsSync(configPath)) {
+          try {
+            const content = readFileSync(configPath, 'utf-8');
+            const profile = parseApiServer(content, name, profileDir);
+            if (profile) profiles.push(profile);
+          } catch {}
+        }
+      }
+    }
+  } catch {}
+
+  return profiles;
+}
 
 export class HermesRuntime implements AgentRuntime {
   id = 'hermes';
   name = 'Hermes Agent';
-  private agentName = 'Hermes Agent';
+  private explicitUrls: string[];
+  private profileCache: HermesProfile[] | null = null;
 
   constructor() {
-    // Try to load agent name from Hermes config
-    try {
-      const hermesCfgPath = join(process.env.HOME || '~', '.hermes', 'config.yaml');
-      if (existsSync(hermesCfgPath)) {
-        const content = readFileSync(hermesCfgPath, 'utf-8');
-        // Parse YAML name field (basic: look for "name: ...")
-        const match = content.match(/^name:\s*(.+)$/m);
-        if (match) {
-          this.agentName = match[1].trim();
-        }
+    const envUrl = process.env.HERMES_URL || '';
+    this.explicitUrls = envUrl
+      ? envUrl.split(',').map(u => u.trim()).filter(Boolean)
+      : [];
+  }
+
+  /**
+   * Get all Hermes endpoints to probe (explicit URLs + auto-discovered profiles)
+   */
+  private getProfiles(): HermesProfile[] {
+    if (this.profileCache) return this.profileCache;
+
+    const profiles: HermesProfile[] = [];
+    const seenUrls = new Set<string>();
+
+    // Auto-discover from local filesystem first
+    const localProfiles = discoverLocalProfiles();
+    for (const p of localProfiles) {
+      if (!seenUrls.has(p.url)) {
+        seenUrls.add(p.url);
+        profiles.push(p);
       }
-    } catch {
-      // Fallback to default name
     }
+
+    // Add explicit URLs that weren't already found
+    for (const url of this.explicitUrls) {
+      if (!seenUrls.has(url)) {
+        seenUrls.add(url);
+        profiles.push({
+          name: 'unknown',
+          url,
+          configPath: '',
+        });
+      }
+    }
+
+    this.profileCache = profiles;
+    return profiles;
   }
 
   async discover(): Promise<RuntimeAgent[]> {
-    // If Hermes is not configured, return empty
-    if (!HERMES_URL) return [];
+    const profiles = this.getProfiles();
+    if (profiles.length === 0) return [];
 
-    try {
-      const health = await this._healthCheck();
-      if (!health.connected) return [];
+    const agents: RuntimeAgent[] = [];
 
-      // Try to get model name from /v1/models
-      let modelName = this.agentName;
+    for (const profile of profiles) {
       try {
-        const modelsResp = await fetch(`${HERMES_URL}/v1/models`);
-        if (modelsResp.ok) {
-          const modelsData = await modelsResp.json();
-          if (modelsData.data?.[0]?.id) {
-            modelName = modelsData.data[0].id;
-          }
-        }
-      } catch {
-        // Use default name
-      }
+        const healthy = await this._probeHealth(profile.url);
+        if (!healthy) continue;
 
-      return [
-        {
-          id: `hermes-${HERMES_HOST}`,
-          name: modelName,
+        // Get model/agent name from the API
+        let agentName = profile.soulName || profile.name;
+        try {
+          const resp = await fetch(`${profile.url}/v1/models`);
+          if (resp.ok) {
+            const data = await resp.json();
+            if (data.data?.[0]?.id && data.data[0].id !== 'hermes-agent') {
+              agentName = data.data[0].id;
+            }
+          }
+        } catch {}
+
+        // Use profile name as the agent ID (unique per profile)
+        const agentId = profile.name === 'default'
+          ? 'hermes-default'
+          : `hermes-${profile.name}`;
+
+        agents.push({
+          id: agentId,
+          name: agentName,
           emoji: '🧠',
           runtime: 'hermes',
           status: 'online',
-          metadata: { url: HERMES_URL },
-        },
-      ];
-    } catch (e) {
-      return [];
+          metadata: {
+            url: profile.url,
+            profile: profile.name,
+            configPath: profile.configPath,
+          },
+        });
+      } catch {}
     }
+
+    return agents;
   }
 
   async send(
@@ -80,64 +198,70 @@ export class HermesRuntime implements AgentRuntime {
     message: string,
     opts?: { sessionKey?: string; idempotencyKey?: string }
   ): Promise<any> {
-    if (!HERMES_URL) throw new Error('Hermes runtime not configured (HERMES_URL not set)');
+    // Find the right profile URL for this agent
+    const profiles = this.getProfiles();
+    const profile = profiles.find(p => {
+      const id = p.name === 'default' ? 'hermes-default' : `hermes-${p.name}`;
+      return id === agentId;
+    });
 
-    try {
-      const response = await fetch(`${HERMES_URL}/v1/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'hermes',
-          messages: [{ role: 'user', content: message }],
-          stream: false,
-        }),
-      });
+    const url = profile?.url || this.explicitUrls[0];
+    if (!url) throw new Error('Hermes runtime not configured');
 
-      if (!response.ok) {
-        throw new Error(`Hermes API error: ${response.status}`);
-      }
+    const response = await fetch(`${url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'hermes',
+        messages: [{ role: 'user', content: message }],
+        stream: false,
+      }),
+    });
 
-      return await response.json();
-    } catch (e) {
-      console.error('HermesRuntime.send error:', e);
-      throw e;
+    if (!response.ok) {
+      throw new Error(`Hermes API error: ${response.status}`);
     }
+
+    return await response.json();
   }
 
   async health(): Promise<{ connected: boolean; detail?: string }> {
-    if (!HERMES_URL) {
+    const profiles = this.getProfiles();
+    if (profiles.length === 0) {
       return {
         connected: false,
-        detail: 'Not configured (HERMES_URL not set)',
+        detail: 'No Hermes profiles found (no HERMES_URL set and no local api_server configs)',
       };
     }
 
-    return this._healthCheck();
+    let connected = 0;
+    for (const profile of profiles) {
+      if (await this._probeHealth(profile.url)) connected++;
+    }
+
+    if (connected === 0) {
+      return { connected: false, detail: `${profiles.length} profile(s) configured but none responding` };
+    }
+
+    return {
+      connected: true,
+      detail: `${connected}/${profiles.length} profile(s) online`,
+    };
   }
 
-  private async _healthCheck(): Promise<{ connected: boolean; detail?: string }> {
+  private async _probeHealth(url: string): Promise<boolean> {
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 3000);
-
-      const response = await fetch(`${HERMES_URL}/health`, {
-        signal: controller.signal as any,
-      });
-
+      const response = await fetch(`${url}/health`, { signal: controller.signal as any });
       clearTimeout(timeout);
-
-      if (response.ok) {
-        return { connected: true, detail: 'Hermes API server ready' };
-      } else {
-        return { connected: false, detail: `Hermes health check failed: ${response.status}` };
-      }
-    } catch (e: any) {
-      const detail = e?.name === 'AbortError' ? 'Health check timeout' : (e?.message || 'Health check failed');
-      return { connected: false, detail };
+      return response.ok;
+    } catch {
+      return false;
     }
   }
 
   dispose(): void {
-    // No persistent connections to clean up
+    this.profileCache = null;
   }
 }
