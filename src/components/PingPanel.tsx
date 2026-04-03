@@ -111,7 +111,7 @@ export function PingPanel({ open, onClose }: { open: boolean; onClose: () => voi
   }, [open]);
 
   const handleSend = async () => {
-    if (!chatMsg.trim() || sending || !gateway || !selectedAgentId) return;
+    if (!chatMsg.trim() || sending || !selectedAgentId) return;
     const text = chatMsg.trim();
     setSending(true);
     setChatMsg('');
@@ -120,11 +120,19 @@ export function PingPanel({ open, onClose }: { open: boolean; onClose: () => voi
     setMessages((prev) => [...prev, { role: 'user', content: text, ts: Date.now() }]);
 
     try {
-      await gateway.rpc('chat.send', {
-        sessionKey: `agent:${selectedAgentId}:main`,
-        message: text,
-        idempotencyKey: `ping-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      // Route through /api/ping — works for both OpenClaw and Hermes agents
+      const resp = await fetch('/api/ping', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agentId: selectedAgentId,
+          message: text,
+        }),
       });
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        throw new Error(data.error || `Send failed (${resp.status})`);
+      }
     } catch (e: any) {
       setError(e.message || 'Failed to send message');
     } finally {
@@ -162,15 +170,8 @@ export function PingPanel({ open, onClose }: { open: boolean; onClose: () => voi
           </button>
         </div>
 
-        {/* No Gateway */}
-        {state !== 'connected' ? (
-          <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center">
-            <WifiOff size={32} className="text-[var(--text-muted)]" />
-            <p className="text-[var(--text-base)] text-[var(--text-muted)]">
-              Connect a runtime to message your team
-            </p>
-          </div>
-        ) : agents.length === 0 ? (
+        {/* No agents */}
+        {agents.length === 0 ? (
           /* No agents */
           <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center">
             <Users size={32} className="text-[var(--text-muted)]" />
