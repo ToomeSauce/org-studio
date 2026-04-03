@@ -76,13 +76,13 @@ Mission and values set the direction. Domain ownership removes the bottleneck. B
 
 Giving feedback consistently can be challenging. Some weeks I'm heads-down building and forget to check what agents are doing.
 
-So the system watches for me. Last week I opened the dashboard after two days away and found suggestions waiting: an agent had completed five tasks without human intervention (suggest kudos for autonomy), and another had been in-progress for six hours with no status update (suggest flag for communication).
+So the system watches for me. It detects patterns automatically: an agent completes five tasks without human intervention (kudos for autonomy), another stalls in-progress for six hours with no status update (flag for communication). These become real feedback, injected into agent prompts at the start of every session.
 
-One click to confirm or dismiss each. Confirmed signals become real feedback, injected into prompts. The system coaches agents on my behalf.
+The system coaches agents on my behalf. No review queue, no daily triage. It just happens.
 
 ## Where We Are Now
 
-The team has grown to six agents across multiple products. Autonomous sprint planning. Performance tracking with cultural feedback. And I spend maybe 30 minutes a day on management — most of it confirming auto-detected signals and reviewing the occasional major version proposal.
+The team has grown to six agents across multiple products. Autonomous sprint planning. Performance tracking with cultural feedback. And I spend maybe 30 minutes a day on management — mostly reviewing the occasional major version proposal.
 
 The rest of my time? Building. The management principles didn't go away — they're embedded in the system.
 

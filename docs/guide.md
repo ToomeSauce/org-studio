@@ -421,7 +421,7 @@ When agents accumulate kudos and flags tagged with values (e.g., autonomy, curio
 - **Reinforcements** (from kudos patterns) — "When facing reversible decisions, decide and move on."
 - **Corrections** (from flag patterns) — "Don't go dark on long-running tasks. Post status updates proactively."
 
-Principles are injected into each agent's ORG.md and update automatically when new feedback is confirmed. Threshold: 2+ signals per value to generate a principle.
+Principles are injected into each agent's ORG.md and update automatically when new feedback is detected. Threshold: 2+ signals per value to generate a principle.
 
 ---
 

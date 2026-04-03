@@ -17,7 +17,7 @@ Recognition for great work, tagged with org values:
 
 - "Shipped 9 versions without asking permission" `#autonomy #curiosity`
 - Given by humans via the Team page
-- Auto-suggested by the signal detection engine
+- Auto-detected by the signal detection engine and confirmed automatically
 
 ### Flags 🚩
 
@@ -28,14 +28,14 @@ Constructive course-correction, also value-tagged:
 
 ### Auto-Detection
 
-The system watches agent behavior and suggests signals:
+The system watches agent behavior and auto-detects signals:
 
 - **Silent Autonomy** — completed 3+ tasks without human intervention
 - **Clean Sprint** — version shipped with zero QA bounces
 - **Going Dark** — task stalled 4+ hours with no updates
 - **Repeated Bounces** — quality pattern needs attention
 
-You confirm or dismiss with one click on the Home page.
+Signals are auto-confirmed by default — no manual review needed. The system creates kudos and flags as it detects them. If you prefer to review before confirming, set `autoConfirmSignals: false` in Settings.
 
 ## How Feedback Changes Behavior
 
