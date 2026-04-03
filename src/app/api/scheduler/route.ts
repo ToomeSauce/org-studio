@@ -10,6 +10,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { rpc } from '@/lib/gateway-rpc';
+import { sendToAgent } from '@/lib/runtimes/registry';
 import { buildLoopPrompt, buildDispatchMessage, clearConsumedHandoffs } from '@/lib/scheduler';
 import type { AgentLoop } from '@/lib/store';
 import { authenticateRequest } from '@/lib/auth';
@@ -224,14 +225,13 @@ async function fireOneShot(store: StoreData, loop: AgentLoop): Promise<string | 
   // Send to agent's main persistent session
   const sessionKey = `agent:${loop.agentId}:main`;
   try {
-    const result = await rpc('chat.send', {
+    const result = await sendToAgent(loop.agentId, message, {
       sessionKey,
-      message,
       idempotencyKey: `dispatch-${loop.agentId}-${Date.now()}`,
     });
     return sessionKey;
   } catch (e: any) {
-    console.error(`fireOneShot: chat.send failed for ${agentName}:`, e?.message || e);
+    console.error(`fireOneShot: sendToAgent failed for ${agentName}:`, e?.message || e);
     return undefined;
   }
 }

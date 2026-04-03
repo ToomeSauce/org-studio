@@ -58,6 +58,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
 
   // Step 1: Runtime
   const [detectedAgents, setDetectedAgents] = useState<any[]>([]);
+  const [runtimes, setRuntimes] = useState<any[]>([]);
   const [gatewayLoading, setGatewayLoading] = useState(false);
   const [gatewayConnected, setGatewayConnected] = useState(false);
 
@@ -83,25 +84,26 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   // Poll Gateway for agents when entering step 1
   useEffect(() => {
     if (step === 1) {
-      pollGatewayAgents();
+      pollRuntimes();
     }
   }, [step]);
 
-  const pollGatewayAgents = async () => {
+  const pollRuntimes = async () => {
     setGatewayLoading(true);
     try {
-      const response = await fetch('/api/gateway', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ method: 'agents.list' }),
-      });
+      const response = await fetch('/api/runtimes');
       const data = await response.json();
-      if (data.result && Array.isArray(data.result.agents)) {
-        setDetectedAgents(data.result.agents);
-        setGatewayConnected(true);
+      if (data.runtimes) {
+        setRuntimes(data.runtimes);
+        // Flatten all agents from all connected runtimes
+        const allAgents = data.runtimes
+          .filter((r: any) => r.connected && r.agents?.length)
+          .flatMap((r: any) => r.agents);
+        setDetectedAgents(allAgents);
+        setGatewayConnected(data.runtimes.some((r: any) => r.connected));
       }
     } catch (err) {
-      console.error('Failed to poll Gateway agents:', err);
+      console.error('Failed to poll runtimes:', err);
       setGatewayConnected(false);
     } finally {
       setGatewayLoading(false);
@@ -278,69 +280,90 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
         <div>
           <div className="flex items-center gap-3 mb-4">
             <button
-              onClick={pollGatewayAgents}
+              onClick={pollRuntimes}
               disabled={gatewayLoading}
               className="flex items-center gap-2 px-4 py-2.5 rounded-[var(--radius-md)] text-[var(--text-sm)] font-medium transition-all bg-[var(--accent-primary)] text-white hover:bg-[var(--accent-hover)] disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {gatewayLoading ? (
                 <>
-                  <Loader size={14} className="animate-spin" /> Connecting...
+                  <Loader size={14} className="animate-spin" /> Detecting...
                 </>
               ) : (
                 <>
-                  <Wifi size={14} /> Check Gateway
+                  <Wifi size={14} /> Detect Runtimes
                 </>
               )}
             </button>
           </div>
 
-          {gatewayConnected && detectedAgents.length > 0 ? (
-            <div className="space-y-3">
-              <p className="text-[var(--text-sm)] font-semibold text-[var(--success)] flex items-center gap-2">
-                <Check size={16} /> {detectedAgents.length} agent{detectedAgents.length !== 1 ? 's' : ''} detected
-              </p>
-              <div className="space-y-2">
-                {detectedAgents.map((agent) => (
-                  <div
-                    key={agent.id}
-                    className="flex items-center gap-3 bg-[var(--bg-primary)] border border-[var(--border-default)] rounded-[var(--radius-md)] px-3 py-2.5"
-                  >
-                    <span className="text-lg">{agent.identity?.emoji || '🤖'}</span>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-[var(--text-sm)] font-medium text-[var(--text-primary)] truncate">
-                        {agent.identity?.name || agent.name || agent.id}
-                      </p>
-                      <p className="text-[var(--text-xs)] text-[var(--text-muted)] truncate font-mono">{agent.id}</p>
+          {runtimes.length > 0 ? (
+            <div className="space-y-4">
+              {runtimes.map((runtime) => (
+                <div
+                  key={runtime.id}
+                  className="border border-[var(--border-default)] rounded-[var(--radius-md)] p-4 bg-[var(--bg-primary)]"
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg">{runtime.id === 'hermes' ? '🧠' : '⚡'}</span>
+                      <div>
+                        <p className="text-[var(--text-sm)] font-semibold text-[var(--text-primary)]">{runtime.name}</p>
+                        {runtime.detail && (
+                          <p className="text-[var(--text-xs)] text-[var(--text-muted)]">{runtime.detail}</p>
+                        )}
+                      </div>
                     </div>
-                    <span className="text-[var(--text-xs)] font-medium px-2 py-0.5 rounded-full bg-[var(--success-subtle)] text-[var(--success)]">
-                      Ready
+                    <span
+                      className={`text-[var(--text-xs)] font-medium px-2 py-1 rounded-full ${
+                        runtime.connected
+                          ? 'bg-[var(--success-subtle)] text-[var(--success)]'
+                          : 'bg-[var(--warning-subtle)] text-[var(--warning)]'
+                      }`}
+                    >
+                      {runtime.connected ? '● Connected' : '○ Not found'}
                     </span>
                   </div>
-                ))}
-              </div>
+
+                  {runtime.connected && runtime.agents?.length > 0 ? (
+                    <div className="space-y-2 mt-3 pt-3 border-t border-[var(--border-default)]">
+                      {runtime.agents.map((agent: any) => (
+                        <div key={agent.id} className="flex items-center gap-2 text-[var(--text-sm)]">
+                          <span className="text-base">{agent.emoji || '🤖'}</span>
+                          <span className="text-[var(--text-primary)] font-medium flex-1">{agent.name || agent.id}</span>
+                          <span className="text-[var(--text-xs)] text-[var(--text-muted)] font-mono truncate max-w-[120px]">({agent.id})</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : runtime.connected ? (
+                    <p className="text-[var(--text-xs)] text-[var(--text-muted)] mt-3 pt-3 border-t border-[var(--border-default)]">No agents found</p>
+                  ) : null}
+                </div>
+              ))}
               <p className="text-[var(--text-xs)] text-[var(--text-muted)] mt-3">
-                These agents will appear in your team roster automatically.
+                Agents from all connected runtimes will appear in your team roster. You can also add humans manually in the next step.
               </p>
             </div>
-          ) : !gatewayLoading && gatewayConnected === false ? (
-            <div className="bg-[var(--warning-subtle)] border border-[var(--warning-subtle)] rounded-[var(--radius-md)] p-3">
-              <p className="text-[var(--text-sm)] text-[var(--text-primary)] font-medium mb-1">
-                Gateway not found
-              </p>
-              <p className="text-[var(--text-xs)] text-[var(--text-muted)]">
-                Make sure OpenClaw is running and accessible at http://localhost:18789. You can skip this and add agents manually later.
-              </p>
+          ) : !gatewayLoading ? (
+            <div className="bg-[var(--info-subtle)] border border-[var(--info-subtle)] rounded-[var(--radius-md)] p-3">
+              <p className="text-[var(--text-sm)] text-[var(--text-primary)] font-medium">Click "Detect Runtimes" to find agent services</p>
             </div>
           ) : null}
         </div>
 
         <div>
           <p className="text-[var(--text-xs)] font-medium text-[var(--text-tertiary)] uppercase tracking-wider mb-2">
-            Configuration
+            Runtime Status
           </p>
-          <div className="bg-[var(--bg-primary)] border border-[var(--border-default)] rounded-[var(--radius-md)] px-3 py-2.5 font-mono text-[var(--text-xs)] text-[var(--text-muted)] max-h-20 overflow-y-auto">
-            <div>GATEWAY_URL: http://localhost:18789</div>
-            <div>STATUS: {gatewayConnected ? '✓ Connected' : '✗ Not connected'}</div>
+          <div className="space-y-2 bg-[var(--bg-primary)] border border-[var(--border-default)] rounded-[var(--radius-md)] px-3 py-2.5 font-mono text-[var(--text-xs)] text-[var(--text-muted)]">
+            {runtimes.length > 0 ? (
+              runtimes.map((r) => (
+                <div key={r.id}>
+                  {r.id}: {r.connected ? '✓ Connected' : '✗ Not found'}
+                </div>
+              ))
+            ) : (
+              <div>No runtime data — click "Detect Runtimes" above</div>
+            )}
           </div>
         </div>
       </div>

@@ -408,6 +408,91 @@ function DataStorageSection() {
   );
 }
 
+
+function RuntimeStatusSection() {
+  const [runtimes, setRuntimes] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const pollRuntimes = async () => {
+    setLoading(true);
+    try {
+      const resp = await fetch('/api/runtimes');
+      const data = await resp.json();
+      if (data.runtimes) setRuntimes(data.runtimes);
+    } catch (err) {
+      console.error('Failed to poll runtimes:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    pollRuntimes();
+    const interval = setInterval(pollRuntimes, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <section className="bg-[var(--card)] border border-[var(--border-default)] rounded-[var(--radius-lg)] p-5 space-y-3 shadow-[var(--shadow-sm),inset_0_1px_0_var(--card-highlight)]">
+      <div className="flex items-center justify-between">
+        <h2 className="text-[var(--text-sm)] font-semibold text-[var(--text-primary)]">Agent Runtimes</h2>
+        <button
+          onClick={pollRuntimes}
+          disabled={loading}
+          className="flex items-center gap-1.5 px-2 py-1 rounded text-[var(--text-xs)] font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] disabled:opacity-50"
+        >
+          <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+          {loading ? 'Checking...' : 'Check'}
+        </button>
+      </div>
+      <p className="text-[var(--text-xs)] text-[var(--text-tertiary)]">
+        Org Studio can connect to multiple agent runtimes. Here's the status of each.
+      </p>
+      {runtimes.length > 0 ? (
+        <div className="space-y-2 mt-3">
+          {runtimes.map((rt) => (
+            <div
+              key={rt.id}
+              className="flex items-start gap-3 p-3 rounded-[var(--radius-md)] bg-[var(--bg-secondary)] border border-[var(--border-subtle)]"
+            >
+              <div className="pt-0.5">
+                {rt.connected ? (
+                  <CheckCircle2 size={16} className="text-[var(--success)]" />
+                ) : (
+                  <WifiOff size={16} className="text-[var(--text-muted)]" />
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-[var(--text-sm)] font-medium text-[var(--text-primary)]">{rt.name}</p>
+                {rt.detail && (
+                  <p className="text-[var(--text-xs)] text-[var(--text-tertiary)] leading-relaxed">{rt.detail}</p>
+                )}
+                {rt.connected && rt.agents?.length > 0 && (
+                  <p className="text-[var(--text-xs)] text-[var(--text-muted)] mt-1">
+                    {rt.agents.length} agent{rt.agents.length !== 1 ? 's' : ''} available
+                  </p>
+                )}
+              </div>
+              <span
+                className={clsx(
+                  'text-[var(--text-xs)] font-medium px-2 py-1 rounded-full whitespace-nowrap',
+                  rt.connected
+                    ? 'bg-[var(--success-subtle)] text-[var(--success)]'
+                    : 'bg-[var(--warning-subtle)] text-[var(--warning)]'
+                )}
+              >
+                {rt.connected ? '● Online' : '○ Offline'}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-[var(--text-xs)] text-[var(--text-muted)] mt-2">Click "Check" to detect available runtimes</p>
+      )}
+    </section>
+  );
+}
+
 export default function SettingsPage() {
   const storeData = useWSData<any>('store');
   const gatewayStatus = useWSData<any>('gateway-status');
@@ -456,6 +541,9 @@ export default function SettingsPage() {
   return (
     <div className="space-y-6 max-w-2xl">
       <PageHeader title="Settings" description="Storage, runtime, and system configuration" />
+
+      {/* Agent Runtimes */}
+      <RuntimeStatusSection />
 
       {/* Data Storage — #1 priority, shows local vs remote */}
       <DataStorageSection />

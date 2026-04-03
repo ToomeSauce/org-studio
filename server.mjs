@@ -4,6 +4,7 @@ import { watch, readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import next from 'next';
+import { getRuntimeRegistry } from './lib/runtimes.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const port = parseInt(process.env.PORT || '4501');
@@ -788,23 +789,23 @@ async function pollGateway() {
     }
   } catch {}
 
-  // Poll agent registry
+  // Poll agent registry — now discovers from ALL runtimes (OpenClaw, Hermes, etc)
   try {
-    const agentsResp = await fetch(`http://127.0.0.1:${port}/api/gateway`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ method: 'agents.list' }),
-    });
-    const agentsData = await agentsResp.json();
-    if (agentsData.result) {
-      cachedAgents = agentsData.result;
-      const hash = quickHash(agentsData.result);
-      if (hash !== lastAgentsHash) {
-        lastAgentsHash = hash;
-        broadcast('gateway-agents', agentsData.result);
-      }
+    const registry = getRuntimeRegistry();
+    const allAgents = await registry.discoverAll();
+    
+    // Merge into gateway-agents shape for backward compatibility
+    const agentsData = { agents: allAgents };
+    
+    const hash = quickHash(agentsData);
+    if (hash !== lastAgentsHash) {
+      lastAgentsHash = hash;
+      cachedAgents = agentsData;
+      broadcast('gateway-agents', agentsData);
     }
-  } catch {}
+  } catch (e) {
+    console.error('pollGateway: runtime registry discovery failed:', e?.message);
+  }
 
   // On success, reset failure count and schedule next poll
   pollFailureCount = 0;
