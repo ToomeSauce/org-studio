@@ -38,8 +38,35 @@ function MissionSection({ missionStatement }: { missionStatement?: string }) {
 
 // ─── SECTION 2: Team Activity ─────────────────────────────────────────────
 
-function TeamActivitySection({ teammates, activityStatuses }: { teammates: Teammate[]; activityStatuses: Record<string, any> }) {
+function TeamActivitySection({ teammates, activityStatuses, tasks, projects }: { teammates: Teammate[]; activityStatuses: Record<string, any>; tasks: any[]; projects: any[] }) {
   const now = Date.now();
+
+  // Build project lookup
+  const projectMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const p of projects) map[p.id] = p.name;
+    return map;
+  }, [projects]);
+
+  // Find last activity per agent from task history
+  const lastTaskActivity = useMemo(() => {
+    const result: Record<string, { timestamp: number; projectName: string }> = {};
+    for (const task of tasks) {
+      const assignee = (task.assignee || '').toLowerCase();
+      if (!assignee) continue;
+      // Use the most recent meaningful timestamp
+      const ts = task.completedAt || task.lastActivityAt || task.startedAt || task.createdAt || 0;
+      const tsNum = typeof ts === 'string' ? new Date(ts).getTime() : ts;
+      if (tsNum && (!result[assignee] || tsNum > result[assignee].timestamp)) {
+        result[assignee] = {
+          timestamp: tsNum,
+          projectName: projectMap[task.projectId] || '',
+        };
+      }
+    }
+    return result;
+  }, [tasks, projectMap]);
+
   // Deduplicate teammates by agentId
   const seen = new Set<string>();
   const uniqueTeammates = teammates.filter((tm: Teammate) => {
@@ -54,13 +81,19 @@ function TeamActivitySection({ teammates, activityStatuses }: { teammates: Teamm
       const status = activityStatuses[tm.agentId.toLowerCase()];
       const lastActive = status?.updatedAt || 0;
       const isActive = now - lastActive < 5 * 60 * 1000;
-      const statusDetail = status?.status || status?.detail || 'Idle';
+      const statusDetail = status?.status || status?.detail || '';
+
+      // For idle agents, find their last task activity
+      const nameKey = tm.name.toLowerCase();
+      const agentKey = tm.agentId.toLowerCase();
+      const lastTask = lastTaskActivity[nameKey] || lastTaskActivity[agentKey];
 
       return {
         emoji: tm.emoji,
         name: tm.name,
         isActive,
         statusDetail,
+        lastTask,
       };
     })
     .sort((a, b) => (a.isActive !== b.isActive ? (a.isActive ? -1 : 1) : a.name.localeCompare(b.name)));
@@ -76,7 +109,7 @@ function TeamActivitySection({ teammates, activityStatuses }: { teammates: Teamm
             <div className="flex items-center justify-center gap-1.5">
               <span
                 className={clsx(
-                  'w-2 h-2 rounded-full',
+                  'w-2 h-2 rounded-full shrink-0',
                   agent.isActive ? 'bg-[var(--success)] animate-pulse' : 'bg-[var(--text-muted)]'
                 )}
               />
@@ -84,7 +117,9 @@ function TeamActivitySection({ teammates, activityStatuses }: { teammates: Teamm
                 'text-[var(--text-xs)] truncate',
                 agent.isActive ? 'text-[var(--text-secondary)]' : 'text-[var(--text-muted)]'
               )}>
-                {agent.isActive ? agent.statusDetail : 'Idle'}
+                {agent.isActive ? agent.statusDetail : (
+                  agent.lastTask ? formatLastActive(agent.lastTask.timestamp, agent.lastTask.projectName) : 'No activity yet'
+                )}
               </p>
             </div>
           </div>
@@ -92,6 +127,22 @@ function TeamActivitySection({ teammates, activityStatuses }: { teammates: Teamm
       </div>
     </div>
   );
+}
+
+function formatLastActive(timestamp: number, projectName: string): string {
+  const diff = Date.now() - timestamp;
+  const minutes = Math.floor(diff / 60000);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  let timeStr: string;
+  if (minutes < 1) timeStr = 'just now';
+  else if (minutes < 60) timeStr = `${minutes}m ago`;
+  else if (hours < 24) timeStr = `${hours}h ago`;
+  else if (days < 7) timeStr = `${days}d ago`;
+  else timeStr = new Date(timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+
+  return projectName ? `${timeStr} · ${projectName}` : timeStr;
 }
 
 // ─── SECTION 3: Sprints ────────────────────────────────────────────────────
@@ -402,21 +453,21 @@ export default function HomePage() {
 
   return (
     <div className="space-y-8">
-      {/* Section 1: Mission Statement */}
+      {/* Section 1: Needs Your Attention */}
+      <AttentionSection tasks={tasks} projects={projects} />
+
+      {/* Section 2: Team Activity */}
+      {teammates.length > 0 && (
+        <TeamActivitySection teammates={teammates} activityStatuses={activityStatuses} tasks={tasks} projects={projects} />
+      )}
+
+      {/* Section 3: Mission Statement */}
       <MissionSection missionStatement={missionStatement} />
 
-      {/* Section 2: Project Sprints */}
+      {/* Section 4: Project Sprints */}
       {projects.length > 0 && (
         <SprintsSection projects={projects} tasks={tasks} agentMap={agentMap} />
       )}
-
-      {/* Section 3: Team Activity */}
-      {teammates.length > 0 && (
-        <TeamActivitySection teammates={teammates} activityStatuses={activityStatuses} />
-      )}
-
-      {/* Section 4: Needs Your Attention */}
-      <AttentionSection tasks={tasks} projects={projects} />
 
       {/* Section 5: Suggested Feedback */}
       <SuggestedFeedbackSection />
