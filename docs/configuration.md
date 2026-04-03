@@ -39,7 +39,7 @@ DATABASE_URL=postgresql://user:password@localhost:5432/org_studio
 Path to agent workspaces for ORG.md synchronization.
 
 ```bash
-WORKSPACE_BASE=/home/openclaw_user/.openclaw
+WORKSPACE_BASE=/home/your-user/.openclaw
 ```
 
 When set, Org Studio auto-generates `ORG.md` in each agent's workspace and syncs it whenever org settings change. Without this, agent context injection is disabled.
@@ -140,7 +140,7 @@ Create `.env.local` in the project root:
 ```bash
 # .env.local
 PORT=4501
-WORKSPACE_BASE=/home/openclaw_user/.openclaw
+WORKSPACE_BASE=/home/your-user/.openclaw
 GATEWAY_URL=https://gateway.example.com
 GATEWAY_TOKEN=secret_token_here
 VISION_TOPIC_GROUP_ID=-1002381931352
