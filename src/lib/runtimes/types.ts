@@ -1,5 +1,5 @@
 /**
- * Runtime abstraction layer — supports multiple agent runtimes
+ * Runtime abstraction layer - supports multiple agent runtimes
  * (OpenClaw, Hermes, and future ones)
  */
 
@@ -15,12 +15,12 @@ export interface RuntimeAgent {
 export interface AgentRuntime {
   id: string;
   name: string;
-  
+
   /**
    * Discover all agents available in this runtime
    */
   discover(): Promise<RuntimeAgent[]>;
-  
+
   /**
    * Send a message to an agent
    */
@@ -29,14 +29,14 @@ export interface AgentRuntime {
     message: string,
     opts?: { sessionKey?: string; idempotencyKey?: string }
   ): Promise<any>;
-  
+
   /**
-   * Health check — can this runtime reach its service?
+   * Health check - can this runtime reach its service?
    */
   health(): Promise<{ connected: boolean; detail?: string }>;
-  
+
   /**
-   * Cleanup — close connections, etc.
+   * Cleanup - close connections, etc.
    */
   dispose(): void;
 }
@@ -46,17 +46,17 @@ export interface RuntimeRegistry {
    * Discover all agents from all configured runtimes
    */
   discoverAll(): Promise<RuntimeAgent[]>;
-  
+
   /**
    * Get health status for all runtimes
    */
   healthAll(): Promise<Record<string, { connected: boolean; detail?: string }>>;
-  
+
   /**
    * Look up which runtime owns an agent
    */
   getRuntimeForAgent(agentId: string): AgentRuntime | undefined;
-  
+
   /**
    * Send a message to an agent (routes to correct runtime)
    */
@@ -65,9 +65,14 @@ export interface RuntimeRegistry {
     message: string,
     opts?: { sessionKey?: string; idempotencyKey?: string }
   ): Promise<any>;
-  
+
   /**
-   * Cleanup — dispose all runtimes
+   * Get the display name for a runtime by ID
+   */
+  getRuntimeName(runtimeId: string): string | undefined;
+
+  /**
+   * Cleanup - dispose all runtimes
    */
   dispose(): void;
 }

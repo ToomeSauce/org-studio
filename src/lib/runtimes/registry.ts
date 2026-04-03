@@ -1,5 +1,11 @@
 /**
- * Runtime Registry — holds all configured runtimes and dispatches calls
+ * Runtime Registry — holds all configured runtimes and dispatches calls.
+ * 
+ * Runtimes are auto-registered based on environment variables:
+ * - GATEWAY_URL → OpenClaw runtime
+ * - HERMES_URL or ~/.hermes with api_server → Hermes runtime
+ * 
+ * Only configured runtimes are instantiated.
  */
 import type { AgentRuntime, RuntimeAgent, RuntimeRegistry } from './types';
 import { OpenClawRuntime } from './openclaw';
@@ -12,9 +18,24 @@ class RuntimeRegistryImpl implements RuntimeRegistry {
   private agentToRuntimeId: Map<string, string> = new Map(); // agent id -> runtime id
 
   constructor() {
-    // Initialize all runtimes
-    this.runtimes.set('openclaw', new OpenClawRuntime());
-    this.runtimes.set('hermes', new HermesRuntime());
+    // Only register runtimes that are configured or locally detectable
+    
+    // OpenClaw: register if GATEWAY_URL is set
+    if (process.env.GATEWAY_URL) {
+      this.runtimes.set('openclaw', new OpenClawRuntime());
+    }
+
+    // Hermes: register if HERMES_URL is set OR local Hermes installation detected
+    const hermesUrl = process.env.HERMES_URL || '';
+    const hermesHome = require('path').join(process.env.HOME || '', '.hermes');
+    const hasLocalHermes = (() => {
+      try { return require('fs').existsSync(require('path').join(hermesHome, 'config.yaml')); }
+      catch { return false; }
+    })();
+    
+    if (hermesUrl || hasLocalHermes) {
+      this.runtimes.set('hermes', new HermesRuntime());
+    }
   }
 
   async discoverAll(): Promise<RuntimeAgent[]> {
@@ -68,6 +89,10 @@ class RuntimeRegistryImpl implements RuntimeRegistry {
       throw new Error(`No runtime found for agent ${agentId}`);
     }
     return runtime.send(agentId, message, opts);
+  }
+
+  getRuntimeName(runtimeId: string): string | undefined {
+    return this.runtimes.get(runtimeId)?.name;
   }
 
   dispose(): void {

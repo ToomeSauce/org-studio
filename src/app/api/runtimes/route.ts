@@ -1,6 +1,8 @@
 /**
- * GET /api/runtimes — Get all runtimes with health + discovered agents
- * Used by onboarding wizard and settings pages
+ * GET /api/runtimes — Discover all configured runtimes with health + agents
+ * 
+ * Returns only runtimes that are actually configured (based on env vars
+ * and local detection). A fresh install with no runtimes returns an empty array.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getRuntimeRegistry } from '@/lib/runtimes/registry';
@@ -9,29 +11,20 @@ export async function GET(request: NextRequest) {
   try {
     const registry = await getRuntimeRegistry();
 
-    // Discover all agents from all runtimes
+    // Discover all agents from all configured runtimes
     const allAgents = await registry.discoverAll();
 
     // Get health status for each runtime
     const health = await registry.healthAll();
 
-    // Group agents by runtime for the response
-    const runtimes = [
-      {
-        id: 'openclaw',
-        name: 'OpenClaw',
-        connected: health.openclaw?.connected || false,
-        detail: health.openclaw?.detail,
-        agents: allAgents.filter(a => a.runtime === 'openclaw'),
-      },
-      {
-        id: 'hermes',
-        name: 'Hermes Agent',
-        connected: health.hermes?.connected || false,
-        detail: health.hermes?.detail,
-        agents: allAgents.filter(a => a.runtime === 'hermes'),
-      },
-    ];
+    // Build response dynamically from whatever runtimes are registered
+    const runtimes = Object.entries(health).map(([id, status]) => ({
+      id,
+      name: registry.getRuntimeName(id) || id,
+      connected: status.connected,
+      detail: status.detail,
+      agents: allAgents.filter(a => a.runtime === id),
+    }));
 
     return NextResponse.json({ runtimes });
   } catch (e: any) {
