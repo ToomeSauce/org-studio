@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequest } from '@/lib/auth';
 import { rpc } from '@/lib/gateway-rpc';
 import { getStoreProvider, type StoreData } from '@/lib/store-provider';
+import { parseMentions, notifyMentionedAgents } from '@/lib/mention-notifier';
 
 const SCHEDULER_URL = 'http://localhost:4501/api/scheduler';
 
@@ -626,7 +627,27 @@ export async function POST(req: NextRequest) {
         // But also update lastActivityAt on the task
         await getStoreProvider().addComment(payload.taskId, comment);
         await getStoreProvider().updateTask(payload.taskId, { lastActivityAt: Date.now() });
-        return NextResponse.json({ ok: true, comment });
+
+        // @mention detection — notify mentioned agents (async, best-effort)
+        const teammates = store.settings?.teammates || [];
+        const mentions = parseMentions(comment.content, teammates);
+        let mentionResult: any = null;
+        if (mentions.length > 0) {
+          // Fire-and-forget so we don't block the response
+          notifyMentionedAgents(task, comment, mentions, teammates)
+            .then(result => {
+              if (result.sent.length) {
+                console.log(`[mentions] Notified ${result.sent.join(', ')} about comment on ${task.id}`);
+              }
+              if (result.failed.length) {
+                console.warn(`[mentions] Failed to notify ${result.failed.join(', ')} about comment on ${task.id}`);
+              }
+            })
+            .catch(err => console.error('[mentions] Notification error:', err));
+          mentionResult = { detected: mentions.map(m => m.teammate.name || m.teammate.agentId) };
+        }
+
+        return NextResponse.json({ ok: true, comment, mentions: mentionResult });
       }
 
       case 'addHandoff': {
