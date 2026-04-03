@@ -378,24 +378,8 @@ export default function TeamPage() {
     [gatewayAgents]
   );
 
-  // Auto-scaffold new agents into store (one-time on discovery)
-  const scaffoldedRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    if (newAgents.length === 0) return;
-    for (const gw of newAgents) {
-      if (scaffoldedRef.current.has(gw.id)) continue;
-      scaffoldedRef.current.add(gw.id);
-      // Find the teammate entry we just created in merge
-      const t = teammates.find(tm => tm.agentId === gw.id);
-      if (t) {
-        fetch('/api/store', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'addTeammate', teammate: t }),
-        });
-      }
-    }
-  }, [newAgents, teammates]);
+  // Auto-scaffold moved to server-side (/api/runtimes endpoint).
+  // No client-side scaffolding needed — agents are persisted when Sync is clicked.
   const tasks: any[] = storeData?.tasks || [];
   const projects: any[] = storeData?.projects || [];
   const valuesData = storeData?.settings?.values;
