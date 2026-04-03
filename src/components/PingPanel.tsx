@@ -31,12 +31,25 @@ export function PingPanel({ open, onClose }: { open: boolean; onClose: () => voi
 
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [runtimeConnected, setRuntimeConnected] = useState<boolean | null>(null); // null = loading
   const [chatMsg, setChatMsg] = useState('');
   const [sending, setSending] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Check runtime connectivity when panel opens
+  useEffect(() => {
+    if (!open) return;
+    fetch('/api/runtimes')
+      .then(r => r.json())
+      .then(data => {
+        const connected = (data.runtimes || []).some((r: any) => r.connected);
+        setRuntimeConnected(connected);
+      })
+      .catch(() => setRuntimeConnected(false));
+  }, [open]);
 
   // Auto-select first agent when agents load
   useEffect(() => {
@@ -142,7 +155,7 @@ export function PingPanel({ open, onClose }: { open: boolean; onClose: () => voi
 
   const selectedAgent = agents.find((a) => a.agentId === selectedAgentId);
   const selectedColor = selectedAgent ? resolveColor(selectedAgent.color) : null;
-  const runtimeName = gatewayStatus?.hostname || gatewayStatus?.name || 'OpenClaw';
+  const runtimeName = 'Org Studio';
 
   if (!open) return null;
 
@@ -170,13 +183,22 @@ export function PingPanel({ open, onClose }: { open: boolean; onClose: () => voi
           </button>
         </div>
 
-        {/* No agents */}
-        {agents.length === 0 ? (
-          /* No agents */
+        {/* No runtime connected */}
+        {runtimeConnected === false ? (
+          <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center">
+            <WifiOff size={32} className="text-[var(--text-muted)]" />
+            <p className="text-[var(--text-base)] font-medium text-[var(--text-secondary)]">
+              No agent runtime connected
+            </p>
+            <p className="text-[var(--text-sm)] text-[var(--text-muted)] max-w-xs">
+              Ping requires a running agent runtime (OpenClaw, Hermes, or compatible). Configure one in <code className="text-[var(--text-xs)] bg-[var(--bg-tertiary)] px-1 py-0.5 rounded">.env.local</code> and restart.
+            </p>
+          </div>
+        ) : agents.length === 0 ? (
           <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center">
             <Users size={32} className="text-[var(--text-muted)]" />
             <p className="text-[var(--text-base)] text-[var(--text-muted)]">
-              Add agents to your team to start messaging
+              No agents discovered. Click Sync Agents on the Team page.
             </p>
           </div>
         ) : (
