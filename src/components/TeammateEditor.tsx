@@ -37,7 +37,7 @@ export function EmojiAvatarPicker({ currentEmoji, currentAvatar, onSelect, onClo
   }, [currentEmoji, onSelect, onClose]);
 
   return (
-    <div className="absolute z-50 top-full left-0 mt-2 bg-[var(--card)] border border-[var(--border-strong)] rounded-[var(--radius-lg)] p-4 shadow-lg w-[280px]">
+    <div onClick={e => e.stopPropagation()} className="absolute z-50 top-full left-0 mt-2 bg-[var(--card)] border border-[var(--border-strong)] rounded-[var(--radius-lg)] p-4 shadow-lg w-[280px]">
       <div className="flex items-center justify-between mb-3">
         <span className="text-[var(--text-xs)] font-semibold text-[var(--text-muted)] uppercase tracking-wide">Choose Avatar</span>
         <button onClick={onClose} className="text-[var(--text-muted)] hover:text-[var(--text-primary)]"><X size={14} /></button>
