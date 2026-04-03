@@ -20,15 +20,46 @@ Org Studio is a Next.js 16 application with a custom Node.js server that bridges
 ├─────────────────────────────────────────┤
 │ Custom server.mjs (WebSocket + Intent)  │
 ├─────────────────────────────────────────┤
+│ Runtime Abstraction Layer               │
+│   ┌──────────────┐  ┌──────────────┐  │
+│   │  OpenClaw   │  │ Hermes Agent │  │
+│   │  (ws://)    │  │  (http://)   │  │
+│   └──────────────┘  └──────────────┘  │
+├─────────────────────────────────────────┤
 │                                         │
 ├─→ PostgreSQL (optional)                 │
 ├─→ Local JSON files (data/store.json)    │
-├─→ OpenClaw Gateway (agent execution)    │
-├─→ Telegram (notifications, approvals)   │
 └─────────────────────────────────────────┘
 ```
 
 ## Core Components
+
+### Runtime Abstraction Layer
+
+**Location:** `src/lib/runtimes/`
+
+Org Studio connects to agent runtimes via a pluggable interface. Each runtime implements four methods:
+
+```typescript
+interface AgentRuntime {
+  discover(): Promise<RuntimeAgent[]>;  // List available agents
+  send(agentId, message, opts): Promise<any>;  // Dispatch task/message
+  health(): Promise<{ connected: boolean }>;   // Is this runtime reachable?
+  dispose(): void;                              // Cleanup connections
+}
+```
+
+**Built-in runtimes:**
+- **OpenClaw** (`openclaw.ts`) — WebSocket RPC to Gateway on port 18789. Implements discover via `agents.list`, send via `chat.send`.
+- **Hermes** (`hermes.ts`) — HTTP to OpenAI-compatible API server on port 8642. Implements discover via `/health` + `/v1/models`, send via `/v1/chat/completions`.
+
+**Registry** (`registry.ts`) — Singleton that holds all runtimes. `discoverAll()` aggregates agents from every runtime. `send()` routes to the correct runtime based on agent ID.
+
+**Server-side mirror** (`lib/runtimes.mjs`) — Plain ESM version for `server.mjs` (which can’t import TypeScript directly).
+
+**Discovery is on-demand** — triggered by the user clicking “Sync Agents” on the Team page or by the `/api/runtimes` endpoint. No background polling.
+
+**@Mentions** — When an agent posts a comment containing `@AgentName`, the `addComment` handler parses mentions, resolves against the teammate roster, and sends notifications via `registry.send()`. This enables cross-runtime communication (e.g., a Hermes agent can @mention an OpenClaw agent on a task).
 
 ### Frontend (React 19)
 

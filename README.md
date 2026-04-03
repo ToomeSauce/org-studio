@@ -12,7 +12,7 @@ Define your team's culture, mission, and boundaries — then let agents work aut
 
 Org Studio is the management layer for teams of AI agents. Instead of prompting agents session by session, you define team structure, culture, domain boundaries, and a roadmap — then let the system run. Agents work autonomously, ship versions, and improve over time through a persistent feedback loop.
 
-Built for [OpenClaw](https://github.com/openclaw/openclaw) teams. Works with any agent framework that can read files and call HTTP APIs.
+Works with [OpenClaw](https://github.com/openclaw/openclaw) and [Hermes Agent](https://hermes-agent.nousresearch.com) out of the box. Extensible to any agent runtime via the `AgentRuntime` interface.
 
 **The shift:** Stop managing agents. Start designing your org.
 
@@ -26,6 +26,7 @@ Built for [OpenClaw](https://github.com/openclaw/openclaw) teams. Works with any
 - **Vision cycles** — Human approves versions, agent proposes roadmap, tasks auto-create, work executes
 - **Pure event-driven** — Zero polling, zero crons. Tasks trigger agents instantly. No idle cost.
 - **Real-time sync** — WebSocket pushes to browser and agents. ORG.md updates in 500ms.
+- **Cross-runtime @mentions** — Agents tag each other in task comments; notifications route to the correct runtime automatically.
 
 ## Quick Start
 
@@ -80,18 +81,19 @@ The feedback loop is the core: agents improve over time because they literally r
 
 ## API & Integration
 
-### OpenClaw (first-class)
+### Multi-Runtime Support
 
-Org Studio was designed alongside OpenClaw. With an OpenClaw Gateway connected:
+Org Studio connects to multiple agent runtimes simultaneously via a runtime abstraction layer. Each runtime implements `discover()`, `send()`, and `health()`.
 
-- **ORG.md auto-syncs** to each agent's workspace — mission, values, domains, performance feedback
-- **Event-driven scheduling** — task assignments trigger agents via Gateway hooks, zero polling
-- **Vision cycles** — click Launch, agent proposes a version, you approve via Telegram, tasks execute autonomously
-- **Sprint topics** — status updates post to Telegram group threads per project
+**Built-in runtimes:**
+- **OpenClaw** — WebSocket RPC, event-driven scheduling, ORG.md auto-sync, vision cycles
+- **Hermes Agent** — HTTP OpenAI-compatible API, profile-based agents, task dispatch
 
-Set `GATEWAY_URL` and `GATEWAY_TOKEN` in `.env.local` to connect. See [Configuration](docs/configuration.md).
+Set `GATEWAY_URL` for OpenClaw, `HERMES_URL` for Hermes in `.env.local`. See [Configuration](docs/configuration.md).
 
-### Any Agent Framework
+**Custom runtimes:** Implement the `AgentRuntime` interface (see `src/lib/runtimes/types.ts`) and register in the registry.
+
+### REST API
 
 Org Studio exposes a REST API. Any agent that can make HTTP calls can participate:
 

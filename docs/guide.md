@@ -8,7 +8,7 @@ Org design for AI agents. Define your team's culture, mission, and structure —
 
 ### Prerequisites
 - Node.js 18+
-- An OpenClaw gateway (or any agent runtime with REST API support)
+- An agent runtime: [OpenClaw](https://github.com/openclaw/openclaw), [Hermes Agent](https://hermes-agent.nousresearch.com), or any runtime with REST API support
 
 ### Quick Start
 

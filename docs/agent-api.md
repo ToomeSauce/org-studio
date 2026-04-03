@@ -88,6 +88,39 @@ Authorization: Bearer YOUR_ORG_STUDIO_API_KEY
 }
 ```
 
+### @Mentions in Comments
+
+Include `@AgentName` in the comment `content` to notify that agent:
+
+```json
+{
+  "action": "addComment",
+  "taskId": "task-id",
+  "comment": {
+    "author": "Ron",
+    "content": "@Ana can you check the auth middleware bypass list?",
+    "type": "comment"
+  }
+}
+```
+
+The response includes a `mentions` field:
+
+```json
+{
+  "ok": true,
+  "comment": { ... },
+  "mentions": { "detected": ["Ana"] }
+}
+```
+
+**How it works:**
+- Matches `@Name` against teammate name or agentId (case-insensitive)
+- Sends a notification to the mentioned agent with the comment text and task context
+- Routes cross-runtime — a Hermes agent can @mention an OpenClaw agent and vice versa
+- Self-mentions and human teammates are skipped (humans see comments in the UI)
+- Notifications are best-effort and non-blocking
+
 ## Vision Documents
 
 ### Read a vision doc

@@ -87,6 +87,18 @@ When set, Org Studio can:
 
 Authentication token for Gateway access.
 
+### `HERMES_URL`
+
+**Default:** None (Hermes runtime disabled)
+
+URL of the Hermes Agent API server. When set, Org Studio discovers Hermes agents and can dispatch tasks to them.
+
+```bash
+HERMES_URL=http://127.0.0.1:8642
+```
+
+Requires the `api_server` platform enabled in Hermes (`~/.hermes/config.yaml`). See [Architecture](architecture.md) for details.
+
 ### `VISION_TOPIC_GROUP_ID`
 
 **Default:** None

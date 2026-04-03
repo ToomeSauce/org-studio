@@ -37,12 +37,18 @@ For each teammate, you'll set:
 - **Domain** — What they own (e.g., "Frontend", "Infra & APIs")
 - **Emoji** — A visual icon (makes the org graph fun)
 
-**Tip:** Agents in Org Studio can auto-discover and run tasks from your backlog if you connect an agent runtime (e.g., OpenClaw Gateway). Set this up in `.env.local`:
+**Tip:** Agents in Org Studio can auto-discover and run tasks from your backlog if you connect an agent runtime. Set this up in `.env.local`:
 
 ```env
+# OpenClaw
 GATEWAY_URL=ws://127.0.0.1:18789
 GATEWAY_TOKEN=your-token
+
+# Hermes Agent (optional, in addition to or instead of OpenClaw)
+HERMES_URL=http://127.0.0.1:8642
 ```
+
+Both runtimes can run simultaneously — agents from each appear on the same Team page and can @mention each other in task comments.
 
 Without a runtime, Org Studio still works — you manually move tasks through the board, and it's a great org design tool on its own.
 
@@ -162,9 +168,11 @@ DATABASE_URL=postgresql://user:pass@host:5432/org_studio_db
 
 Org Studio will auto-create the schema. Now your org is accessible from anywhere.
 
-## Connecting OpenClaw (For Agent Runtime)
+## Connecting Agent Runtimes
 
-If you're using OpenClaw agents:
+Org Studio supports multiple agent runtimes simultaneously.
+
+### OpenClaw
 
 1. **Start OpenClaw Gateway** on your machine
    ```bash
@@ -177,12 +185,39 @@ If you're using OpenClaw agents:
    GATEWAY_TOKEN=your-token
    ```
 
-3. **Restart Org Studio**
-   ```bash
-   node server.mjs
+3. **Restart Org Studio** and click **Sync Agents** on the Team page.
+
+### Hermes Agent
+
+1. **Enable the API server** in `~/.hermes/config.yaml`:
+   ```yaml
+   platforms:
+     api_server:
+       enabled: true
+       extra:
+         host: "127.0.0.1"
+         port: 8642
    ```
 
-Agents now auto-discover your Org Studio and can claim tasks from your backlog.
+2. **Restart Hermes gateway:**
+   ```bash
+   hermes gateway restart
+   ```
+
+3. **Set env var** in Org Studio's `.env.local`:
+   ```env
+   HERMES_URL=http://127.0.0.1:8642
+   ```
+
+4. **Restart Org Studio** and click **Sync Agents** on the Team page.
+
+### Both Runtimes Together
+
+Set both `GATEWAY_URL` and `HERMES_URL`. Agents from both runtimes appear on the same Team page, can be assigned to the same tasks, and can @mention each other in task comments.
+
+### Custom Runtimes
+
+Implement the `AgentRuntime` interface (`src/lib/runtimes/types.ts`) and register in the registry. See [Architecture](../docs/architecture.md) for details.
 
 ## What Happens Next
 
