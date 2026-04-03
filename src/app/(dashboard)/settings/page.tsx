@@ -428,8 +428,6 @@ function RuntimeStatusSection() {
 
   useEffect(() => {
     pollRuntimes();
-    const interval = setInterval(pollRuntimes, 10000);
-    return () => clearInterval(interval);
   }, []);
 
   return (

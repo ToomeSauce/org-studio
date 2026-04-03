@@ -789,23 +789,8 @@ async function pollGateway() {
     }
   } catch {}
 
-  // Poll agent registry — now discovers from ALL runtimes (OpenClaw, Hermes, etc)
-  try {
-    const registry = getRuntimeRegistry();
-    const allAgents = await registry.discoverAll();
-    
-    // Merge into gateway-agents shape for backward compatibility
-    const agentsData = { agents: allAgents };
-    
-    const hash = quickHash(agentsData);
-    if (hash !== lastAgentsHash) {
-      lastAgentsHash = hash;
-      cachedAgents = agentsData;
-      broadcast('gateway-agents', agentsData);
-    }
-  } catch (e) {
-    console.error('pollGateway: runtime registry discovery failed:', e?.message);
-  }
+  // Agent discovery is on-demand (triggered by UI sync button via /api/runtimes).
+  // No automatic polling — agents rarely change and Hermes hits are HTTP.
 
   // On success, reset failure count and schedule next poll
   pollFailureCount = 0;

@@ -321,7 +321,31 @@ export default function TeamPage() {
   const sessions = useWSData<any>('sessions');
   const rawStatuses = useWSData<any>('activity-status');
   const storeData = useWSData<any>('store');
-  const gatewayAgents = useWSData<any>('gateway-agents');
+  const [gatewayAgents, setGatewayAgents] = useState<any>(null);
+  const [syncing, setSyncing] = useState(false);
+
+  // Sync agents from all runtimes on-demand
+  const syncAgents = useCallback(async () => {
+    setSyncing(true);
+    try {
+      const resp = await fetch('/api/runtimes');
+      const data = await resp.json();
+      if (data.runtimes) {
+        // Flatten all agents from all connected runtimes into gateway-agents shape
+        const allAgents = data.runtimes
+          .filter((r: any) => r.connected && r.agents?.length)
+          .flatMap((r: any) => r.agents);
+        setGatewayAgents({ agents: allAgents });
+      }
+    } catch (err) {
+      console.error('Failed to sync agents:', err);
+    } finally {
+      setSyncing(false);
+    }
+  }, []);
+
+  // Sync once on mount
+  useEffect(() => { syncAgents(); }, [syncAgents]);
   const activityStatuses = rawStatuses?.statuses || rawStatuses || {};
   const sessionList = sessions?.sessions || [];
 
@@ -476,8 +500,20 @@ export default function TeamPage() {
     <div className="space-y-10">
       {/* OUR TEAM — header + visualization */}
       <div>
-        <h2 className="text-[var(--text-lg)] font-bold tracking-tight text-[var(--text-primary)]">Our Team</h2>
-        <p className="text-[var(--text-base)] text-[var(--text-tertiary)] mt-1 mb-4">Domain ownership · Flat structure · Mission-driven</p>
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-[var(--text-lg)] font-bold tracking-tight text-[var(--text-primary)]">Our Team</h2>
+            <p className="text-[var(--text-base)] text-[var(--text-tertiary)] mt-1">Domain ownership · Flat structure · Mission-driven</p>
+          </div>
+          <button
+            onClick={syncAgents}
+            disabled={syncing}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-md)] text-[var(--text-xs)] font-medium border transition-all bg-[var(--bg-tertiary)] border-[var(--border-default)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-hover)] disabled:opacity-50"
+          >
+            <RefreshCw size={13} className={syncing ? 'animate-spin' : ''} />
+            {syncing ? 'Syncing...' : 'Sync Agents'}
+          </button>
+        </div>
         <div className="bg-gradient-to-br from-[rgba(255,92,92,0.03)] via-[rgba(139,92,246,0.03)] to-[rgba(34,211,238,0.03)] border border-[var(--border-default)] rounded-[var(--radius-lg)] overflow-hidden">
           <ForceGraph activeAgentIds={activeAgentIds} activityStatuses={activityStatuses} savedNodePhysics={storeData?.settings?.nodePhysics} teammates={teammates} />
         </div>
