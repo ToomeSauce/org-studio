@@ -14,12 +14,6 @@ interface NewTeammate {
   agentId: string;
 }
 
-interface NewProject {
-  name: string;
-  description: string;
-  owner: string;
-}
-
 interface OnboardingWizardProps {
   onComplete: () => void;
 }
@@ -28,7 +22,7 @@ interface OnboardingWizardProps {
 
 const EMOJI_OPTIONS = ['👤', '🤖', '⚡', '🔬', '🧠', '🎯', '🛠️', '🌟', '🐝', '🦊'];
 
-const STEP_LABELS = ['Organization', 'Runtime', 'Team', 'Project', 'Done'];
+const STEP_LABELS = ['Welcome', 'Organization', 'Runtime', 'Team', 'Done'];
 
 const DEFAULT_MISSION_PLACEHOLDER = 'e.g. Build products that make people\'s lives easier';
 const DEFAULT_ORG_PLACEHOLDER = 'e.g. Acme Labs';
@@ -51,42 +45,46 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   const [step, setStep] = useState(0);
   const [direction, setDirection] = useState<'forward' | 'back'>('forward');
   const [animating, setAnimating] = useState(false);
+  const [theme, setTheme] = useState<'light' | 'dark'>('dark');
 
-  // Step 0
+  // Step 1
   const [orgName, setOrgName] = useState('');
   const [mission, setMission] = useState('');
 
-  // Step 1: Runtime
+  // Step 2: Runtime
   const [detectedAgents, setDetectedAgents] = useState<any[]>([]);
   const [runtimes, setRuntimes] = useState<any[]>([]);
   const [gatewayLoading, setGatewayLoading] = useState(false);
   const [gatewayConnected, setGatewayConnected] = useState(false);
 
-  // Step 2
+  // Step 3: Team
   const [teammates, setTeammates] = useState<NewTeammate[]>([]);
   const [tmName, setTmName] = useState('');
   const [tmTitle, setTmTitle] = useState('');
   const [tmIsHuman, setTmIsHuman] = useState(true);
-  const [tmDomain, setTmDomain] = useState('');
   const [tmEmoji, setTmEmoji] = useState('👤');
   const [tmAgentId, setTmAgentId] = useState('');
-
-  // Step 3
-  const [projName, setProjName] = useState('');
-  const [projDesc, setProjDesc] = useState('');
-  const [projOwner, setProjOwner] = useState('');
 
   // Final
   const [finishing, setFinishing] = useState(false);
 
   const totalSteps = 5; // 0-4
 
-  // Poll Gateway for agents when entering step 1
+  // Poll Gateway for agents when entering step 2
   useEffect(() => {
-    if (step === 1) {
+    if (step === 2) {
       pollRuntimes();
     }
   }, [step]);
+
+  // Apply theme to document
+  useEffect(() => {
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [theme]);
 
   const pollRuntimes = async () => {
     setGatewayLoading(true);
@@ -129,13 +127,12 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
       name: tmName.trim(),
       title: tmTitle.trim(),
       isHuman: tmIsHuman,
-      domain: tmDomain.trim(),
+      domain: '', // domains are set later via Team page
       emoji: tmEmoji,
       agentId: tmIsHuman ? '' : tmAgentId.trim(),
     }]);
     setTmName('');
     setTmTitle('');
-    setTmDomain('');
     setTmEmoji('👤');
     setTmAgentId('');
     setTmIsHuman(true);
@@ -164,24 +161,11 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
             name: tm.name,
             emoji: tm.emoji,
             title: tm.title || undefined,
-            domain: tm.domain || undefined,
+            domain: '', // domains assigned later via Team page
             isHuman: tm.isHuman,
             agentId: tm.agentId || '',
             color: tm.isHuman ? 'amber' : 'cyan',
             description: '',
-          },
-        });
-      }
-
-      if (projName.trim()) {
-        await apiPost('addProject', {
-          project: {
-            name: projName.trim(),
-            description: projDesc.trim() || '',
-            owner: projOwner || '',
-            phase: 'active',
-            priority: 'medium',
-            createdBy: 'onboarding',
           },
         });
       }
@@ -217,6 +201,48 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   );
 
   const renderStep0 = () => (
+    <div className="max-w-lg mx-auto text-center">
+      <div className="inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-[var(--accent-muted)] mb-8">
+        <Rocket size={40} className="text-[var(--accent-primary)]" />
+      </div>
+      <h1 className="text-[var(--text-4xl)] font-bold text-[var(--text-primary)] mb-4 tracking-tight">
+        Stop assigning tasks to your AI agents.
+      </h1>
+      <p className="text-[var(--text-lg)] text-[var(--text-secondary)] mb-12 leading-relaxed">
+        Give them a mission, domain boundaries, and a feedback loop — they'll figure out the rest.
+      </p>
+
+      <div className="bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-lg)] p-8 space-y-4 text-left mb-10">
+        <div className="flex gap-3">
+          <span className="text-2xl shrink-0">📋</span>
+          <div>
+            <p className="text-[var(--text-sm)] font-semibold text-[var(--text-primary)]">Define your organization</p>
+            <p className="text-[var(--text-xs)] text-[var(--text-tertiary)] mt-0.5">Mission, team structure, and who owns what</p>
+          </div>
+        </div>
+        <div className="flex gap-3">
+          <span className="text-2xl shrink-0">🎯</span>
+          <div>
+            <p className="text-[var(--text-sm)] font-semibold text-[var(--text-primary)]">Create projects with vision</p>
+            <p className="text-[var(--text-xs)] text-[var(--text-tertiary)] mt-0.5">Agents will propose roadmaps and ship autonomously</p>
+          </div>
+        </div>
+        <div className="flex gap-3">
+          <span className="text-2xl shrink-0">🔄</span>
+          <div>
+            <p className="text-[var(--text-sm)] font-semibold text-[var(--text-primary)]">Get feedback loops</p>
+            <p className="text-[var(--text-xs)] text-[var(--text-tertiary)] mt-0.5">Review, approve, and agents iterate until shipped</p>
+          </div>
+        </div>
+      </div>
+
+      <p className="text-[var(--text-xs)] text-[var(--text-muted)] mb-3">
+        Let's set up your team. It takes 3 minutes.
+      </p>
+    </div>
+  );
+
+  const renderStep1 = () => (
     <div className="max-w-lg mx-auto text-center">
       <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-[var(--accent-muted)] mb-6">
         <Sparkles size={28} className="text-[var(--accent-primary)]" />
@@ -262,7 +288,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
     </div>
   );
 
-  const renderStep1 = () => (
+  const renderStep2 = () => (
     <div className="max-w-xl mx-auto">
       <div className="text-center mb-10">
         <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-[var(--info-subtle)] mb-6">
@@ -272,7 +298,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
           Connect Your Agent Runtime
         </h1>
         <p className="text-[var(--text-md)] text-[var(--text-tertiary)] leading-relaxed">
-          Org Studio can auto-detect agents from OpenClaw. Skip this if you're running standalone.
+          Org Studio can auto-detect agents from OpenClaw and Hermes Agent. Skip this if you're running standalone.
         </p>
       </div>
 
@@ -370,17 +396,20 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
     </div>
   );
 
-  const renderStep2 = () => (
+  const renderStep3 = () => (
     <div className="max-w-xl mx-auto">
       <div className="text-center mb-10">
         <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-[var(--accent-2-subtle)] mb-6">
           <Users size={28} className="text-[var(--accent-2)]" />
         </div>
         <h1 className="text-[var(--text-3xl)] font-bold text-[var(--text-primary)] mb-3 tracking-tight">
-          Add Human Team Members
+          {detectedAgents.length > 0 ? 'Add Team Members' : 'Build Your Team'}
         </h1>
         <p className="text-[var(--text-md)] text-[var(--text-tertiary)] leading-relaxed">
-          Detected agents are already added. Add any humans here.
+          {detectedAgents.length > 0
+            ? `We found ${detectedAgents.length} agent${detectedAgents.length !== 1 ? 's' : ''}. Add any humans here.`
+            : 'Add the people on your team. You can add agents later.'
+          }
         </p>
       </div>
 
@@ -409,17 +438,6 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
         </div>
 
         <div>
-          <label className="block text-[var(--text-xs)] font-medium text-[var(--text-tertiary)] mb-1.5 uppercase tracking-wider">Domain</label>
-          <input
-            type="text"
-            value={tmDomain}
-            onChange={e => setTmDomain(e.target.value)}
-            placeholder="e.g. Backend, Design, Ops"
-            className="w-full bg-[var(--bg-primary)] border border-[var(--border-default)] rounded-[var(--radius-md)] px-3 py-2.5 text-[var(--text-sm)] text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--accent-primary)] transition-colors"
-          />
-        </div>
-
-        <div>
           <label className="block text-[var(--text-xs)] font-medium text-[var(--text-tertiary)] mb-2 uppercase tracking-wider">Emoji</label>
           <div className="flex gap-2 flex-wrap">
             {EMOJI_OPTIONS.map(e => (
@@ -439,7 +457,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
           disabled={!tmName.trim()}
           className="w-full flex items-center justify-center gap-2 py-2.5 rounded-[var(--radius-md)] text-[var(--text-sm)] font-medium transition-all disabled:opacity-40 disabled:cursor-not-allowed bg-[var(--accent-primary)] text-white hover:bg-[var(--accent-hover)]"
         >
-          <Plus size={15} /> Add Human
+          <Plus size={15} /> Add Person
         </button>
       </div>
 
@@ -454,13 +472,9 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
               <div className="flex-1 min-w-0">
                 <p className="text-[var(--text-sm)] font-semibold text-[var(--text-primary)] truncate">{tm.name}</p>
                 <p className="text-[var(--text-xs)] text-[var(--text-muted)] truncate">
-                  {tm.title || 'Human'}
-                  {tm.domain ? ` · ${tm.domain}` : ''}
+                  {tm.title || 'Team member'}
                 </p>
               </div>
-              <span className="text-[var(--text-xs)] font-medium px-2 py-0.5 rounded-full bg-[var(--warning-subtle)] text-[var(--warning)]">
-                Human
-              </span>
               <button
                 onClick={() => removeTeammate(i)}
                 className="text-[var(--text-muted)] hover:text-[var(--error)] transition-colors text-lg leading-none"
@@ -472,71 +486,6 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
           ))}
         </div>
       )}
-    </div>
-  );
-
-  const renderStep3 = () => (
-    <div className="max-w-lg mx-auto text-center">
-      <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-[var(--info-subtle)] mb-6">
-        <FolderKanban size={28} className="text-[var(--info)]" />
-      </div>
-      <h1 className="text-[var(--text-3xl)] font-bold text-[var(--text-primary)] mb-3 tracking-tight">
-        Create Your First Project
-      </h1>
-      <p className="text-[var(--text-md)] text-[var(--text-tertiary)] mb-10 leading-relaxed">
-        Optional — you can always do this later from the Vision board.
-      </p>
-
-      <div className="space-y-4 text-left">
-        <div>
-          <label className="block text-[var(--text-xs)] font-medium text-[var(--text-tertiary)] mb-1.5 uppercase tracking-wider">
-            Project Name
-          </label>
-          <input
-            type="text"
-            value={projName}
-            onChange={e => setProjName(e.target.value)}
-            placeholder="e.g. Website Redesign"
-            className="w-full bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-md)] px-4 py-3 text-[var(--text-base)] text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--accent-primary)] transition-colors"
-          />
-        </div>
-
-        <div>
-          <label className="block text-[var(--text-xs)] font-medium text-[var(--text-tertiary)] mb-1.5 uppercase tracking-wider">
-            Description
-          </label>
-          <textarea
-            value={projDesc}
-            onChange={e => setProjDesc(e.target.value)}
-            placeholder="What's this project about?"
-            rows={3}
-            className="w-full bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-md)] px-4 py-3 text-[var(--text-base)] text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--accent-primary)] transition-colors resize-none leading-relaxed"
-          />
-        </div>
-
-        {(teammates.length > 0 || detectedAgents.length > 0) && (
-          <div>
-            <label className="block text-[var(--text-xs)] font-medium text-[var(--text-tertiary)] mb-1.5 uppercase tracking-wider">
-              Owner
-            </label>
-            <select
-              value={projOwner}
-              onChange={e => setProjOwner(e.target.value)}
-              className="w-full bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-md)] px-4 py-3 text-[var(--text-base)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)] transition-colors appearance-none"
-            >
-              <option value="">Select an owner...</option>
-              {teammates.map((tm, i) => (
-                <option key={i} value={tm.name}>{tm.emoji} {tm.name}</option>
-              ))}
-              {detectedAgents.map((agent) => (
-                <option key={agent.id} value={agent.identity?.name || agent.name || agent.id}>
-                  {agent.identity?.emoji || '🤖'} {agent.identity?.name || agent.name || agent.id}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-      </div>
     </div>
   );
 
@@ -586,21 +535,21 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
           </div>
         )}
 
-        {projName.trim() && (
-          <div className="flex items-center gap-3 bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-md)] px-4 py-3">
-            <FolderKanban size={16} className="text-[var(--info)] shrink-0" />
-            <div>
-              <p className="text-[var(--text-sm)] font-medium text-[var(--text-primary)]">{projName.trim()}</p>
-              {projDesc.trim() && <p className="text-[var(--text-xs)] text-[var(--text-muted)]">{projDesc.trim()}</p>}
-            </div>
-          </div>
-        )}
-
-        {!orgName.trim() && detectedAgents.length === 0 && teammates.length === 0 && !projName.trim() && (
+        {!orgName.trim() && detectedAgents.length === 0 && teammates.length === 0 && (
           <p className="text-[var(--text-sm)] text-[var(--text-muted)] text-center py-4">
             No worries — you can set everything up from the dashboard. Let's go!
           </p>
         )}
+      </div>
+
+      <div className="bg-[var(--info-subtle)] border border-[var(--info-subtle)] rounded-[var(--radius-lg)] p-5 mb-8 text-left space-y-3">
+        <p className="text-[var(--text-sm)] font-semibold text-[var(--text-primary)]">Next steps:</p>
+        <div className="space-y-2 text-[var(--text-xs)] text-[var(--text-secondary)]">
+          <p>1. <strong>Create your first project</strong> with a vision doc (North Star, boundaries, aspirations)</p>
+          <p>2. <strong>Set domain ownership</strong> on the Team page — assign projects to agents and humans</p>
+          <p>3. <strong>Let agents propose</strong> a roadmap — then review and approve versions</p>
+          <p>4. <strong>Watch them ship</strong> — agents work autonomously, you review + iterate</p>
+        </div>
       </div>
 
       <button
@@ -626,6 +575,17 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
 
   return (
     <div className="fixed inset-0 z-50 bg-[var(--bg-primary)] flex flex-col overflow-y-auto">
+      <div className="sticky top-0 bg-[var(--bg-primary)] border-b border-[var(--border-default)] px-6 py-3 flex items-center justify-between">
+        <div />
+        <button
+          onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+          className="p-2 rounded-[var(--radius-md)] hover:bg-[var(--bg-secondary)] transition-colors text-[var(--text-secondary)]"
+          title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+        >
+          {theme === 'light' ? '🌙' : '☀️'}
+        </button>
+      </div>
+
       <div className="flex-1 flex flex-col items-center justify-center px-6 py-12">
         <StepIndicator />
 
@@ -642,7 +602,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
         </div>
       </div>
 
-      {step < 4 && (
+      {step < 5 && step > 0 && (
         <div className="sticky bottom-0 bg-[var(--bg-primary)] border-t border-[var(--border-default)] px-6 py-4">
           <div className="max-w-xl mx-auto flex items-center justify-between">
             {step > 0 ? (
@@ -658,7 +618,20 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
               onClick={next}
               className="flex items-center gap-2 px-6 py-2.5 rounded-[var(--radius-md)] text-[var(--text-sm)] font-semibold transition-all bg-[var(--accent-primary)] text-white hover:bg-[var(--accent-hover)]"
             >
-              {step === 3 ? (projName.trim() ? 'Review' : 'Skip & Review') : 'Continue'} <ArrowRight size={15} />
+              Continue <ArrowRight size={15} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {step === 0 && (
+        <div className="sticky bottom-0 bg-[var(--bg-primary)] border-t border-[var(--border-default)] px-6 py-4">
+          <div className="max-w-lg mx-auto flex justify-center">
+            <button
+              onClick={next}
+              className="flex items-center gap-2 px-8 py-3 rounded-[var(--radius-md)] text-[var(--text-base)] font-semibold transition-all bg-[var(--accent-primary)] text-white hover:bg-[var(--accent-hover)] shadow-[var(--shadow-glow)]"
+            >
+              Let's set up your team <ArrowRight size={16} />
             </button>
           </div>
         </div>
