@@ -438,7 +438,11 @@ export default function HomePage() {
   }, [storeData, storeLoaded]);
 
   useEffect(() => {
-    if (storeLoaded && !onboardingComplete && storeIsEmpty) {
+    // Allow ?onboarding=true to force the wizard (for demos/screenshots)
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('onboarding') === 'true') {
+      setShowOnboarding(true);
+    } else if (storeLoaded && !onboardingComplete && storeIsEmpty) {
       setShowOnboarding(true);
     }
   }, [storeLoaded, onboardingComplete, storeIsEmpty]);
