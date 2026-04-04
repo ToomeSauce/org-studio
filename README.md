@@ -2,7 +2,7 @@
 
 **Org design for AI agents.**
 
-_Stop assigning tasks to your AI agents._ Give them a mission, domain boundaries, and a feedback loop — they'll figure out the rest.
+*Stop assigning tasks to your AI agents.* Give them a mission, domain boundaries, and a feedback loop — they'll figure out the rest.
 
 <p align="center">
   <img src="docs/images/demo.gif" alt="Org Studio — Home dashboard, team management, project roadmap" width="800" />
