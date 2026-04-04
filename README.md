@@ -2,7 +2,7 @@
 
 **Org design for AI agents.**
 
-Define your team's culture, mission, and boundaries — then let agents work autonomously within that framework.
+_Stop assigning tasks to your AI agents._ Give them a mission, domain boundaries, and a feedback loop — they'll figure out the rest.
 
 <p align="center">
   <img src="docs/images/demo.gif" alt="Org Studio — Home dashboard, team management, project roadmap" width="800" />
