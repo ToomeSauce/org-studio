@@ -208,9 +208,9 @@ export class HermesRuntime implements AgentRuntime {
     const url = profile?.url || this.explicitUrls[0];
     if (!url) throw new Error('Hermes runtime not configured');
 
-    // Fire-and-forget: send the message but don't block on agent completion.
-    // Hermes processes the full agent turn synchronously on /v1/chat/completions,
-    // which can take minutes. We dispatch and return immediately.
+    // Hermes processes the full agent turn synchronously on /v1/chat/completions.
+    // We can't abort the connection early or Hermes drops the request.
+    // Instead, dispatch in a fully detached background promise that won't block the caller.
     const fetchUrl = `${url}/v1/chat/completions`;
     const body = JSON.stringify({
       model: 'hermes',
@@ -228,20 +228,24 @@ export class HermesRuntime implements AgentRuntime {
       throw new Error(`Hermes agent unreachable at ${url}: ${e.message}`);
     }
 
-    // Dispatch async — don't await the completion
-    fetch(fetchUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-    }).then(response => {
-      if (!response.ok) {
-        console.error(`[Hermes] Agent ${agentId} dispatch returned ${response.status}`);
-      } else {
-        console.log(`[Hermes] Agent ${agentId} completed task dispatch`);
-      }
-    }).catch(err => {
-      console.error(`[Hermes] Agent ${agentId} dispatch failed:`, err.message);
-    });
+    // Dispatch in background — the fetch runs to completion but we return immediately.
+    // Use global setTimeout to ensure the promise isn't GC'd by Next.js.
+    console.log(`[Hermes] Dispatching task to ${agentId} at ${fetchUrl}`);
+    globalThis.setTimeout(() => {
+      fetch(fetchUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      }).then(async response => {
+        if (!response.ok) {
+          console.error(`[Hermes] Agent ${agentId} dispatch returned ${response.status}`);
+        } else {
+          console.log(`[Hermes] Agent ${agentId} completed task (HTTP ${response.status})`);
+        }
+      }).catch(err => {
+        console.error(`[Hermes] Agent ${agentId} dispatch failed:`, err.message);
+      });
+    }, 0);
 
     return { dispatched: true, agentId, url: fetchUrl };
   }

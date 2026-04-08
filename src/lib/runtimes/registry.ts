@@ -84,7 +84,12 @@ class RuntimeRegistryImpl implements RuntimeRegistry {
     message: string,
     opts?: { sessionKey?: string; idempotencyKey?: string }
   ): Promise<any> {
-    const runtime = this.getRuntimeForAgent(agentId);
+    let runtime = this.getRuntimeForAgent(agentId);
+    if (!runtime) {
+      // Agent not in map — try discovering (first call or new agent)
+      await this.discoverAll();
+      runtime = this.getRuntimeForAgent(agentId);
+    }
     if (!runtime) {
       throw new Error(`No runtime found for agent ${agentId}`);
     }
