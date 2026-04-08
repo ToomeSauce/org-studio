@@ -208,17 +208,11 @@ export class HermesRuntime implements AgentRuntime {
     const url = profile?.url || this.explicitUrls[0];
     if (!url) throw new Error('Hermes runtime not configured');
 
-    // Hermes processes the full agent turn synchronously on /v1/chat/completions.
-    // We can't abort the connection early or Hermes drops the request.
-    // Instead, dispatch in a fully detached background promise that won't block the caller.
-    const fetchUrl = `${url}/v1/chat/completions`;
-    const body = JSON.stringify({
-      model: 'hermes',
-      messages: [{ role: 'user', content: message }],
-      stream: false,
-    });
+    // Use /v1/runs for async dispatch — returns run_id immediately (HTTP 202),
+    // processes the agent turn in the background. Monitor via SSE events.
+    const runsUrl = `${url}/v1/runs`;
 
-    // Quick pre-flight: verify the agent is reachable before dispatching
+    // Quick pre-flight: verify the agent is reachable
     try {
       const healthRes = await fetch(`${url}/health`, { signal: AbortSignal.timeout(5000) });
       if (!healthRes.ok) {
@@ -228,29 +222,85 @@ export class HermesRuntime implements AgentRuntime {
       throw new Error(`Hermes agent unreachable at ${url}: ${e.message}`);
     }
 
-    // Dispatch in background — the fetch runs to completion but we return immediately.
-    // Use global setTimeout to ensure the promise isn't GC'd by Next.js.
-    console.log(`[Hermes] Dispatching task to ${agentId} at ${fetchUrl}`);
+    // Dispatch via /v1/runs — returns immediately with run_id
+    console.log(`[Hermes] Dispatching task to ${agentId} via ${runsUrl}`);
+    const runRes = await fetch(runsUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        input: message,
+        session_id: opts?.sessionKey || `org-studio-${agentId}`,
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!runRes.ok) {
+      const errText = await runRes.text().catch(() => '');
+      if (opts?.onComplete) opts.onComplete(agentId);
+      throw new Error(`Hermes /v1/runs error ${runRes.status}: ${errText}`);
+    }
+
+    const runData = await runRes.json();
+    const runId = runData.run_id;
+    console.log(`[Hermes] Agent ${agentId} run started: ${runId}`);
+
+    // Monitor the run via SSE events in the background
+    const eventsUrl = `${url}/v1/runs/${runId}/events`;
     globalThis.setTimeout(() => {
-      fetch(fetchUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body,
-      }).then(async response => {
-        if (!response.ok) {
-          console.error(`[Hermes] Agent ${agentId} dispatch returned ${response.status}`);
-        } else {
-          console.log(`[Hermes] Agent ${agentId} completed task (HTTP ${response.status})`);
-        }
-        // Notify completion callback if provided
-        if (opts?.onComplete) opts.onComplete(agentId);
-      }).catch(err => {
-        console.error(`[Hermes] Agent ${agentId} dispatch failed:`, err.message);
-        if (opts?.onComplete) opts.onComplete(agentId);
-      });
+      fetch(eventsUrl, { signal: AbortSignal.timeout(30 * 60 * 1000) })
+        .then(async (res) => {
+          if (!res.ok || !res.body) {
+            console.error(`[Hermes] Agent ${agentId} events stream failed: ${res.status}`);
+            if (opts?.onComplete) opts.onComplete(agentId);
+            return;
+          }
+          // Read SSE stream for completion events
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              // Parse SSE lines
+              const lines = buffer.split('\n');
+              buffer = lines.pop() || ''; // keep incomplete line
+              for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                try {
+                  const event = JSON.parse(line.slice(6));
+                  if (event.event === 'run.completed') {
+                    console.log(`[Hermes] Agent ${agentId} run completed (${runId})`);
+                    if (opts?.onComplete) opts.onComplete(agentId);
+                    return;
+                  }
+                  if (event.event === 'run.failed') {
+                    console.error(`[Hermes] Agent ${agentId} run failed (${runId}):`, event.error);
+                    if (opts?.onComplete) opts.onComplete(agentId);
+                    return;
+                  }
+                  if (event.event === 'tool.started') {
+                    console.log(`[Hermes] Agent ${agentId} tool: ${event.tool}`);
+                  }
+                } catch { /* skip unparseable lines */ }
+              }
+            }
+          } catch (e: any) {
+            if (e.name !== 'AbortError') {
+              console.error(`[Hermes] Agent ${agentId} events error:`, e.message);
+            }
+          }
+          // Stream ended without terminal event
+          if (opts?.onComplete) opts.onComplete(agentId);
+        })
+        .catch((err) => {
+          console.error(`[Hermes] Agent ${agentId} events fetch failed:`, err.message);
+          if (opts?.onComplete) opts.onComplete(agentId);
+        });
     }, 0);
 
-    return { dispatched: true, agentId, url: fetchUrl };
+    return { dispatched: true, agentId, runId, url: runsUrl };
   }
 
   async health(): Promise<{ connected: boolean; detail?: string }> {
