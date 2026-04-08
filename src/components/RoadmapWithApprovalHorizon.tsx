@@ -68,6 +68,7 @@ interface RoadmapWithApprovalHorizonProps {
   projectId: string;
   project: Project;
   versions: RoadmapVersion[];
+  tasks?: any[];
   onVersionsChange?: (versions: RoadmapVersion[]) => void;
   selectedTask?: any;
   onTaskSelect?: (task: any) => void;
@@ -77,6 +78,7 @@ export function RoadmapWithApprovalHorizon({
   projectId,
   project,
   versions,
+  tasks: allTasks,
   onVersionsChange,
   selectedTask,
   onTaskSelect,
@@ -694,8 +696,20 @@ export function RoadmapWithApprovalHorizon({
         )}
 
         {/* Zone B: Current version (always expanded with accent border) */}
-        {currentVersionObj && (
-          <div className="border-l-4 border-[var(--accent-primary)] rounded-lg bg-[var(--bg-secondary)] p-4 space-y-4">
+        {currentVersionObj && (() => {
+          // Cross-reference roadmap items with actual tasks to show real status
+          const versionTasks = (allTasks || []).filter((t: any) => 
+            t.projectId === projectId && t.version === currentVersion && !t.isArchived
+          );
+          const reviewTasks = versionTasks.filter((t: any) => t.status === 'review');
+          const blockedTasks = versionTasks.filter((t: any) => t.status === 'blocked');
+          const hasStall = reviewTasks.length > 0 || blockedTasks.length > 0;
+
+          return (
+          <div className={clsx(
+            'border-l-4 rounded-lg bg-[var(--bg-secondary)] p-4 space-y-4',
+            hasStall ? 'border-amber-500' : 'border-[var(--accent-primary)]'
+          )}>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <span className="text-lg font-bold">v{currentVersionObj.version}</span>
@@ -712,6 +726,17 @@ export function RoadmapWithApprovalHorizon({
               </span>
             </div>
 
+            {/* Stall banner */}
+            {hasStall && (
+              <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/50">
+                <span className="text-amber-600 dark:text-amber-400 text-sm font-medium">
+                  ⚠️ {reviewTasks.length > 0 ? `${reviewTasks.length} task(s) awaiting review` : ''}
+                  {reviewTasks.length > 0 && blockedTasks.length > 0 ? ' · ' : ''}
+                  {blockedTasks.length > 0 ? `${blockedTasks.length} blocked` : ''}
+                </span>
+              </div>
+            )}
+
             {/* Progress bar */}
             {currentVersionObj.items.length > 0 && (
               <div className="h-2 bg-[var(--bg-tertiary)] rounded-full overflow-hidden">
@@ -722,19 +747,52 @@ export function RoadmapWithApprovalHorizon({
               </div>
             )}
 
-            {/* Task items */}
+            {/* Task items with real status + deep links */}
             {currentVersionObj.items.length > 0 && (
               <div className="space-y-1">
-                {currentVersionObj.items.map((item, idx) => (
-                  <div key={idx} className="flex items-center gap-2 text-sm py-1">
-                    <span>{item.done ? '✅' : '⬜'}</span>
-                    <span className={item.done ? 'text-[var(--text-muted)]' : 'text-[var(--text-primary)] font-medium'}>{item.title}</span>
-                  </div>
-                ))}
+                {currentVersionObj.items.map((item, idx) => {
+                  // Find matching task for this roadmap item
+                  const matchedTask = versionTasks.find((t: any) => 
+                    t.title?.toLowerCase().trim() === item.title?.toLowerCase().trim()
+                  );
+                  const taskStatus = matchedTask?.status;
+                  const statusIndicator = taskStatus === 'review' ? '👀'
+                    : taskStatus === 'blocked' ? '🚫'
+                    : taskStatus === 'in-progress' ? '⚙️'
+                    : taskStatus === 'qa' ? '🧪'
+                    : item.done ? '✅' : '⬜';
+                  const isClickable = matchedTask && (taskStatus === 'review' || taskStatus === 'blocked');
+
+                  return (
+                    <div key={idx} className={clsx(
+                      'flex items-center gap-2 text-sm py-1 rounded px-1',
+                      isClickable && 'hover:bg-amber-50 dark:hover:bg-amber-950/20 cursor-pointer',
+                    )}>
+                      <span>{statusIndicator}</span>
+                      {isClickable ? (
+                        <a
+                          href={`/context?task=${matchedTask.id}`}
+                          className={clsx(
+                            'font-medium underline decoration-amber-400/50 hover:decoration-amber-400',
+                            taskStatus === 'review' ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400'
+                          )}
+                        >
+                          {item.title}
+                          <span className="ml-1.5 text-xs opacity-70">({taskStatus})</span>
+                        </a>
+                      ) : (
+                        <span className={item.done ? 'text-[var(--text-muted)]' : 'text-[var(--text-primary)] font-medium'}>
+                          {item.title}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
-        )}
+          );
+        })()}
 
         {/* Planned versions with draggable approval card */}
         {(() => {

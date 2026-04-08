@@ -661,6 +661,7 @@ export default function ProjectDetailPage() {
               projectId={projectId}
               project={project}
               versions={roadmapVersions}
+              tasks={allTasks}
               onVersionsChange={setRoadmap}
               selectedTask={selectedTask}
               onTaskSelect={(task) => {
