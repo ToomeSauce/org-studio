@@ -89,6 +89,12 @@ await app.prepare();
 
 const server = createServer((req, res) => {
   // Activity feed REST endpoint
+  // Debug: confirm server.mjs is running (not standalone server.js)
+  if (req.url === "/api/debug-server" && req.method === "GET") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ server: "server.mjs", feedSize: activityFeed.length, uptime: process.uptime() }));
+    return;
+  }
   if (req.url === '/api/activity-feed' && req.method === 'GET') {
     const feed = globalThis.__orgStudioActivityFeed?.get() || [];
     res.writeHead(200, { 'Content-Type': 'application/json' });
