@@ -779,8 +779,6 @@ async function initializePostgresListener() {
                 const task = freshStore.tasks?.find(t => t.id === changeEvent.taskId);
                 const lastComment = task?.comments?.[task.comments.length - 1];
                 if (lastComment?.content && lastComment.mentions?.length > 0) {
-                  const { getRuntimeRegistry } = await import('./lib/runtimes.mjs');
-                  const registry = await getRuntimeRegistry();
                   const teammates = freshStore.settings?.teammates || [];
                   for (const mentionName of lastComment.mentions) {
                     const tm = teammates.find(t =>
@@ -790,11 +788,47 @@ async function initializePostgresListener() {
                     if (tm?.agentId && !tm.isHuman) {
                       const msg = `\ud83d\udcac **${lastComment.author}** mentioned you on task: **${task.title}**\n\n> ${lastComment.content}\n\nTask ID: ${task.id}`;
                       try {
-                        await registry.send(tm.agentId, msg, {
-                          sessionKey: `agent:${tm.agentId}:main`,
-                          idempotencyKey: `listen-mention-${task.id}-${lastComment.id}`,
-                        });
-                        console.log(`[LISTEN] Mention routed: ${mentionName} on task ${task.id}`);
+                        // Route based on agent type: Hermes → /v1/runs, OpenClaw → rpc
+                        if (tm.agentId.startsWith('hermes-')) {
+                          // Resolve Hermes profile URL from filesystem
+                          const profileName = tm.agentId.replace('hermes-', '');
+                          let hermesUrl = process.env.HERMES_URL || 'http://127.0.0.1:8642';
+                          try {
+                            const hermesHome = join(process.env.HOME || '', '.hermes');
+                            const cfgPath = profileName === 'default' 
+                              ? join(hermesHome, 'config.yaml')
+                              : join(hermesHome, 'profiles', profileName, 'config.yaml');
+                            if (existsSync(cfgPath)) {
+                              const cfg = readFileSync(cfgPath, 'utf-8');
+                              const portMatch = cfg.match(/port:\s*(\d+)/);
+                              if (portMatch) hermesUrl = `http://127.0.0.1:${portMatch[1]}`;
+                            }
+                          } catch {}
+                          if (hermesUrl) {
+                            const runRes = await fetch(`${profile.url}/v1/runs`, {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ input: msg, session_id: `mention-${task.id}` }),
+                            });
+                            if (runRes.ok) {
+                              const runData = await runRes.json();
+                              console.log(`[LISTEN] Mention routed to Hermes ${mentionName}: run ${runData.run_id}`);
+                            } else {
+                              console.warn(`[LISTEN] Hermes mention dispatch failed: ${runRes.status}`);
+                            }
+                          }
+                        } else {
+                          // OpenClaw agent — trigger via scheduler API
+                          const apiKey = process.env.ORG_STUDIO_API_KEY || '';
+                          const triggerHeaders = { 'Content-Type': 'application/json' };
+                          if (apiKey) triggerHeaders['Authorization'] = `Bearer ${apiKey}`;
+                          await fetch(`http://127.0.0.1:${port}/api/scheduler`, {
+                            method: 'POST',
+                            headers: triggerHeaders,
+                            body: JSON.stringify({ action: 'trigger', agentId: tm.agentId }),
+                          });
+                          console.log(`[LISTEN] Mention triggered OpenClaw ${mentionName}`);
+                        }
                       } catch (e) {
                         console.warn(`[LISTEN] Mention dispatch failed for ${mentionName}:`, e.message);
                       }

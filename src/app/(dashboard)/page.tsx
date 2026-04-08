@@ -143,7 +143,7 @@ function TeamActivitySection({ teammates, activityStatuses, tasks, projects, sel
               <span
                 className={clsx(
                   'w-2 h-2 rounded-full shrink-0',
-                  agent.isActive ? 'bg-[var(--success)] animate-pulse' : 'bg-[var(--text-muted)]'
+                  agent.isActive ? 'bg-[var(--success)]' : 'bg-[var(--text-muted)]'
                 )}
               />
               <p className={clsx(
