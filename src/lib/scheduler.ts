@@ -477,7 +477,7 @@ export async function clearConsumedHandoffs(taskIds: string[]): Promise<void> {
  * Build a focused dispatch message for an agent's main persistent session.
  * Unlike buildLoopPrompt (which includes all workflow instructions),
  * this is a concise task assignment that assumes the agent already
- * knows how to work (from their AGENTS.md/ORG.md).
+ * knows how to work (from their ORG.md, which includes the full workflow).
  * 
  * Called by the event-driven dispatcher when tasks land in backlog or when manually triggered.
  */
@@ -572,7 +572,7 @@ export async function buildDispatchMessage(
   // Store handoff task IDs for cleanup
   (buildDispatchMessage as any)._lastHandoffTaskIds = handoffTaskIds;
 
-  // Instructions (minimal — agent's AGENTS.md has the full workflow)
+  // Instructions (minimal — agent's ORG.md has the full workflow)
   const apiKey = process.env.ORG_STUDIO_API_KEY || '';
   lines.push('**Instructions:**');
   lines.push('1. Read your ORG.md for current context and workflow');

@@ -224,6 +224,7 @@ export default function ProjectDetailPage() {
       editModalOpenRef.current = true;
       const proj = storeData.projects.find((p: Project) => p.id === projectId);
       if (proj) {
+        console.log('[EditModal] Initializing form from store:', { qaOwner: proj.qaOwner, devOwner: proj.devOwner });
         setEditProject({
           name: proj.name || '',
           lifecycle: proj.lifecycle || 'building',
@@ -232,6 +233,8 @@ export default function ProjectDetailPage() {
           qaOwner: proj.qaOwner || '',
         });
       }
+    } else if (showEditModal && editModalOpenRef.current) {
+      console.log('[EditModal] SKIPPED re-init (modal already open, ref=true)');
     }
     if (!showEditModal) {
       editModalOpenRef.current = false;
@@ -1194,7 +1197,10 @@ What makes a good proposal?
                 </label>
                 <select
                   value={editProject.qaOwner}
-                  onChange={(e) => setEditProject({ ...editProject, qaOwner: e.target.value })}
+                  onChange={(e) => {
+                    console.log('[EditModal] qaOwner changed to:', JSON.stringify(e.target.value));
+                    setEditProject({ ...editProject, qaOwner: e.target.value });
+                  }}
                   className="w-full px-3 py-2 bg-[var(--bg-primary)] border border-[var(--border-default)] rounded-[var(--radius-md)] text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
                 >
                   <option value="">None</option>

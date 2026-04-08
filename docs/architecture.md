@@ -361,7 +361,7 @@ Task Event → Scheduler API → Pre-flight Check → chat.send → Agent Main S
 
 **Agent Session** (persistent, `agent:{id}:main`):
 - Receives task context in their main session
-- Has full tool access, memory, AGENTS.md context
+- Has full tool access, memory, ORG.md context (auto-synced by Org Studio)
 - Spawns sub-agents for heavy work (builds, multi-file changes)
 - Updates task status via store API when done
 - Completion triggers next task dispatch (chaining)
