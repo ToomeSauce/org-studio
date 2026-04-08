@@ -117,6 +117,11 @@ function generateOrgMd(store, forAgentId) {
       if (me.owns) lines.push(`**Owns (autonomous decisions):** ${me.owns}`);
       if (me.defers) lines.push(`**Defers (needs confirmation):** ${me.defers}`);
       if (me.description) lines.push(`**Description:** ${me.description}`);
+      if (me.context) {
+        lines.push('');
+        lines.push('### Context');
+        lines.push(me.context);
+      }
       lines.push('');
     }
   }
@@ -129,37 +134,20 @@ function generateOrgMd(store, forAgentId) {
   }
   lines.push('');
 
-  // Vision docs summary — so agents see latest state
+  // Vision docs summary — fetch from API (Postgres) with local file fallback
   const projects = store?.projects || [];
   const activeProjects = projects.filter(p => p.phase === 'active' || p.lifecycle === 'building' || p.lifecycle === 'mature');
   if (activeProjects.length > 0) {
-    lines.push('## Active Vision Docs');
-    lines.push('> Source of truth for each project. Check `/api/vision/{id}/doc` for full content.');
+    lines.push('## Active Projects');
     lines.push('');
     for (const p of activeProjects) {
-      const docPath = p.visionDocPath || `docs/visions/${p.id}.md`;
-      const absDocPath = docPath.startsWith('/') ? docPath : join(process.cwd(), docPath);
-      let docSummary = 'No vision doc found';
-      let lastUpdated = '';
-      let version = '';
-      try {
-        if (existsSync(absDocPath)) {
-          const content = readFileSync(absDocPath, 'utf-8');
-          // Extract Last Updated from Meta
-          const luMatch = content.match(/\*\*Last Updated[:.]?\*\*\s*(.+)/);
-          if (luMatch) lastUpdated = luMatch[1].trim();
-          // Extract Version from Meta
-          const verMatch = content.match(/\*\*Version[:.]?\*\*\s*(.+)/);
-          if (verMatch) version = verMatch[1].trim();
-          // Extract North Star (first 100 chars)
-          const nsMatch = content.match(/## North Star\s*\n([\s\S]*?)(?=\n## |$)/);
-          if (nsMatch) docSummary = nsMatch[1].trim().slice(0, 120).replace(/\n/g, ' ');
-        }
-      } catch { /* skip */ }
-      const versionStr = version ? ` v${version}` : '';
-      const dateStr = lastUpdated ? ` (updated ${lastUpdated})` : '';
-      lines.push(`- **${p.name}**${versionStr}${dateStr}: ${docSummary}`);
+      const versionStr = p.currentVersion ? ` v${p.currentVersion}` : '';
+      const devStr = p.devOwner ? ` | Dev: ${p.devOwner}` : '';
+      const qaStr = p.qaOwner ? ` | QA: ${p.qaOwner}` : '';
+      lines.push(`- **${p.name}**${versionStr}${devStr}${qaStr}`);
     }
+    lines.push('');
+    lines.push('Read full vision docs: `GET /api/vision/{projectId}/doc`');
     lines.push('');
   }
 
@@ -190,23 +178,60 @@ function generateOrgMd(store, forAgentId) {
   lines.push(`GET  ${baseUrl}/api/stats/{agentId}          — your delivery metrics`);
   lines.push('```');
   lines.push('');
+
+  // Work loop — so agents know the standard workflow
+  lines.push('## Work Loop');
+  lines.push('1. Scan **in-progress** for tasks assigned to you. Resume the highest priority one.');
+  lines.push('2. If nothing in-progress, scan **backlog**. Pick the highest priority task.');
+  lines.push('   - Read the full task description and comments FIRST.');
+  lines.push('   - Only move to in-progress AFTER actual work starts. Do NOT claim tasks speculatively.');
+  lines.push('3. Before moving any task out of in-progress, check `testType`:');
+  lines.push('   - `self` (default): self-test, write results in reviewNotes, move to review/done.');
+  lines.push('   - `qa`: self-test first, write a test plan, move to QA column.');
+  lines.push('4. When complete: update status + always include `reviewNotes`. Clear activity status.');
+  lines.push('5. If more backlog tasks remain, continue with the next one.');
+  lines.push('6. If you run out of time mid-task, leave it where it is.');
+  lines.push('');
   lines.push('**Task lifecycle:** backlog → in-progress → QA → review → done');
   lines.push('Always include `reviewNotes` when moving to review/done.');
   lines.push('Always include `version` when creating tasks for a sprint.');
+  lines.push('');
+
+  // Activity status — so agents can report what they're doing
+  lines.push('## Activity Status');
+  lines.push('Report your status (visible in Mission Control Live Activity feed):');
+  lines.push('```');
+  lines.push(`POST ${baseUrl}/api/activity-status`);
+  lines.push(`  {"agent":"<your-agentId>","status":"<what you are doing>","detail":"<optional>"}`);
+  lines.push('');
+  lines.push(`DELETE ${baseUrl}/api/activity-status`);
+  lines.push(`  {"agent":"<your-agentId>"}`);
+  lines.push('```');
+  lines.push('');
+
+  // Comments — how to communicate about tasks
+  lines.push('## Task Comments');
+  lines.push('Use comments to communicate about a task (questions, updates, findings):');
+  lines.push('```');
+  lines.push(`POST ${baseUrl}/api/store`);
+  lines.push(`  {"action":"addComment","taskId":"<id>","comment":{"author":"<Your Name>","content":"<message>","type":"comment"}}`);
+  lines.push('```');
+  lines.push('- When a task is sent back (review → in-progress), check comments for feedback.');
+  lines.push('- Post questions as comments instead of guessing.');
   lines.push('');
 
   return lines.join('\n');
 }
 
 function resolveWorkspaceDir(agentId) {
-  // Standard path: workspace-{agentId}
-  const suffixed = join(WORKSPACE_BASE, `workspace-${agentId}`);
-  if (existsSync(suffixed)) return suffixed;
   // Default agent id is 'main' but workspace is the bare 'workspace' dir
   if (agentId === 'main') {
     const bare = join(WORKSPACE_BASE, 'workspace');
     if (existsSync(bare)) return bare;
   }
+  // Standard path: workspace-{agentId}
+  const suffixed = join(WORKSPACE_BASE, `workspace-${agentId}`);
+  if (existsSync(suffixed)) return suffixed;
   return null;
 }
 

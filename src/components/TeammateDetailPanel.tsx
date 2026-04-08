@@ -87,13 +87,13 @@ interface TeammateDetailPanelProps {
   teammate: Teammate;
   isActive: boolean;
   activityStatus?: { status: string; detail?: string };
-  overrides?: { title?: string; domain?: string; owns?: string; defers?: string; description?: string };
+  overrides?: { title?: string; domain?: string; owns?: string; defers?: string; description?: string; context?: string };
   tasks: any[];
   projects: any[];
   loops: AgentLoop[];
   isDisconnected?: boolean;
   onClose: () => void;
-  onSave: (id: string, updates: { title?: string; domain?: string; owns?: string; defers?: string; description?: string }) => void;
+  onSave: (id: string, updates: { title?: string; domain?: string; owns?: string; defers?: string; description?: string; context?: string }) => void;
   onUpdateTeammate: (id: string, updates: Partial<Teammate>) => void;
 }
 
@@ -116,6 +116,7 @@ export default function TeammateDetailPanel({
   const displayDomain = overrides?.domain || teammate.domain;
   const displayOwns = overrides?.owns || teammate.owns || '';
   const displayDefers = overrides?.defers || teammate.defers || '';
+  const displayContext = overrides?.context || teammate.context || '';
   const displayDesc = overrides?.description || teammate.description;
 
   // Escape key handler
@@ -179,16 +180,17 @@ export default function TeammateDetailPanel({
 
   // --- Domains edit mode ---
   const [editingDomains, setEditingDomains] = useState(false);
-  const [domainDraft, setDomainDraft] = useState({ owns: '', defers: '' });
+  const [domainDraft, setDomainDraft] = useState({ owns: '', defers: '', context: '' });
 
   const startDomainEdit = () => {
-    setDomainDraft({ owns: displayOwns, defers: displayDefers });
+    const displayContext = overrides?.context || teammate.context || '';
+    setDomainDraft({ owns: displayOwns, defers: displayDefers, context: displayContext });
     setEditingDomains(true);
   };
 
   const saveDomainEdit = () => {
     const saveId = teammate.agentId || teammate.id;
-    onSave(saveId, { owns: domainDraft.owns, defers: domainDraft.defers });
+    onSave(saveId, { owns: domainDraft.owns, defers: domainDraft.defers, context: domainDraft.context });
     setEditingDomains(false);
   };
 
@@ -374,6 +376,18 @@ export default function TeammateDetailPanel({
                     placeholder="Production deploys, budget, customer-facing changes..."
                   />
                 </div>
+                <div>
+                  <label className="text-[var(--text-xs)] font-semibold text-blue-400 mb-1 block">
+                    📋 Context — extra info for ORG.md
+                  </label>
+                  <textarea
+                    value={domainDraft.context}
+                    onChange={e => setDomainDraft(d => ({ ...d, context: e.target.value }))}
+                    rows={3}
+                    className="w-full bg-[var(--bg-secondary)] border border-[var(--border-strong)] rounded-[var(--radius-sm)] px-2 py-1.5 text-[var(--text-xs)] text-[var(--text-tertiary)] leading-relaxed resize-none focus:outline-none focus:border-[var(--accent-primary)]"
+                    placeholder="Branch policies, repo paths, safety rules, coordination notes..."
+                  />
+                </div>
                 <div className="flex gap-2">
                   <button
                     onClick={saveDomainEdit}
@@ -403,7 +417,13 @@ export default function TeammateDetailPanel({
                     <p className="text-[var(--text-xs)] text-[var(--text-tertiary)] leading-relaxed">{displayDefers}</p>
                   </div>
                 ) : null}
-                {!displayOwns && !displayDefers && (
+                {displayContext ? (
+                  <div>
+                    <p className="text-[var(--text-xs)] font-semibold text-blue-400 mb-1">📋 Context</p>
+                    <p className="text-[var(--text-xs)] text-[var(--text-tertiary)] leading-relaxed whitespace-pre-line">{displayContext}</p>
+                  </div>
+                ) : null}
+                {!displayOwns && !displayDefers && !displayContext && (
                   <p className="text-[var(--text-xs)] text-[var(--text-muted)] italic">No domains configured</p>
                 )}
                 <button

@@ -12,6 +12,7 @@ export interface Teammate {
   domain: string;
   owns?: string;    // What this teammate owns — autonomous decision scope
   defers?: string;  // What requires escalation / confirmation
+  context?: string; // Free-text domain context injected into ORG.md (branch policies, repo paths, safety rules, coordination notes)
   description: string;
   color: string; // color key: 'red', 'emerald', 'cyan', 'purple', 'amber', etc.
   isHuman?: boolean;

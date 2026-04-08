@@ -58,17 +58,34 @@ Setting `role: "qa"` on a teammate enables **QA-specific scheduler behavior**:
 
 Every agent workspace gets a personalized `ORG.md` file containing:
 - Organization mission and values
-- Their specific domain, owns, and defers boundaries
+- Their specific domain, owns, defers, and **context** (free-text notes)
 - Full team roster
-- Active vision doc summaries
-- **Org Studio API reference** — base URL, Bearer token, key endpoints, task lifecycle
+- Active projects summary
+- **Org Studio API reference** — base URL, Bearer token, key endpoints
+- **Work loop** — standard task workflow instructions
+- **Activity status** — how to report what you're doing
+- **Task comments** — how to communicate about tasks
 - Performance feedback (Core Identity, Recent Feedback, Operating Principles)
 
 This file is auto-generated and refreshed within 500ms of any store change. Agents should read it but never edit it.
 
+**ORG.md is self-sufficient for Org Studio task execution.** An agent with only ORG.md can pick up backlog tasks, work them, update the board, and move on. No additional files needed.
+
 Alongside `ORG.md`, each workspace also receives:
 - `docs/guide.md` — the full Org Studio usage guide
 - `docs/agent-api.md` — detailed API reference with workflows and examples
+
+#### The Context Field
+
+Each teammate has an optional **context** field (editable in Team → Detail Panel → Domain section). Use it for domain-specific notes that should be injected into the agent's ORG.md:
+
+- Branch policies ("push to staging only, never touch main")
+- Repo paths and service URLs
+- Coordination notes ("coordinate with Ana on shared files")
+- Safety rules ("ask before destructive operations")
+- Infrastructure details ("DB at postgres-staging.example.com")
+
+This replaces the need for a separate AGENTS.md for Org Studio concerns. Your agent runtime may have its own config files (OpenClaw's AGENTS.md, Hermes config.yaml, etc.) — those are separate from Org Studio.
 
 ---
 
@@ -389,25 +406,36 @@ Guardrails are injected into the vision prompt, so agents see them when proposin
 
 ## ORG.md
 
-The `ORG.md` file is auto-generated and synced to every agent's workspace.
+The `ORG.md` file is auto-generated and synced to every agent's workspace. **It is the single context file agents need from Org Studio.**
 
 ### What It Contains
 - Organization mission statement
 - Cultural values (name, icon, description per value)
-- Per-agent domain boundaries (owns/defers)
+- Per-agent domain boundaries (owns/defers) and **context notes**
 - Full team roster with roles and domains
-- Active vision doc summaries
-- **Org Studio API quick reference** — base URL, auth token, key endpoints, task lifecycle
+- Active projects summary with dev/QA owners
+- **Work loop** — standard 6-step task workflow
+- **Activity status** — how to report current work
+- **Task comments** — how to communicate about tasks
+- **Org Studio API quick reference** — base URL, auth token, key endpoints
 - Performance feedback (Core Identity, Recent Feedback, Operating Principles)
 
-The API section means agents can interact with Org Studio immediately — no manual AGENTS.md edits needed.
+An agent with only ORG.md can pick up tasks, work them, and update the board. No additional files needed.
+
+### The Context Field
+Each teammate has an optional `context` field for domain-specific notes:
+- Branch policies, repo paths, safety rules, coordination notes
+- Rendered under "### Context" in that agent's ORG.md
+- Editable in Team → Detail Panel → Domain section
+
+This replaces the need for a separate AGENTS.md for Org Studio concerns. Your agent runtime may have its own config files — those are separate.
 
 ### What Gets Synced Alongside
 - `docs/guide.md` — full Org Studio usage guide
 - `docs/agent-api.md` — detailed API reference with workflows and examples
 
 ### How Sync Works
-- A file watcher monitors `data/store.json`
+- A file watcher monitors `data/store.json` (or Postgres LISTEN/NOTIFY)
 - On any change, `ORG.md` is regenerated and written to each agent's workspace
 - Each agent gets a personalized version (their domain section is highlighted)
 - Sync happens within 500ms of a store change
