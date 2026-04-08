@@ -208,6 +208,18 @@ async function checkGateway(): Promise<boolean> {
 
 // Track agents currently being dispatched to prevent duplicate sends
 const inFlightAgents = new Set<string>();
+const inFlightTimers = new Map<string, NodeJS.Timeout>();
+
+// Called by runtimes when an agent finishes a task dispatch
+export function clearInFlightAgent(agentId: string) {
+  inFlightAgents.delete(agentId);
+  const timer = inFlightTimers.get(agentId);
+  if (timer) {
+    clearTimeout(timer);
+    inFlightTimers.delete(agentId);
+  }
+  console.log(`fireOneShot: cleared in-flight for agent ${agentId} (completed)`);
+}
 
 async function fireOneShot(store: StoreData, loop: AgentLoop): Promise<string | undefined> {
   const agentName = getAgentName(store, loop.agentId);
@@ -236,25 +248,33 @@ async function fireOneShot(store: StoreData, loop: AgentLoop): Promise<string | 
   const sessionKey = `agent:${loop.agentId}:main`;
   inFlightAgents.add(loop.agentId);
 
-  // For fire-and-forget runtimes (like Hermes), sendToAgent returns immediately.
-  // Set a timeout to clear in-flight status so re-dispatch can happen after a reasonable window.
-  const IN_FLIGHT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
-  const inFlightTimer = setTimeout(() => {
+  // Safety timeout: clear in-flight after 30 minutes in case the completion callback never fires
+  const IN_FLIGHT_TIMEOUT_MS = 30 * 60 * 1000;
+  const timer = setTimeout(() => {
     inFlightAgents.delete(loop.agentId);
-    console.log(`fireOneShot: cleared in-flight for ${agentName} (timeout)`);
+    inFlightTimers.delete(loop.agentId);
+    console.log(`fireOneShot: cleared in-flight for ${agentName} (safety timeout)`);
   }, IN_FLIGHT_TIMEOUT_MS);
+  inFlightTimers.set(loop.agentId, timer);
 
   try {
     const result = await sendToAgent(loop.agentId, message, {
       sessionKey,
       idempotencyKey: `dispatch-${loop.agentId}-${Date.now()}`,
+      onComplete: (completedAgentId: string) => {
+        inFlightAgents.delete(completedAgentId);
+        const t = inFlightTimers.get(completedAgentId);
+        if (t) { clearTimeout(t); inFlightTimers.delete(completedAgentId); }
+        console.log(`fireOneShot: ${agentName} task completed, cleared in-flight`);
+      },
     });
     return sessionKey;
   } catch (e: any) {
     console.error(`fireOneShot: sendToAgent failed for ${agentName}:`, e?.message || e);
     // Clear in-flight on failure so agent can be retried
     inFlightAgents.delete(loop.agentId);
-    clearTimeout(inFlightTimer);
+    const failTimer = inFlightTimers.get(loop.agentId);
+    if (failTimer) { clearTimeout(failTimer); inFlightTimers.delete(loop.agentId); }
     return undefined;
   }
 }

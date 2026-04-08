@@ -196,7 +196,7 @@ export class HermesRuntime implements AgentRuntime {
   async send(
     agentId: string,
     message: string,
-    opts?: { sessionKey?: string; idempotencyKey?: string }
+    opts?: { sessionKey?: string; idempotencyKey?: string; onComplete?: (agentId: string) => void }
   ): Promise<any> {
     // Find the right profile URL for this agent
     const profiles = this.getProfiles();
@@ -242,8 +242,11 @@ export class HermesRuntime implements AgentRuntime {
         } else {
           console.log(`[Hermes] Agent ${agentId} completed task (HTTP ${response.status})`);
         }
+        // Notify completion callback if provided
+        if (opts?.onComplete) opts.onComplete(agentId);
       }).catch(err => {
         console.error(`[Hermes] Agent ${agentId} dispatch failed:`, err.message);
+        if (opts?.onComplete) opts.onComplete(agentId);
       });
     }, 0);
 

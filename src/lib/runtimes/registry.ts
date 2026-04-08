@@ -82,7 +82,7 @@ class RuntimeRegistryImpl implements RuntimeRegistry {
   async send(
     agentId: string,
     message: string,
-    opts?: { sessionKey?: string; idempotencyKey?: string }
+    opts?: { sessionKey?: string; idempotencyKey?: string; onComplete?: (agentId: string) => void }
   ): Promise<any> {
     let runtime = this.getRuntimeForAgent(agentId);
     if (!runtime) {
@@ -134,7 +134,7 @@ export async function checkRuntimeHealth(): Promise<Record<string, { connected: 
 export async function sendToAgent(
   agentId: string,
   message: string,
-  opts?: { sessionKey?: string; idempotencyKey?: string }
+  opts?: { sessionKey?: string; idempotencyKey?: string; onComplete?: (agentId: string) => void }
 ): Promise<any> {
   const registry = await getRuntimeRegistry();
   return registry.send(agentId, message, opts);

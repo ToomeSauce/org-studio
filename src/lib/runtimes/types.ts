@@ -27,7 +27,7 @@ export interface AgentRuntime {
   send(
     agentId: string,
     message: string,
-    opts?: { sessionKey?: string; idempotencyKey?: string }
+    opts?: { sessionKey?: string; idempotencyKey?: string; onComplete?: (agentId: string) => void }
   ): Promise<any>;
 
   /**
