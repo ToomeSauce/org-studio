@@ -41,9 +41,17 @@ COPY --from=builder /app/node_modules/postgres-date ./node_modules/postgres-date
 COPY --from=builder /app/node_modules/postgres-interval ./node_modules/postgres-interval
 COPY --from=builder /app/node_modules/split2 ./node_modules/split2
 
+# ws (WebSocket server, used by server.mjs)
+COPY --from=builder /app/node_modules/ws ./node_modules/ws
+
+# Custom server + runtime adapter
+COPY --from=builder /app/server.mjs ./server.mjs
+COPY --from=builder /app/lib ./lib
+COPY --from=builder /app/docs ./docs
+
 # Create data directory
 RUN mkdir -p data
 
 EXPOSE 4501
 
-CMD ["node", "server.js"]
+CMD ["node", "server.mjs"]
