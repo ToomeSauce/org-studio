@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useSyncExternalStore } from 'react';
 
-type MessageType = 'sessions' | 'cron' | 'store' | 'activity-status' | 'gateway-status' | 'gateway-agents';
+type MessageType = 'sessions' | 'cron' | 'store' | 'activity-status' | 'gateway-status' | 'gateway-agents' | 'activity-feed';
 
 interface WSMessage {
   type: MessageType;
@@ -22,6 +22,8 @@ function getHttpEndpoint(type: MessageType): string | null {
       return '/api/store';
     case 'activity-status':
       return '/api/activity-status';
+    case 'activity-feed':
+      return '/api/activity-feed';
     default:
       // Gateway-only types have no HTTP fallback
       return null;

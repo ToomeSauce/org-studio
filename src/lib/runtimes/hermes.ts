@@ -282,6 +282,15 @@ export class HermesRuntime implements AgentRuntime {
                   }
                   if (event.event === 'tool.started') {
                     console.log(`[Hermes] Agent ${agentId} tool: ${event.tool}`);
+                    const feedApi = (globalThis as any).__orgStudioActivityFeed;
+                    if (feedApi?.add) {
+                      feedApi.add({
+                        type: 'agent-tool',
+                        emoji: '🔧',
+                        agent: agentId,
+                        message: `${event.tool}${event.preview ? ': ' + String(event.preview).slice(0, 60) : ''}`,
+                      });
+                    }
                   }
                 } catch { /* skip unparseable lines */ }
               }

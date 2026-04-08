@@ -23,12 +23,42 @@ function sendTelegramNotification(message) {
   }).catch(err => console.error('[Telegram] Send failed:', err.message));
 }
 
+// --- Activity Feed (in-memory ring buffer) ---
+const ACTIVITY_FEED_MAX = 200;
+const activityFeed = [];
+function addActivityEvent(event) {
+  const entry = {
+    id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    timestamp: Date.now(),
+    ...event,
+  };
+  activityFeed.unshift(entry);
+  if (activityFeed.length > ACTIVITY_FEED_MAX) activityFeed.length = ACTIVITY_FEED_MAX;
+  broadcast('activity-feed', activityFeed.slice(0, 50)); // send latest 50 to clients
+  return entry;
+}
+
+// Export for use by API routes
+globalThis.__orgStudioActivityFeed = {
+  add: addActivityEvent,
+  get: () => activityFeed.slice(0, 50),
+};
+
 // --- Next.js ---
 const app = next({ dev, dir: __dirname, port });
 const handle = app.getRequestHandler();
 await app.prepare();
 
-const server = createServer((req, res) => handle(req, res));
+const server = createServer((req, res) => {
+  // Activity feed REST endpoint
+  if (req.url === '/api/activity-feed' && req.method === 'GET') {
+    const feed = globalThis.__orgStudioActivityFeed?.get() || [];
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ events: feed }));
+    return;
+  }
+  handle(req, res);
+});
 
 // --- WebSocket server on /ws ---
 const wss = new WebSocketServer({ server, path: '/ws' });
@@ -997,6 +1027,15 @@ async function sprintCompletionCheck() {
 
         // Notify Basil
         sendTelegramNotification(`✅ *${project.name} — all versions shipped!* Roadmap complete.`);
+        
+        // Emit to activity feed
+        addActivityEvent({
+          type: 'version-complete',
+          emoji: '✅',
+          agent: project.devOwner || 'Unknown',
+          project: project.name,
+          message: `${project.name} — all versions shipped! Roadmap complete.`,
+        });
         continue;
       }
 
@@ -1095,6 +1134,22 @@ async function sprintCompletionCheck() {
 
       // Notify Basil about version completion + auto-advance
       sendTelegramNotification(`🏁 *${project.name} v${currentVersion} complete!*\n→ Auto-launched *v${nextVersion.version}* (${nextVersion.title}) with ${tasksCreated} task(s)`);
+      addActivityEvent({
+        type: 'version-complete',
+        emoji: '🏁',
+        agent: project.devOwner || 'Unknown',
+        project: project.name,
+        message: `${project.name} v${currentVersion} complete → v${nextVersion.version} started (${tasksCreated} tasks)`,
+      });
+      
+      // Emit to activity feed
+      addActivityEvent({
+        type: 'version-complete',
+        emoji: '🏁',
+        agent: project.devOwner || 'Unknown',
+        project: project.name,
+        message: `${project.name} v${currentVersion} complete → v${nextVersion.version} started (${tasksCreated} tasks)`,
+      });
     } catch (e) {
       console.error(`[Auto-Advance] Failed for ${project.name}:`, e.message);
     }

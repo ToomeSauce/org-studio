@@ -220,8 +220,10 @@ function notifyTaskStatusChange(task: any, newStatus: string, store: StoreData) 
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
   
   // Notify on all significant status transitions (user needs to see these)
-  const NOTIFY_STATUSES = ['in-progress', 'review', 'done', 'blocked', 'qa'];
-  if (!NOTIFY_STATUSES.includes(newStatus)) return;
+  // All statuses go to the activity feed, but only high-signal ones go to Telegram
+  const FEED_STATUSES = ['in-progress', 'review', 'done', 'blocked', 'qa'];
+  const TELEGRAM_STATUSES = ['blocked']; // Only blocked tasks are urgent enough for Telegram
+  if (!FEED_STATUSES.includes(newStatus)) return;
 
   const project = store.projects.find((p: any) => p.id === task.projectId);
   const projectName = project?.name || 'Unknown';
@@ -243,6 +245,24 @@ function notifyTaskStatusChange(task: any, newStatus: string, store: StoreData) 
   if (reviewNotes) message += `\n\n💬 ${reviewNotes}`;
 
   // Send directly via Telegram Bot API
+
+  // Always emit to activity feed
+  const feedApi = (globalThis as any).__orgStudioActivityFeed;
+  if (feedApi?.add) {
+    feedApi.add({
+      type: 'task-status',
+      emoji: statusEmoji[newStatus] || '📋',
+      agent: assignee,
+      project: projectName,
+      taskId: task.id,
+      message: `${assignee} moved "${task.title}" to ${newStatus}`,
+      detail: reviewNotes || undefined,
+    });
+  }
+
+  // Telegram only for high-signal events
+  if (!TELEGRAM_STATUSES.includes(newStatus)) return;
+
   fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

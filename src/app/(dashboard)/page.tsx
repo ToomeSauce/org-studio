@@ -38,7 +38,7 @@ function MissionSection({ missionStatement }: { missionStatement?: string }) {
 
 // ─── SECTION 2: Team Activity ─────────────────────────────────────────────
 
-function TeamActivitySection({ teammates, activityStatuses, tasks, projects }: { teammates: Teammate[]; activityStatuses: Record<string, any>; tasks: any[]; projects: any[] }) {
+function TeamActivitySection({ teammates, activityStatuses, tasks, projects, selectedAgent, onAgentClick }: { teammates: Teammate[]; activityStatuses: Record<string, any>; tasks: any[]; projects: any[]; selectedAgent?: string | null; onAgentClick?: (name: string | null) => void; }) {
   const now = Date.now();
 
   // Build project lookup
@@ -127,7 +127,7 @@ function TeamActivitySection({ teammates, activityStatuses, tasks, projects }: {
       <h2 className="text-[var(--text-md)] font-semibold text-[var(--text-primary)] mb-3">Team Activity</h2>
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
         {agents.map((agent) => (
-          <div key={agent.name} className="bg-[var(--card)] border border-[var(--border-default)] rounded-[var(--radius-md)] p-4 text-center hover:border-[var(--border-strong)] transition-all">
+          <div key={agent.name} onClick={() => onAgentClick?.(agent.name === selectedAgent ? null : agent.name)} className={clsx("bg-[var(--card)] border rounded-[var(--radius-md)] p-4 text-center hover:border-[var(--border-strong)] transition-all cursor-pointer", agent.name === selectedAgent ? "border-[var(--accent-primary)] ring-1 ring-[var(--accent-primary)]" : "border-[var(--border-default)]")}>
             <div className="text-2xl mb-2">{agent.emoji}</div>
             <p className="text-[var(--text-sm)] font-semibold text-[var(--text-primary)] truncate mb-1">{agent.name}</p>
             <div className="flex items-center justify-center gap-1.5">
@@ -168,6 +168,91 @@ function formatLastActive(timestamp: number, projectName: string): string {
 
   return projectName ? `${timeStr} · ${projectName}` : timeStr;
 }
+
+
+// ─── SECTION: Activity Feed ───────────────────────────────────────────────────
+function ActivityFeedSection({ selectedAgent }: { selectedAgent?: string }) {
+  const feed = useWSData<any>('activity-feed');
+  const events: any[] = feed || [];
+
+  // Filter by agent if selected
+  const filtered = selectedAgent ? events.filter(e => e.agent?.toLowerCase() === selectedAgent.toLowerCase()) : events;
+
+  // Group tool events to reduce noise (collapse consecutive tools from same agent)
+  const collapsed = useMemo(() => {
+    const result: any[] = [];
+    for (const evt of filtered) {
+      if (evt.type === 'agent-tool') {
+        const last = result[result.length - 1];
+        if (last?.type === 'agent-tool-group' && last.agent === evt.agent && Date.now() - last.timestamp < 120000) {
+          last.tools.push(evt.message);
+          last.count++;
+          last.timestamp = evt.timestamp;
+          continue;
+        }
+        result.push({
+          ...evt,
+          type: 'agent-tool-group',
+          tools: [evt.message],
+          count: 1,
+        });
+      } else {
+        result.push(evt);
+      }
+    }
+    return result.slice(0, 20);
+  }, [filtered]);
+
+  if (collapsed.length === 0) {
+    return (
+      <div className="p-4 border border-[var(--border-default)] rounded-[var(--radius-md)] text-center">
+        <p className="text-[var(--text-xs)] text-[var(--text-muted)]">No recent activity</p>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-[var(--text-md)] font-semibold text-[var(--text-primary)]">
+          {selectedAgent ? `Activity — ${selectedAgent}` : 'Activity Feed'}
+        </h2>
+      </div>
+      <div className="space-y-1 max-h-[400px] overflow-y-auto border border-[var(--border-default)] rounded-[var(--radius-md)] p-3 bg-[var(--bg-secondary)]">
+        {collapsed.map((evt: any) => (
+          <div key={evt.id} className="flex items-start gap-2 py-1.5 text-[var(--text-xs)] border-b border-[var(--border-subtle)] last:border-0">
+            <span className="shrink-0 w-5 text-center">{evt.emoji || '📋'}</span>
+            <div className="flex-1 min-w-0">
+              {evt.type === 'agent-tool-group' ? (
+                <span className="text-[var(--text-muted)]">
+                  <span className="font-medium text-[var(--text-secondary)]">{evt.agent}</span>
+                  {' '}{evt.count > 1 ? `${evt.count} tool calls` : evt.tools[0]}
+                </span>
+              ) : (
+                <span className="text-[var(--text-secondary)]">{evt.message}</span>
+              )}
+              {evt.detail && (
+                <p className="text-[var(--text-muted)] mt-0.5 truncate">{evt.detail}</p>
+              )}
+            </div>
+            <span className="text-[var(--text-muted)] shrink-0 tabular-nums">
+              {formatFeedTime(evt.timestamp)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function formatFeedTime(ts: number): string {
+  const diff = Date.now() - ts;
+  if (diff < 60000) return 'now';
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h`;
+  return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
 
 // ─── SECTION 3: Sprints ────────────────────────────────────────────────────
 
@@ -456,6 +541,7 @@ export default function HomePage() {
     (!missionStatement || missionStatement === DEFAULT_MISSION);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [storeLoaded, setStoreLoaded] = useState(false);
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
 
   useEffect(() => {
     if (storeData && !storeLoaded) setStoreLoaded(true);
@@ -489,18 +575,21 @@ export default function HomePage() {
 
       {/* Section 3: Team Activity */}
       {teammates.length > 0 && (
-        <TeamActivitySection teammates={teammates} activityStatuses={activityStatuses} tasks={tasks} projects={projects} />
+        <TeamActivitySection teammates={teammates} activityStatuses={activityStatuses} tasks={tasks} projects={projects} selectedAgent={selectedAgent} onAgentClick={setSelectedAgent} />
       )}
 
-      {/* Section 4: Project Sprints */}
+      {/* Section 4: Activity Feed */}
+      <ActivityFeedSection selectedAgent={selectedAgent || undefined} />
+
+      {/* Section 5: Project Sprints */}
       {projects.length > 0 && (
         <SprintsSection projects={projects} tasks={tasks} agentMap={agentMap} />
       )}
 
-      {/* Section 5: Suggested Feedback */}
+      {/* Section 6: Suggested Feedback */}
       <SuggestedFeedbackSection />
 
-      {/* Section 6: Recent Decisions */}
+      {/* Section 7: Recent Decisions */}
       {projects.length > 0 && (
         <RecentDecisionsSection projects={projects} />
       )}
