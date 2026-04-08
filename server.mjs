@@ -815,20 +815,31 @@ if (WORKSPACE_BASE && existsSync(STORE_PATH)) {
 
   // Seed activity feed from recent task history
   // Always fetch from API (Postgres) to get current data — local store.json may be stale
-  setTimeout(async () => {
+  const seedFromApi = async (attempt = 1) => {
     try {
+      console.log(`[Activity Feed] Seeding from API (attempt ${attempt})...`);
       const res = await fetch(`http://127.0.0.1:${port}/api/store`);
       if (res.ok) {
         const data = await res.json();
         seedActivityFeedFromStore(data);
-        broadcast('activity-feed', activityFeed.slice(0, 50));
+        if (activityFeed.length > 0) {
+          broadcast('activity-feed', activityFeed.slice(0, 50));
+        }
+      } else {
+        console.warn(`[Activity Feed] API returned ${res.status}`);
+        if (attempt < 3) setTimeout(() => seedFromApi(attempt + 1), 5000);
       }
     } catch (e) {
-      console.warn('[Activity Feed] Failed to seed from API:', e.message);
-      // Fallback to local file
-      if (initialStore) seedActivityFeedFromStore(initialStore);
+      console.warn(`[Activity Feed] Seed attempt ${attempt} failed:`, e.message);
+      if (attempt < 3) {
+        setTimeout(() => seedFromApi(attempt + 1), 5000);
+      } else if (initialStore) {
+        console.log('[Activity Feed] Falling back to local store');
+        seedActivityFeedFromStore(initialStore);
+      }
     }
-  }, 5000);
+  };
+  setTimeout(() => seedFromApi(), 8000); // wait for server to be fully ready
 }
 
 // --- Gateway polling (server-side, pushes to WS clients) with exponential backoff ---
