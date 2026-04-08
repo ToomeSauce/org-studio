@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import { clsx } from 'clsx';
@@ -217,9 +217,11 @@ export default function ProjectDetailPage() {
     fetchRoadmap();
   }, [projectId]);
 
-  // Initialize edit form when modal opens - MUST be before early returns
+  // Initialize edit form ONLY when modal first opens (not on store updates while editing)
+  const editModalOpenRef = useRef(false);
   useEffect(() => {
-    if (showEditModal && storeData?.projects) {
+    if (showEditModal && !editModalOpenRef.current && storeData?.projects) {
+      editModalOpenRef.current = true;
       const proj = storeData.projects.find((p: Project) => p.id === projectId);
       if (proj) {
         setEditProject({
@@ -230,6 +232,9 @@ export default function ProjectDetailPage() {
           qaOwner: proj.qaOwner || '',
         });
       }
+    }
+    if (!showEditModal) {
+      editModalOpenRef.current = false;
     }
   }, [showEditModal, projectId, storeData?.projects]);
 
