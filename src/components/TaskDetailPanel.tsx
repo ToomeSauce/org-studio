@@ -198,20 +198,27 @@ export function TaskDetailPanel({
     await onUpdate(task.id, { status: newStatus });
   }, [status, task.id, onUpdate, onAddComment]);
 
+  const [commentSending, setCommentSending] = useState(false);
+
   const handleAddComment = useCallback(async () => {
-    if (!commentText.trim()) return;
-    const mentions = extractMentions(commentText);
-    await onAddComment(task.id, {
-      author: 'You',
-      content: commentText.trim(),
-      type: 'comment',
-      mentions: mentions.length > 0 ? mentions : undefined,
-    });
-    setCommentText('');
-    if (mentions.length > 0) {
-      toast.info(`Mentioned ${mentions.length} agent${mentions.length > 1 ? 's' : ''}: ${mentions.join(', ')}`);
+    if (!commentText.trim() || commentSending) return;
+    setCommentSending(true);
+    try {
+      const mentions = extractMentions(commentText);
+      await onAddComment(task.id, {
+        author: 'You',
+        content: commentText.trim(),
+        type: 'comment',
+        mentions: mentions.length > 0 ? mentions : undefined,
+      });
+      setCommentText('');
+      if (mentions.length > 0) {
+        toast.info(`Mentioned ${mentions.length} agent${mentions.length > 1 ? 's' : ''}: ${mentions.join(', ')}`);
+      }
+    } finally {
+      setCommentSending(false);
     }
-  }, [commentText, task.id, onAddComment]);
+  }, [commentText, commentSending, task.id, onAddComment]);
 
   const handleDeleteConfirm = useCallback(async () => {
     handleClose();
@@ -558,7 +565,7 @@ export function TaskDetailPanel({
               />
               <button
                 onClick={handleAddComment}
-                disabled={!commentText.trim()}
+                disabled={!commentText.trim() || commentSending}
                 className="self-end px-3 py-2 bg-[var(--accent-primary)] text-white rounded-[var(--radius-md)] hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
                 title="Add comment (Cmd+Enter)"
               >

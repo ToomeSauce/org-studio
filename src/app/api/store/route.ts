@@ -670,6 +670,36 @@ export async function POST(req: NextRequest) {
           mentionResult = { detected: mentions.map(m => m.teammate.name || m.teammate.agentId) };
         }
 
+        // Telegram notification when an agent posts a comment (so humans see replies)
+        const commentAuthor = (comment.author || '').toLowerCase();
+        const isAgentComment = teammates.some((t: any) => 
+          !t.isHuman && (t.name?.toLowerCase() === commentAuthor || t.agentId?.toLowerCase() === commentAuthor)
+        );
+        if (isAgentComment && TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID) {
+          const projectName = store.projects?.find((p: any) => p.id === task.projectId)?.name || '';
+          const truncContent = comment.content?.length > 200 ? comment.content.slice(0, 200) + '…' : comment.content;
+          const tgMsg = `💬 *${comment.author}* commented on "${task.title}"${projectName ? ` · ${projectName}` : ''}\n\n${truncContent}`;
+          fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: tgMsg, parse_mode: 'Markdown' }),
+          }).catch(() => {}); // best-effort
+        }
+
+        // Emit to activity feed
+        const feedApi2 = (globalThis as any).__orgStudioActivityFeed;
+        if (feedApi2?.add) {
+          feedApi2.add({
+            type: 'comment',
+            emoji: '💬',
+            agent: comment.author,
+            project: store.projects?.find((p: any) => p.id === task.projectId)?.name || '',
+            taskId: task.id,
+            message: `${comment.author} commented on "${task.title}"`,
+            detail: comment.content?.slice(0, 100),
+          });
+        }
+
         return NextResponse.json({ ok: true, comment, mentions: mentionResult });
       }
 
