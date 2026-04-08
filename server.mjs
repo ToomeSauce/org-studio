@@ -818,15 +818,14 @@ if (WORKSPACE_BASE && existsSync(STORE_PATH)) {
   const seedFromApi = async (attempt = 1) => {
     try {
       console.log(`[Activity Feed] Seeding from API (attempt ${attempt})...`);
-      const res = await fetch(`http://127.0.0.1:${port}/api/store`);
-      if (res.ok) {
-        const data = await res.json();
-        seedActivityFeedFromStore(data);
+      const store = await refreshCachedStore();
+      if (store?.tasks?.length) {
+        seedActivityFeedFromStore(store);
         if (activityFeed.length > 0) {
           broadcast('activity-feed', activityFeed.slice(0, 50));
         }
       } else {
-        console.warn(`[Activity Feed] API returned ${res.status}`);
+        console.warn(`[Activity Feed] No tasks in store`);
         if (attempt < 3) setTimeout(() => seedFromApi(attempt + 1), 5000);
       }
     } catch (e) {
@@ -839,7 +838,7 @@ if (WORKSPACE_BASE && existsSync(STORE_PATH)) {
       }
     }
   };
-  setTimeout(() => seedFromApi(), 8000); // wait for server to be fully ready
+  setTimeout(() => seedFromApi(), 10000); // wait for server + Postgres to be fully ready
 }
 
 // --- Gateway polling (server-side, pushes to WS clients) with exponential backoff ---

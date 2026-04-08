@@ -60,6 +60,6 @@ export const config = {
      * 
      * We still need to protect API routes, so we handle those in the route handlers themselves.
      */
-    '/((?!api|_next/static|_next/image|favicon.ico|login).*)',
+    '/((?!api|ws|_next/static|_next/image|favicon.ico|login).*)',
   ],
 };
