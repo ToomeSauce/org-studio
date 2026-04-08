@@ -171,9 +171,37 @@ function formatLastActive(timestamp: number, projectName: string): string {
 
 
 // ─── SECTION: Activity Feed ───────────────────────────────────────────────────
-function ActivityFeedSection({ selectedAgent }: { selectedAgent?: string }) {
+function ActivityFeedSection({ selectedAgent, tasks, projects }: { selectedAgent?: string; tasks?: any[]; projects?: any[] }) {
   const feed = useWSData<any>('activity-feed');
-  const events: any[] = Array.isArray(feed) ? feed : (feed?.events || []);
+  const wsEvents: any[] = Array.isArray(feed) ? feed : (feed?.events || []);
+
+  // Build fallback from task statusHistory when WS feed is empty
+  const fallbackEvents = useMemo(() => {
+    if (wsEvents.length > 0 || !tasks?.length) return [];
+    const statusEmoji: Record<string, string> = { 'in-progress': '⚙️', 'review': '👀', 'done': '✅', 'blocked': '🚫', 'qa': '🧪', 'backlog': '📋' };
+    const projectMap: Record<string, string> = {};
+    for (const p of (projects || [])) projectMap[p.id] = p.name;
+    const entries: any[] = [];
+    const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+    for (const task of tasks) {
+      if (!task.statusHistory?.length) continue;
+      for (const h of task.statusHistory) {
+        if (!h.timestamp || h.timestamp < oneDayAgo) continue;
+        entries.push({
+          id: `hist-${task.id}-${h.status}-${h.timestamp}`,
+          timestamp: h.timestamp,
+          type: 'task-status',
+          emoji: statusEmoji[h.status] || '📋',
+          agent: h.by || task.assignee || 'Unknown',
+          project: projectMap[task.projectId] || '',
+          message: `${h.by || task.assignee || 'Unknown'} moved "${task.title}" to ${h.status}`,
+        });
+      }
+    }
+    return entries.sort((a, b) => b.timestamp - a.timestamp).slice(0, 50);
+  }, [wsEvents.length, tasks, projects]);
+
+  const events = wsEvents.length > 0 ? wsEvents : fallbackEvents;
 
   // Filter by agent if selected
   const filtered = selectedAgent ? events.filter(e => e.agent?.toLowerCase() === selectedAgent.toLowerCase()) : events;
@@ -579,7 +607,7 @@ export default function HomePage() {
       )}
 
       {/* Section 4: Activity Feed */}
-      <ActivityFeedSection selectedAgent={selectedAgent || undefined} />
+      <ActivityFeedSection selectedAgent={selectedAgent || undefined} tasks={tasks} projects={projects} />
 
       {/* Section 5: Project Sprints */}
       {projects.length > 0 && (
