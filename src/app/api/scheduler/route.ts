@@ -261,11 +261,21 @@ async function fireOneShot(store: StoreData, loop: AgentLoop): Promise<string | 
     const result = await sendToAgent(loop.agentId, message, {
       sessionKey,
       idempotencyKey: `dispatch-${loop.agentId}-${Date.now()}`,
-      onComplete: (completedAgentId: string) => {
+      onComplete: async (completedAgentId: string) => {
         inFlightAgents.delete(completedAgentId);
         const t = inFlightTimers.get(completedAgentId);
         if (t) { clearTimeout(t); inFlightTimers.delete(completedAgentId); }
         console.log(`fireOneShot: ${agentName} task completed, cleared in-flight`);
+        // Auto-dispatch next task if there's more backlog work
+        try {
+          const freshStore = await readStore();
+          if (hasActionableWork(freshStore, loop.agentId)) {
+            console.log(`fireOneShot: ${agentName} has more work, re-dispatching`);
+            await fireOneShot(freshStore, loop);
+          }
+        } catch (e: any) {
+          console.warn(`fireOneShot: auto-redispatch failed for ${agentName}:`, e.message);
+        }
       },
     });
     return sessionKey;

@@ -86,7 +86,7 @@ function TeamActivitySection({ teammates, activityStatuses, tasks, projects }: {
       const hasInProgressTask = (tasks || []).some((t: any) => (
         (t.assignee?.toLowerCase() === tm.name.toLowerCase() || 
          t.assignee?.toLowerCase() === tm.agentId.toLowerCase()) && 
-        t.status === 'in-progress'
+        t.status === 'in-progress' && !t.isArchived
       ));
       
       const isActiveWithTasks = isActive || hasInProgressTask;

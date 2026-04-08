@@ -373,7 +373,7 @@ export default function TeamPage() {
     const hasIP = allTasks.some((t: any) => (
       (t.assignee?.toLowerCase() === tm.name.toLowerCase() || 
        t.assignee?.toLowerCase() === tm.agentId.toLowerCase()) && 
-      t.status === 'in-progress'
+      t.status === 'in-progress' && !t.isArchived
     ));
     if (hasIP) activeAgentIds.add(tm.agentId);
   }
