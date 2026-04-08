@@ -805,7 +805,7 @@ async function initializePostgresListener() {
                             }
                           } catch {}
                           if (hermesUrl) {
-                            const runRes = await fetch(`${profile.url}/v1/runs`, {
+                            const runRes = await fetch(`${hermesUrl}/v1/runs`, {
                               method: 'POST',
                               headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({ input: msg, session_id: `mention-${task.id}` }),
