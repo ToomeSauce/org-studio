@@ -317,7 +317,7 @@ export default function ProjectDetailPage() {
             devOwner: editProject.devOwner || undefined,
             owner: editProject.visionOwner || undefined,
             visionOwner: editProject.visionOwner || undefined,
-            qaOwner: editProject.qaOwner || undefined,
+            ...(editProject.qaOwner !== undefined && { qaOwner: editProject.qaOwner || '' }),
           },
         }),
       });

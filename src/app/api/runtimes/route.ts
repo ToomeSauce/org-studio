@@ -35,6 +35,9 @@ export async function GET(request: NextRequest) {
       if (newAgents.length > 0) {
         let colorIdx = teammates.filter((t: any) => !t.isHuman).length;
         const updatedTeammates = [...teammates];
+        const loops = store?.settings?.loops || [];
+        const updatedLoops = [...loops];
+        let loopsCreated = 0;
 
         for (const agent of newAgents) {
           const color = DEFAULT_AGENT_COLORS[colorIdx % DEFAULT_AGENT_COLORS.length];
@@ -50,10 +53,30 @@ export async function GET(request: NextRequest) {
             color,
             isHuman: false,
           });
+
+          // Auto-create scheduler loop (mirrors addTeammate logic)
+          if (!updatedLoops.some((l: any) => l.agentId === agent.id)) {
+            const maxOffset = updatedLoops.reduce((max: number, l: any) => Math.max(max, l.startOffsetMinutes || 0), 0);
+            updatedLoops.push({
+              id: 'loop-' + Math.random().toString(36).slice(2, 10),
+              steps: [
+                { id: 'step-org', type: 'read-org', enabled: true, description: 'Read ORG.md — refresh mission, values, domain boundaries' },
+                { id: 'step-sync', type: 'sync-tasks', enabled: true, description: 'Sync tasks — check Context Board for assigned work' },
+                { id: 'step-work', type: 'work-next', enabled: true, description: 'Work next — progress highest priority in-progress task, or pull from backlog' },
+                { id: 'step-report', type: 'report', enabled: true, description: 'Report — update task status, move completed to Done, set activity status' },
+              ],
+              agentId: agent.id,
+              enabled: true,
+              cronJobId: null,
+              intervalMinutes: 30,
+              startOffsetMinutes: maxOffset + 5,
+            });
+            loopsCreated++;
+          }
         }
 
-        await getStoreProvider().updateSettings({ teammates: updatedTeammates });
-        console.log(`[Runtimes] Auto-scaffolded ${newAgents.length} new agent(s): ${newAgents.map(a => a.id).join(', ')}`);
+        await getStoreProvider().updateSettings({ teammates: updatedTeammates, loops: updatedLoops });
+        console.log(`[Runtimes] Auto-scaffolded ${newAgents.length} new agent(s): ${newAgents.map(a => a.id).join(', ')}${loopsCreated ? ` (${loopsCreated} loop(s) created)` : ''}`);
       }
     } catch (scaffoldErr) {
       // Best-effort — don't fail the response if scaffolding fails
