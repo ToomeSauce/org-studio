@@ -88,8 +88,19 @@ function TeamActivitySection({ teammates, activityStatuses, tasks, projects, sel
          t.assignee?.toLowerCase() === tm.agentId.toLowerCase()) && 
         t.status === 'in-progress' && !t.isArchived
       ));
+
+      // Also check task statusHistory for recent activity (works without activity-status API)
+      const nameKey = tm.name.toLowerCase();
+      const agentKey = tm.agentId.toLowerCase();
+      const recentTaskActivity = (tasks || []).some((t: any) => {
+        if (!t.statusHistory?.length) return false;
+        const assignee = (t.assignee || '').toLowerCase();
+        if (assignee !== nameKey && assignee !== agentKey) return false;
+        const lastEntry = t.statusHistory[t.statusHistory.length - 1];
+        return lastEntry?.timestamp && (now - lastEntry.timestamp < 60 * 60 * 1000);
+      });
       
-      const isActiveWithTasks = isActive || hasInProgressTask;
+      const isActiveWithTasks = isActive || hasInProgressTask || recentTaskActivity;
       let statusDetail = status?.status || status?.detail || '';
 
       // Generate status from in-progress task if no self-reported status
@@ -108,8 +119,6 @@ function TeamActivitySection({ teammates, activityStatuses, tasks, projects, sel
       }
 
       // For idle agents, find their last task activity
-      const nameKey = tm.name.toLowerCase();
-      const agentKey = tm.agentId.toLowerCase();
       const lastTask = lastTaskActivity[nameKey] || lastTaskActivity[agentKey];
 
       return {

@@ -771,6 +771,42 @@ async function initializePostgresListener() {
           // and update state in the same cycle
           await processIntent(changeEvent);
 
+          // Process @mentions from comments added via remote (staging) UI
+          if (changeEvent.type === 'comment_added' && changeEvent.taskId) {
+            try {
+              const freshStore = await refreshCachedStore();
+              if (freshStore) {
+                const task = freshStore.tasks?.find(t => t.id === changeEvent.taskId);
+                const lastComment = task?.comments?.[task.comments.length - 1];
+                if (lastComment?.content && lastComment.mentions?.length > 0) {
+                  const { getRuntimeRegistry } = await import('./lib/runtimes.mjs');
+                  const registry = await getRuntimeRegistry();
+                  const teammates = freshStore.settings?.teammates || [];
+                  for (const mentionName of lastComment.mentions) {
+                    const tm = teammates.find(t =>
+                      t.name?.toLowerCase() === mentionName.toLowerCase() ||
+                      t.agentId?.toLowerCase() === mentionName.toLowerCase()
+                    );
+                    if (tm?.agentId && !tm.isHuman) {
+                      const msg = `\ud83d\udcac **${lastComment.author}** mentioned you on task: **${task.title}**\n\n> ${lastComment.content}\n\nTask ID: ${task.id}`;
+                      try {
+                        await registry.send(tm.agentId, msg, {
+                          sessionKey: `agent:${tm.agentId}:main`,
+                          idempotencyKey: `listen-mention-${task.id}-${lastComment.id}`,
+                        });
+                        console.log(`[LISTEN] Mention routed: ${mentionName} on task ${task.id}`);
+                      } catch (e) {
+                        console.warn(`[LISTEN] Mention dispatch failed for ${mentionName}:`, e.message);
+                      }
+                    }
+                  }
+                }
+              }
+            } catch (e) {
+              console.warn('[LISTEN] Mention processing error:', e.message);
+            }
+          }
+
           // Read fresh store from Postgres via internal API (not local file)
           try {
             const freshStore = await refreshCachedStore();
