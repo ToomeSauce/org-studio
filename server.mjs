@@ -10,6 +10,19 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const port = parseInt(process.env.PORT || '4501');
 const dev = false;
 
+// --- Telegram notification helper ---
+const TG_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+const TG_CHAT_ID = process.env.TELEGRAM_CHAT_ID || process.env.NOTIFY_CHAT_ID || '';
+
+function sendTelegramNotification(message) {
+  if (!TG_BOT_TOKEN || !TG_CHAT_ID) return;
+  fetch(`https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: TG_CHAT_ID, text: message, parse_mode: 'Markdown' }),
+  }).catch(err => console.error('[Telegram] Send failed:', err.message));
+}
+
 // --- Next.js ---
 const app = next({ dev, dir: __dirname, port });
 const handle = app.getRequestHandler();
@@ -983,20 +996,7 @@ async function sprintCompletionCheck() {
         console.log(`[Auto-Advance] Roadmap exhausted for ${project.name} — all versions shipped`);
 
         // Notify Basil
-        try {
-          await fetch(`http://127.0.0.1:${port}/api/gateway`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              method: 'chat.send',
-              params: {
-                sessionKey: 'agent:main:main',
-                message: `✅ **${project.name} — all versions shipped!** Roadmap complete.`,
-                idempotencyKey: `roadmap-complete-${project.id}-${Date.now()}`,
-              },
-            }),
-          });
-        } catch { /* best-effort */ }
+        sendTelegramNotification(`✅ *${project.name} — all versions shipped!* Roadmap complete.`);
         continue;
       }
 
@@ -1094,20 +1094,7 @@ async function sprintCompletionCheck() {
       console.log(`[Auto-Advance] ${project.name} v${currentVersion} complete → v${nextVersion.version} started (${tasksCreated} tasks created)`);
 
       // Notify Basil about version completion + auto-advance
-      try {
-        await fetch(`http://127.0.0.1:${port}/api/gateway`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            method: 'chat.send',
-            params: {
-              sessionKey: 'agent:main:main',
-              message: `🏁 **${project.name} v${currentVersion} complete!**\n→ Auto-launched **v${nextVersion.version}** (${nextVersion.title}) with ${tasksCreated} task(s)`,
-              idempotencyKey: `version-complete-${project.id}-${currentVersion}-${Date.now()}`,
-            },
-          }),
-        });
-      } catch { /* best-effort */ }
+      sendTelegramNotification(`🏁 *${project.name} v${currentVersion} complete!*\n→ Auto-launched *v${nextVersion.version}* (${nextVersion.title}) with ${tasksCreated} task(s)`);
     } catch (e) {
       console.error(`[Auto-Advance] Failed for ${project.name}:`, e.message);
     }

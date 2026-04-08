@@ -76,7 +76,8 @@ function getNextTicketNumber(store: StoreData): number {
 // Gateway RPC for notifications
 const GATEWAY_WS_URL = process.env.GATEWAY_URL || 'ws://127.0.0.1:18789';
 const GATEWAY_TOKEN = process.env.GATEWAY_TOKEN || '';
-const NOTIFY_CHAT_ID = process.env.NOTIFY_CHAT_ID || ''; // Telegram chat ID for task notifications
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || process.env.NOTIFY_CHAT_ID || '';
 
 // Async wrappers for StoreProvider
 async function readStore() {
@@ -214,9 +215,9 @@ function triggerAgentLoop(assignee: string, store: StoreData) {
 }
 
 
-/** Send task status notification via Gateway chat.send RPC. Best-effort, non-blocking. */
+/** Send task status notification via Telegram. Best-effort, non-blocking. */
 function notifyTaskStatusChange(task: any, newStatus: string, store: StoreData) {
-  if (!NOTIFY_CHAT_ID) return;
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
   
   // Notify on all significant status transitions (user needs to see these)
   const NOTIFY_STATUSES = ['in-progress', 'review', 'done', 'blocked', 'qa'];
@@ -241,13 +242,15 @@ function notifyTaskStatusChange(task: any, newStatus: string, store: StoreData) 
   if (projectName !== 'Unknown') message += ` · ${projectName}`;
   if (reviewNotes) message += `\n\n💬 ${reviewNotes}`;
 
-  // Send to main session (routes to Telegram for Basil)
-
-  // Use Gateway RPC directly (shared WS connection)
-  rpc('chat.send', {
-    sessionKey: 'agent:main:main',
-    message,
-    idempotencyKey: `task-${task.id}-${newStatus}-${Date.now()}`,
+  // Send directly via Telegram Bot API
+  fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: TELEGRAM_CHAT_ID,
+      text: message,
+      parse_mode: 'Markdown',
+    }),
   }).catch(() => {}); // best-effort
 }
 
