@@ -981,6 +981,22 @@ async function sprintCompletionCheck() {
           }),
         });
         console.log(`[Auto-Advance] Roadmap exhausted for ${project.name} — all versions shipped`);
+
+        // Notify Basil
+        try {
+          await fetch(`http://127.0.0.1:${port}/api/gateway`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              method: 'chat.send',
+              params: {
+                sessionKey: 'agent:main:main',
+                message: `✅ **${project.name} — all versions shipped!** Roadmap complete.`,
+                idempotencyKey: `roadmap-complete-${project.id}-${Date.now()}`,
+              },
+            }),
+          });
+        } catch { /* best-effort */ }
         continue;
       }
 
@@ -1076,6 +1092,22 @@ async function sprintCompletionCheck() {
       });
 
       console.log(`[Auto-Advance] ${project.name} v${currentVersion} complete → v${nextVersion.version} started (${tasksCreated} tasks created)`);
+
+      // Notify Basil about version completion + auto-advance
+      try {
+        await fetch(`http://127.0.0.1:${port}/api/gateway`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            method: 'chat.send',
+            params: {
+              sessionKey: 'agent:main:main',
+              message: `🏁 **${project.name} v${currentVersion} complete!**\n→ Auto-launched **v${nextVersion.version}** (${nextVersion.title}) with ${tasksCreated} task(s)`,
+              idempotencyKey: `version-complete-${project.id}-${currentVersion}-${Date.now()}`,
+            },
+          }),
+        });
+      } catch { /* best-effort */ }
     } catch (e) {
       console.error(`[Auto-Advance] Failed for ${project.name}:`, e.message);
     }

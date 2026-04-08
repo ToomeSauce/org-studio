@@ -241,17 +241,11 @@ function notifyTaskStatusChange(task: any, newStatus: string, store: StoreData) 
   if (projectName !== 'Unknown') message += ` · ${projectName}`;
   if (reviewNotes) message += `\n\n💬 ${reviewNotes}`;
 
-  // Resolve assignee → agentId for session routing
-  const teammates = store.settings?.teammates || [];
-  const match = teammates.find((t: any) =>
-    t.name?.toLowerCase() === assignee.toLowerCase() ||
-    t.agentId === assignee.toLowerCase()
-  );
-  const agentId = match?.agentId || 'main'; // fallback to main
+  // Send to main session (routes to Telegram for Basil)
 
   // Use Gateway RPC directly (shared WS connection)
   rpc('chat.send', {
-    sessionKey: `agent:${agentId}:main`,
+    sessionKey: 'agent:main:main',
     message,
     idempotencyKey: `task-${task.id}-${newStatus}-${Date.now()}`,
   }).catch(() => {}); // best-effort
