@@ -208,21 +208,42 @@ export class HermesRuntime implements AgentRuntime {
     const url = profile?.url || this.explicitUrls[0];
     if (!url) throw new Error('Hermes runtime not configured');
 
-    const response = await fetch(`${url}/v1/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'hermes',
-        messages: [{ role: 'user', content: message }],
-        stream: false,
-      }),
+    // Fire-and-forget: send the message but don't block on agent completion.
+    // Hermes processes the full agent turn synchronously on /v1/chat/completions,
+    // which can take minutes. We dispatch and return immediately.
+    const fetchUrl = `${url}/v1/chat/completions`;
+    const body = JSON.stringify({
+      model: 'hermes',
+      messages: [{ role: 'user', content: message }],
+      stream: false,
     });
 
-    if (!response.ok) {
-      throw new Error(`Hermes API error: ${response.status}`);
+    // Quick pre-flight: verify the agent is reachable before dispatching
+    try {
+      const healthRes = await fetch(`${url}/health`, { signal: AbortSignal.timeout(5000) });
+      if (!healthRes.ok) {
+        throw new Error(`Hermes agent not healthy: ${healthRes.status}`);
+      }
+    } catch (e: any) {
+      throw new Error(`Hermes agent unreachable at ${url}: ${e.message}`);
     }
 
-    return await response.json();
+    // Dispatch async — don't await the completion
+    fetch(fetchUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    }).then(response => {
+      if (!response.ok) {
+        console.error(`[Hermes] Agent ${agentId} dispatch returned ${response.status}`);
+      } else {
+        console.log(`[Hermes] Agent ${agentId} completed task dispatch`);
+      }
+    }).catch(err => {
+      console.error(`[Hermes] Agent ${agentId} dispatch failed:`, err.message);
+    });
+
+    return { dispatched: true, agentId, url: fetchUrl };
   }
 
   async health(): Promise<{ connected: boolean; detail?: string }> {

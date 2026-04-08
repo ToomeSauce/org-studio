@@ -146,12 +146,15 @@ function checkAndTriggerStuckTask(task: any, store: StoreData) {
   (async () => {
     const MAX_RETRIES = 3;
     const DELAYS = [1000, 5000, 15000];
+    const apiKey = process.env.ORG_STUDIO_API_KEY || '';
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       try {
         const res = await fetch(SCHEDULER_URL, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({ action: 'trigger', agentId }),
         });
         if (res.ok) {
@@ -186,12 +189,15 @@ function triggerAgentLoop(assignee: string, store: StoreData) {
   (async () => {
     const MAX_RETRIES = 3;
     const DELAYS = [1000, 5000, 15000]; // 1s, 5s, 15s
+    const apiKey = process.env.ORG_STUDIO_API_KEY || '';
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       try {
         const res = await fetch(SCHEDULER_URL, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({ action: 'trigger', agentId }),
         });
         if (res.ok) return; // success

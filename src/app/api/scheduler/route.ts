@@ -205,9 +205,19 @@ async function checkGateway(): Promise<boolean> {
  * Sends a focused task dispatch message via chat.send instead of spawning an isolated cron job.
  * This allows the agent to work with full tools, sub-agent spawning, and no artificial timeout.
  */
+
+// Track agents currently being dispatched to prevent duplicate sends
+const inFlightAgents = new Set<string>();
+
 async function fireOneShot(store: StoreData, loop: AgentLoop): Promise<string | undefined> {
   const agentName = getAgentName(store, loop.agentId);
   const agentRole = getAgentRole(store, loop.agentId);
+
+  // Prevent duplicate dispatch if agent is already in-flight
+  if (inFlightAgents.has(loop.agentId)) {
+    console.log(`fireOneShot: skipping ${agentName} — already in-flight`);
+    return undefined;
+  }
 
   // Build a focused dispatch message (not the full loop prompt)
   const message = await buildDispatchMessage(store, loop.agentId, agentName, agentRole);
@@ -224,6 +234,16 @@ async function fireOneShot(store: StoreData, loop: AgentLoop): Promise<string | 
 
   // Send to agent's main persistent session
   const sessionKey = `agent:${loop.agentId}:main`;
+  inFlightAgents.add(loop.agentId);
+
+  // For fire-and-forget runtimes (like Hermes), sendToAgent returns immediately.
+  // Set a timeout to clear in-flight status so re-dispatch can happen after a reasonable window.
+  const IN_FLIGHT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+  const inFlightTimer = setTimeout(() => {
+    inFlightAgents.delete(loop.agentId);
+    console.log(`fireOneShot: cleared in-flight for ${agentName} (timeout)`);
+  }, IN_FLIGHT_TIMEOUT_MS);
+
   try {
     const result = await sendToAgent(loop.agentId, message, {
       sessionKey,
@@ -232,6 +252,9 @@ async function fireOneShot(store: StoreData, loop: AgentLoop): Promise<string | 
     return sessionKey;
   } catch (e: any) {
     console.error(`fireOneShot: sendToAgent failed for ${agentName}:`, e?.message || e);
+    // Clear in-flight on failure so agent can be retried
+    inFlightAgents.delete(loop.agentId);
+    clearTimeout(inFlightTimer);
     return undefined;
   }
 }
