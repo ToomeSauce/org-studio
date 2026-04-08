@@ -227,6 +227,7 @@ function ProjectsContent() {
   };
 
   // Categorize projects by sprint status
+  const needsAttention: Project[] = [];
   const activeSprints: Project[] = [];
   const completedSprints: Project[] = [];
   const otherProjects: Project[] = [];
@@ -235,10 +236,13 @@ function ProjectsContent() {
     const cv = (p as any).currentVersion;
     const projectTasks = allTasks.filter(t => t.projectId === p.id && !t.isArchived);
     const versionTasks = cv ? projectTasks.filter(t => (t as any).version === cv) : [];
+    const reviewOrBlocked = versionTasks.filter(t => t.status === 'review' || t.status === 'blocked');
     const activeTasks = versionTasks.filter(t => ['in-progress', 'qa', 'backlog'].includes(t.status as string));
     const allDone = versionTasks.length > 0 && versionTasks.every(t => t.status === 'done');
 
-    if (cv && activeTasks.length > 0) {
+    if (cv && reviewOrBlocked.length > 0) {
+      needsAttention.push(p);
+    } else if (cv && activeTasks.length > 0) {
       activeSprints.push(p);
     } else if (cv && allDone) {
       completedSprints.push(p);
@@ -323,6 +327,24 @@ function ProjectsContent() {
             New Project
           </button>
         </div>
+
+        {/* Needs Attention */}
+        {needsAttention.length > 0 && (
+          <div className="space-y-3">
+            <h2 className="text-sm font-semibold text-amber-600 dark:text-amber-400 flex items-center gap-2">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+              </span>
+              Needs Attention
+            </h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {needsAttention.map((project) => (
+                <ProjectCard key={project.id} project={project} />
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Active Sprints */}
         {activeSprints.length > 0 && (
