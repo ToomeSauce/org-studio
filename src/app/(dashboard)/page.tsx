@@ -173,7 +173,7 @@ function formatLastActive(timestamp: number, projectName: string): string {
 // ─── SECTION: Activity Feed ───────────────────────────────────────────────────
 function ActivityFeedSection({ selectedAgent }: { selectedAgent?: string }) {
   const feed = useWSData<any>('activity-feed');
-  const events: any[] = feed || [];
+  const events: any[] = Array.isArray(feed) ? feed : (feed?.events || []);
 
   // Filter by agent if selected
   const filtered = selectedAgent ? events.filter(e => e.agent?.toLowerCase() === selectedAgent.toLowerCase()) : events;
