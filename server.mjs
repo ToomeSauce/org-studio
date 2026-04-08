@@ -44,6 +44,44 @@ globalThis.__orgStudioActivityFeed = {
   get: () => activityFeed.slice(0, 50),
 };
 
+// Seed the activity feed from recent task statusHistory (survives restarts)
+function seedActivityFeedFromStore(store) {
+  if (!store?.tasks?.length) return;
+  const projects = store.projects || [];
+  const projectMap = {};
+  for (const p of projects) projectMap[p.id] = p.name;
+
+  const statusEmoji = { 'in-progress': '⚙️', 'review': '👀', 'done': '✅', 'blocked': '🚫', 'qa': '🧪' };
+  const recentEvents = [];
+  const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+
+  for (const task of store.tasks) {
+    if (!task.statusHistory?.length) continue;
+    for (const entry of task.statusHistory) {
+      if (!entry.timestamp || entry.timestamp < oneDayAgo) continue;
+      recentEvents.push({
+        id: `seed-${task.id}-${entry.status}-${entry.timestamp}`,
+        timestamp: entry.timestamp,
+        type: 'task-status',
+        emoji: statusEmoji[entry.status] || '📋',
+        agent: entry.by || task.assignee || 'Unknown',
+        project: projectMap[task.projectId] || '',
+        taskId: task.id,
+        message: `${entry.by || task.assignee || 'Unknown'} moved "${task.title}" to ${entry.status}`,
+      });
+    }
+  }
+
+  // Sort by timestamp descending and take latest 50
+  recentEvents.sort((a, b) => b.timestamp - a.timestamp);
+  for (const evt of recentEvents.slice(0, 50)) {
+    activityFeed.push(evt);
+  }
+  if (activityFeed.length > 0) {
+    console.log(`[Activity Feed] Seeded ${activityFeed.length} events from task history`);
+  }
+}
+
 // --- Next.js ---
 const app = next({ dev, dir: __dirname, port });
 const handle = app.getRequestHandler();
@@ -774,6 +812,23 @@ if (WORKSPACE_BASE && existsSync(STORE_PATH)) {
   // Initial sync on startup
   const initialStore = safeRead(STORE_PATH);
   if (initialStore) syncOrgFiles(initialStore);
+
+  // Seed activity feed from recent task history
+  // Always fetch from API (Postgres) to get current data — local store.json may be stale
+  setTimeout(async () => {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/store`);
+      if (res.ok) {
+        const data = await res.json();
+        seedActivityFeedFromStore(data);
+        broadcast('activity-feed', activityFeed.slice(0, 50));
+      }
+    } catch (e) {
+      console.warn('[Activity Feed] Failed to seed from API:', e.message);
+      // Fallback to local file
+      if (initialStore) seedActivityFeedFromStore(initialStore);
+    }
+  }, 5000);
 }
 
 // --- Gateway polling (server-side, pushes to WS clients) with exponential backoff ---
