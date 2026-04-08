@@ -101,8 +101,9 @@ function TeamActivitySection({ teammates, activityStatuses, tasks, projects }: {
           t.status === 'in-progress'
         ));
         if (ipTask) {
+          const taskTitle = ipTask.title?.length > 40 ? ipTask.title.slice(0, 40) + '…' : ipTask.title;
           const projName = projectMap[ipTask.projectId] || '';
-          derivedStatus = projName ? `Working · ${projName}` : 'Working on task';
+          derivedStatus = projName ? `${taskTitle} · ${projName}` : taskTitle || 'Working on task';
         }
       }
 
