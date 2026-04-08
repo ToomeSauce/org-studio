@@ -226,16 +226,89 @@ function ProjectsContent() {
     }
   };
 
-  // Separate active and archived projects, sort by sortOrder then name
-  const activeProjects = projects
-    .filter(p => !p.isArchived)
-    .sort((a, b) => {
-      const aOrder = (a as any).sortOrder ?? 5000;
-      const bOrder = (b as any).sortOrder ?? 5000;
-      if (aOrder !== bOrder) return aOrder - bOrder;
-      return (a.name || '').localeCompare(b.name || '');
-    });
+  // Categorize projects by sprint status
+  const activeSprints: Project[] = [];
+  const completedSprints: Project[] = [];
+  const otherProjects: Project[] = [];
+
+  for (const p of projects.filter(p => !p.isArchived)) {
+    const cv = (p as any).currentVersion;
+    const projectTasks = allTasks.filter(t => t.projectId === p.id && !t.isArchived);
+    const versionTasks = cv ? projectTasks.filter(t => (t as any).version === cv) : [];
+    const activeTasks = versionTasks.filter(t => ['in-progress', 'qa', 'backlog'].includes(t.status as string));
+    const allDone = versionTasks.length > 0 && versionTasks.every(t => t.status === 'done');
+
+    if (cv && activeTasks.length > 0) {
+      activeSprints.push(p);
+    } else if (cv && allDone) {
+      completedSprints.push(p);
+    } else {
+      otherProjects.push(p);
+    }
+  }
+
   const archivedProjects = projects.filter(p => p.isArchived);
+
+  const ProjectCard = ({ project }: { project: Project }) => {
+    const statusLabel = getProjectStatusLabel(project, allTasks);
+    const stats = getProjectStats(project.id);
+    const progressPercent =
+      stats.total > 0 ? Math.round((stats.done / stats.total) * 100) : 0;
+
+    return (
+      <Link
+        href={`/projects/${project.id}`}
+        className="block p-4 rounded-lg border border-[var(--border-color)] hover:border-[var(--accent)] transition-all hover:shadow-lg hover:shadow-[var(--accent)]/10 cursor-pointer bg-[var(--bg-secondary)]"
+      >
+        <div className="space-y-3">
+          <div>
+            <h3 className="font-semibold text-[var(--text-primary)]">
+              {project.name}
+            </h3>
+            <div className="flex items-center gap-2 mt-2">
+              <span
+                className={clsx(
+                  'text-sm px-2 py-1 rounded-full font-medium',
+                  {
+                    'bg-blue-50 text-blue-700 dark:bg-blue-950/20 dark:text-blue-400':
+                      statusLabel.color === 'blue',
+                    'bg-amber-50 text-amber-700 dark:bg-amber-950/20 dark:text-amber-400':
+                      statusLabel.color === 'amber',
+                    'bg-green-50 text-green-700 dark:bg-green-950/20 dark:text-green-400':
+                      statusLabel.color === 'green',
+                    'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400':
+                      statusLabel.color === 'slate',
+                  }
+                )}
+              >
+                {statusLabel.emoji} {statusLabel.label}
+              </span>
+            </div>
+          </div>
+
+          {stats.total > 0 && (
+            <div className="space-y-1">
+              <div className="h-2 bg-[var(--bg-tertiary)] rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-[var(--accent)] transition-all"
+                  style={{ width: `${progressPercent}%` }}
+                />
+              </div>
+              <p className="text-xs text-[var(--text-muted)]">
+                {stats.done}/{stats.total} tasks
+              </p>
+            </div>
+          )}
+
+          {project.devOwner && (
+            <p className="text-xs text-[var(--text-muted)]">
+              Dev: <span className="font-medium">{project.devOwner}</span>
+            </p>
+          )}
+        </div>
+      </Link>
+    );
+  };
 
   return (
     <div className="flex-1 overflow-auto bg-[var(--bg-primary)]">
@@ -251,74 +324,52 @@ function ProjectsContent() {
           </button>
         </div>
 
-        {/* Active Projects */}
-        {activeProjects.length === 0 ? (
+        {/* Active Sprints */}
+        {activeSprints.length > 0 && (
+          <div className="space-y-3">
+            <h2 className="text-sm font-semibold text-[var(--text-secondary)] flex items-center gap-2">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+              </span>
+              Active Sprints
+            </h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {activeSprints.map((project) => (
+                <ProjectCard key={project.id} project={project} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Sprint Complete */}
+        {completedSprints.length > 0 && (
+          <div className="space-y-3">
+            <h2 className="text-sm font-semibold text-[var(--text-secondary)]">✅ Sprint Complete</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {completedSprints.map((project) => (
+                <ProjectCard key={project.id} project={project} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Other Projects */}
+        {otherProjects.length > 0 && (
+          <div className="space-y-3">
+            <h2 className="text-sm font-semibold text-[var(--text-muted)]">Other Projects</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {otherProjects.map((project) => (
+                <ProjectCard key={project.id} project={project} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* No Projects Message */}
+        {activeSprints.length === 0 && completedSprints.length === 0 && otherProjects.length === 0 && (
           <div className="flex flex-col items-center justify-center py-12">
             <p className="text-[var(--text-muted)] text-lg">No projects yet</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {activeProjects.map((project) => {
-              const statusLabel = getProjectStatusLabel(project, allTasks);
-              const stats = getProjectStats(project.id);
-              const progressPercent =
-                stats.total > 0 ? Math.round((stats.done / stats.total) * 100) : 0;
-
-              return (
-                <Link
-                  key={project.id}
-                  href={`/projects/${project.id}`}
-                  className="block p-4 rounded-lg border border-[var(--border-color)] hover:border-[var(--accent)] transition-all hover:shadow-lg hover:shadow-[var(--accent)]/10 cursor-pointer bg-[var(--bg-secondary)]"
-                >
-                  <div className="space-y-3">
-                    <div>
-                      <h3 className="font-semibold text-[var(--text-primary)]">
-                        {project.name}
-                      </h3>
-                      <div className="flex items-center gap-2 mt-2">
-                        <span
-                          className={clsx(
-                            'text-sm px-2 py-1 rounded-full font-medium',
-                            {
-                              'bg-blue-50 text-blue-700 dark:bg-blue-950/20 dark:text-blue-400':
-                                statusLabel.color === 'blue',
-                              'bg-amber-50 text-amber-700 dark:bg-amber-950/20 dark:text-amber-400':
-                                statusLabel.color === 'amber',
-                              'bg-green-50 text-green-700 dark:bg-green-950/20 dark:text-green-400':
-                                statusLabel.color === 'green',
-                              'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400':
-                                statusLabel.color === 'slate',
-                            }
-                          )}
-                        >
-                          {statusLabel.emoji} {statusLabel.label}
-                        </span>
-                      </div>
-                    </div>
-
-                    {stats.total > 0 && (
-                      <div className="space-y-1">
-                        <div className="h-2 bg-[var(--bg-tertiary)] rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-[var(--accent)] transition-all"
-                            style={{ width: `${progressPercent}%` }}
-                          />
-                        </div>
-                        <p className="text-xs text-[var(--text-muted)]">
-                          {stats.done}/{stats.total} tasks
-                        </p>
-                      </div>
-                    )}
-
-                    {project.devOwner && (
-                      <p className="text-xs text-[var(--text-muted)]">
-                        Dev: <span className="font-medium">{project.devOwner}</span>
-                      </p>
-                    )}
-                  </div>
-                </Link>
-              );
-            })}
           </div>
         )}
 

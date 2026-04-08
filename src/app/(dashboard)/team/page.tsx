@@ -356,7 +356,7 @@ export default function TeamPage() {
     for (const s of sessionList) {
       const key: string = s.key || '';
       const agentId = key.split(':')[1] || '';
-      if (s.updatedAt && now - s.updatedAt < 300000) {
+      if (s.updatedAt && now - s.updatedAt < 3600000) {
         activeAgentIds.add(agentId);
       }
     }
@@ -364,6 +364,18 @@ export default function TeamPage() {
   // Also mark as active if self-reported
   for (const key of Object.keys(activityStatuses)) {
     activeAgentIds.add(key);
+  }
+  // Also mark as active if agent has in-progress tasks
+  const allTasks = storeData?.tasks || [];
+  const storeTeammatesTemp: Teammate[] = storeData?.settings?.teammates || [];
+  for (const tm of storeTeammatesTemp) {
+    if (tm.isHuman || !tm.agentId) continue;
+    const hasIP = allTasks.some((t: any) => (
+      (t.assignee?.toLowerCase() === tm.name.toLowerCase() || 
+       t.assignee?.toLowerCase() === tm.agentId.toLowerCase()) && 
+      t.status === 'in-progress'
+    ));
+    if (hasIP) activeAgentIds.add(tm.agentId);
   }
 
   // Merge Gateway agents with store teammates

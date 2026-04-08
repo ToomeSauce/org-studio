@@ -16,7 +16,7 @@ import { useMobileMenu } from '@/lib/mobile-menu-context';
 // New 5-item navigation structure
 const mainNav = [
   { name: 'Home', href: '/', icon: LayoutDashboard, emoji: '🏠' },
-  { name: 'Projects', href: '/projects', icon: FolderKanban, emoji: '📋', expandable: true },
+  { name: 'Projects', href: '/projects', icon: FolderKanban, emoji: '📋' },
   { name: 'Context', href: '/context', icon: Layers, emoji: '📊' },
   { name: 'Team', href: '/team', icon: Users, emoji: '👥' },
 ];
@@ -31,7 +31,6 @@ export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
-  const [expandedProjects, setExpandedProjects] = useState(false);
   const { state } = useGateway();
   const wsConnected = useWSConnected();
   const { mobileOpen, setMobileOpen } = useMobileMenu();
@@ -101,108 +100,7 @@ export function Sidebar() {
       <nav className="flex-1 px-2.5 py-3 space-y-0.5 overflow-y-auto">
         {mainNav.map((item) => {
           const isActive = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href));
-          const isProjectsSection = item.expandable;
           
-          if (isProjectsSection) {
-            return (
-              <div key={item.name}>
-                <div className="flex items-center gap-0">
-                  <Link
-                    href={item.href}
-                    className={clsx(
-                      'flex-1 flex items-center gap-3 px-3 py-2.5 rounded-l-[var(--radius-md)] text-[var(--text-sm)] font-medium transition-all duration-100 min-h-[44px] md:min-h-auto',
-                      isActive || (pathname.startsWith('/projects') && !pathname.includes('[id]'))
-                        ? 'bg-[var(--accent-muted)] text-[var(--accent-primary)]'
-                        : 'text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]',
-                      collapsed && 'justify-center px-0'
-                    )}
-                    title={collapsed ? item.name : undefined}
-                    onClick={() => {
-                      // Auto-expand projects list when navigating to /projects
-                      if (!expandedProjects) {
-                        setExpandedProjects(true);
-                      }
-                    }}
-                  >
-                    <item.icon size={17} className="shrink-0 opacity-70" />
-                    {!collapsed && (
-                      <span className="truncate flex-1 text-left">{item.name}</span>
-                    )}
-                  </Link>
-                  {!collapsed && (
-                    <button
-                      onClick={() => setExpandedProjects(!expandedProjects)}
-                      className={clsx(
-                        'p-2.5 rounded-r-[var(--radius-md)] text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] transition-all duration-100',
-                        isActive || (pathname.startsWith('/projects') && !pathname.includes('[id]'))
-                          ? 'bg-[var(--accent-muted)] text-[var(--accent-primary)]'
-                          : ''
-                      )}
-                    >
-                      <ChevronDown
-                        size={15}
-                        className={clsx(
-                          'transition-transform duration-200 opacity-50',
-                          expandedProjects && 'rotate-180'
-                        )}
-                      />
-                    </button>
-                  )}
-                </div>
-
-                {/* Expanded Projects List */}
-                {expandedProjects && !collapsed && (
-                  <div className="mt-1 ml-4 space-y-0.5 border-l border-[var(--border-subtle)] pl-3">
-                    {projects.length === 0 ? (
-                      <p className="text-xs text-[var(--text-muted)] py-2">No projects</p>
-                    ) : (
-                      <>
-                        {(() => {
-                          // Filter out archived projects
-                          const activeProjects = projects.filter((p: any) => !p.isArchived);
-                          // Sort projects by updatedAt or createdAt descending (most recent first)
-                          const sortedProjects = [...activeProjects].sort((a, b) => {
-                            const aTime = (a.updatedAt || a.createdAt || 0) as number;
-                            const bTime = (b.updatedAt || b.createdAt || 0) as number;
-                            return bTime - aTime; // descending order
-                          });
-                          return sortedProjects.map((project: any) => {
-                            const projectActive = pathname === `/projects/${project.id}`;
-                            return (
-                              <Link
-                                key={project.id}
-                                href={`/projects/${project.id}`}
-                                className={clsx(
-                                  'flex items-center gap-2 px-3 py-2 rounded text-sm transition-all duration-100 min-h-[40px]',
-                                  projectActive
-                                    ? 'bg-[var(--accent-muted)] text-[var(--accent-primary)]'
-                                    : 'text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'
-                                )}
-                              >
-                                <span className="text-xs">📌</span>
-                                <span className="truncate text-xs">{project.name}</span>
-                              </Link>
-                            );
-                          });
-                        })()}
-                        <Link
-                          href="/projects?new=true"
-                          className={clsx(
-                            'flex items-center gap-2 px-3 py-2 rounded text-sm transition-all duration-100 min-h-[40px]',
-                            'text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'
-                          )}
-                        >
-                          <span className="text-xs">+</span>
-                          <span className="truncate text-xs">New Project</span>
-                        </Link>
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          }
-
           return (
             <Link key={item.name} href={item.href}
               className={clsx(
@@ -294,4 +192,3 @@ export function Sidebar() {
     </>
   );
 }
-

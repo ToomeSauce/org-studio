@@ -90,7 +90,21 @@ function TeamActivitySection({ teammates, activityStatuses, tasks, projects }: {
       ));
       
       const isActiveWithTasks = isActive || hasInProgressTask;
-      const statusDetail = status?.status || status?.detail || '';
+      let statusDetail = status?.status || status?.detail || '';
+
+      // Generate status from in-progress task if no self-reported status
+      let derivedStatus = statusDetail;
+      if (!derivedStatus && hasInProgressTask) {
+        const ipTask = (tasks || []).find((t: any) => (
+          (t.assignee?.toLowerCase() === tm.name.toLowerCase() || 
+           t.assignee?.toLowerCase() === tm.agentId.toLowerCase()) && 
+          t.status === 'in-progress'
+        ));
+        if (ipTask) {
+          const projName = projectMap[ipTask.projectId] || '';
+          derivedStatus = projName ? `Working · ${projName}` : 'Working on task';
+        }
+      }
 
       // For idle agents, find their last task activity
       const nameKey = tm.name.toLowerCase();
@@ -101,7 +115,7 @@ function TeamActivitySection({ teammates, activityStatuses, tasks, projects }: {
         emoji: tm.emoji,
         name: tm.name,
         isActive: isActiveWithTasks,
-        statusDetail,
+        statusDetail: derivedStatus,
         lastTask,
       };
     })
@@ -466,16 +480,16 @@ export default function HomePage() {
 
   return (
     <div className="space-y-8">
-      {/* Section 1: Needs Your Attention */}
+      {/* Section 1: Mission Statement */}
+      <MissionSection missionStatement={missionStatement} />
+
+      {/* Section 2: Needs Your Attention */}
       <AttentionSection tasks={tasks} projects={projects} />
 
-      {/* Section 2: Team Activity */}
+      {/* Section 3: Team Activity */}
       {teammates.length > 0 && (
         <TeamActivitySection teammates={teammates} activityStatuses={activityStatuses} tasks={tasks} projects={projects} />
       )}
-
-      {/* Section 3: Mission Statement */}
-      <MissionSection missionStatement={missionStatement} />
 
       {/* Section 4: Project Sprints */}
       {projects.length > 0 && (
