@@ -688,13 +688,7 @@ export function RoadmapWithApprovalHorizon({
               <span>Shipped ({shippedVersions.length} versions)</span>
             </summary>
             <div className="border-t border-[var(--border-color)] bg-[var(--bg-primary)] space-y-2 p-4">
-              {shippedVersions.map(v => (
-                <div key={v.id} className="flex items-center gap-3 px-4 py-2 text-sm bg-[var(--bg-secondary)] rounded">
-                  <span className="text-green-500">✅</span>
-                  <span className="font-medium">v{v.version}</span>
-                  <span className="text-[var(--text-muted)]">— {v.title}</span>
-                </div>
-              ))}
+              {shippedVersions.map(v => renderVersionRow(v, true, 'border-green-200 dark:border-green-800/50 bg-green-50/50 dark:bg-green-950/20'))}
             </div>
           </details>
         )}
@@ -706,7 +700,12 @@ export function RoadmapWithApprovalHorizon({
               <div className="flex items-center gap-3">
                 <span className="text-lg font-bold">v{currentVersionObj.version}</span>
                 <span className="text-sm text-[var(--text-secondary)]">{currentVersionObj.title}</span>
-                <span className="px-2 py-0.5 bg-blue-100 dark:bg-blue-950/30 text-blue-700 dark:text-blue-400 text-xs font-medium rounded">Current</span>
+                <span className="px-2 py-0.5 bg-blue-100 dark:bg-blue-950/30 text-blue-700 dark:text-blue-400 text-xs font-medium rounded flex items-center gap-1">Current
+                  <span className="relative flex h-2 w-2 ml-1">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                  </span>
+                </span>
               </div>
               <span className="text-sm font-medium">
                 {currentVersionObj.items.filter(i => i.done).length}/{currentVersionObj.items.length}

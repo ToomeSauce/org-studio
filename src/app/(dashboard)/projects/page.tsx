@@ -226,13 +226,14 @@ function ProjectsContent() {
     }
   };
 
-  // Separate active and archived projects, sort by last updated
+  // Separate active and archived projects, sort by sortOrder then name
   const activeProjects = projects
     .filter(p => !p.isArchived)
     .sort((a, b) => {
-      const aTime = (a as any).updatedAt || (a as any).createdAt || 0;
-      const bTime = (b as any).updatedAt || (b as any).createdAt || 0;
-      return bTime - aTime;
+      const aOrder = (a as any).sortOrder ?? 5000;
+      const bOrder = (b as any).sortOrder ?? 5000;
+      if (aOrder !== bOrder) return aOrder - bOrder;
+      return (a.name || '').localeCompare(b.name || '');
     });
   const archivedProjects = projects.filter(p => p.isArchived);
 

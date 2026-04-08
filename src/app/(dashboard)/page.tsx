@@ -80,7 +80,16 @@ function TeamActivitySection({ teammates, activityStatuses, tasks, projects }: {
     .map((tm: Teammate) => {
       const status = activityStatuses[tm.agentId.toLowerCase()];
       const lastActive = status?.updatedAt || 0;
-      const isActive = now - lastActive < 5 * 60 * 1000;
+      const isActive = now - lastActive < 60 * 60 * 1000; // 1 hour
+      
+      // Also count as active if agent has in-progress tasks
+      const hasInProgressTask = (tasks || []).some((t: any) => (
+        (t.assignee?.toLowerCase() === tm.name.toLowerCase() || 
+         t.assignee?.toLowerCase() === tm.agentId.toLowerCase()) && 
+        t.status === 'in-progress'
+      ));
+      
+      const isActiveWithTasks = isActive || hasInProgressTask;
       const statusDetail = status?.status || status?.detail || '';
 
       // For idle agents, find their last task activity
@@ -91,7 +100,7 @@ function TeamActivitySection({ teammates, activityStatuses, tasks, projects }: {
       return {
         emoji: tm.emoji,
         name: tm.name,
-        isActive,
+        isActive: isActiveWithTasks,
         statusDetail,
         lastTask,
       };
@@ -279,7 +288,7 @@ function AttentionSection({ tasks, projects }: { tasks: any[]; projects: any[] }
     // Stuck tasks (in-progress > 4 hours with no activity)
     const fourHoursAgo = Date.now() - 4 * 60 * 60 * 1000;
     for (const task of tasks) {
-      if (task.status === 'in-progress' && (task.updatedAt || 0) < fourHoursAgo) {
+      if (task.status === 'in-progress' && !task.isArchived && task.updatedAt && task.updatedAt > 0 && task.updatedAt < fourHoursAgo) {
         result.push({
           type: 'stuck',
           emoji: '🟡',

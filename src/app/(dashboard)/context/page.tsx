@@ -7,7 +7,7 @@ import { useWSData, useWSConnected } from '@/lib/ws';
 import { Plus, X, Circle, Bot, Activity, Eye, Pencil, Info, Target, Shield, FileText, Link as LinkIcon, ChevronDown, ChevronRight, MessageSquare, Maximize2, Search, Archive, RotateCcw, Trash2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import Link from 'next/link';
-import { useState, useEffect, useMemo, useCallback, Suspense } from 'react';
+import { useState, useEffect, useMemo, useCallback, Suspense, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { toast } from 'react-toastify';
 
@@ -312,12 +312,18 @@ function LiveActivityPanel() {
 function TasksPageInner() {
   const storeData = useWSData<any>('store');
   const [localTasks, setLocalTasks] = useState<Task[] | null>(null);
+  const lastMutationRef = useRef<number>(0);
   const tasks: Task[] = localTasks || storeData?.tasks || [];
   const projects: Project[] = storeData?.projects || [];
   const loading = !storeData;
 
   useEffect(() => {
-    if (storeData?.tasks) setLocalTasks(storeData.tasks);
+    if (storeData?.tasks) {
+      const timeSinceMutation = Date.now() - lastMutationRef.current;
+      if (timeSinceMutation > 3000) {
+        setLocalTasks(storeData.tasks);
+      }
+    }
   }, [storeData]);
   const searchParams = useSearchParams();
   const urlProject = searchParams.get('project');
@@ -413,33 +419,39 @@ function TasksPageInner() {
   const completionRate = total > 0 ? Math.round((done / total) * 100) : 0;
 
   const handleMove = useCallback(async (id: string, status: Task['status']) => {
+    lastMutationRef.current = Date.now();
     setLocalTasks(prev => (prev || []).map(t => t.id === id ? { ...t, status } : t));
     await updateTask(id, { status });
   }, []);
 
   const handleDelete = useCallback(async (id: string) => {
     if (selectedTaskId === id) setSelectedTaskId(null);
+    lastMutationRef.current = Date.now();
     setLocalTasks(prev => (prev || []).filter(t => t.id !== id));
     await deleteTask(id);
     toast.success('Task archived');
   }, [selectedTaskId]);
 
   const handleAssign = useCallback(async (id: string, assignee: string) => {
+    lastMutationRef.current = Date.now();
     setLocalTasks(prev => (prev || []).map(t => t.id === id ? { ...t, assignee } : t));
     await updateTask(id, { assignee });
   }, []);
 
   const handleEdit = useCallback((id: string, updates: Partial<Task>) => {
+    lastMutationRef.current = Date.now();
     setLocalTasks(prev => (prev || []).map(t => t.id === id ? { ...t, ...updates } : t));
   }, []);
 
   const handlePanelUpdate = useCallback(async (id: string, updates: Partial<Task>) => {
+    lastMutationRef.current = Date.now();
     setLocalTasks(prev => (prev || []).map(t => t.id === id ? { ...t, ...updates } : t));
     await updateTask(id, updates);
   }, []);
 
   const handlePanelDelete = useCallback(async (id: string) => {
     setSelectedTaskId(null);
+    lastMutationRef.current = Date.now();
     setLocalTasks(prev => (prev || []).filter(t => t.id !== id));
     await deleteTask(id);
   }, []);
@@ -447,6 +459,7 @@ function TasksPageInner() {
   const handlePanelAddComment = useCallback(async (taskId: string, comment: Omit<TaskComment, 'id' | 'createdAt'>): Promise<TaskComment> => {
     const result = await addComment(taskId, comment);
     // Update local state with the new comment
+    lastMutationRef.current = Date.now();
     setLocalTasks(prev => (prev || []).map(t =>
       t.id === taskId ? { ...t, comments: [...(t.comments || []), result] } : t
     ));
@@ -792,6 +805,7 @@ function TasksPageInner() {
                       reordered.forEach((t, i) => {
                         const newOrder = (i + 1) * 1000;
                         if (t.sortOrder !== newOrder) {
+                          lastMutationRef.current = Date.now();
                           setLocalTasks(prev => (prev || []).map(lt => lt.id === t.id ? { ...lt, sortOrder: newOrder } : lt));
                           updateTask(t.id, { sortOrder: newOrder });
                         }
@@ -801,6 +815,7 @@ function TasksPageInner() {
                         ? (colTasks[insertIdx]?.sortOrder ?? colTasks[insertIdx]?.createdAt ?? Date.now()) - 1
                         : (colTasks.length > 0 ? (colTasks[colTasks.length - 1]?.sortOrder ?? colTasks[colTasks.length - 1]?.createdAt ?? Date.now()) + 1000 : 1000);
 
+                      lastMutationRef.current = Date.now();
                       setLocalTasks(prev => (prev || []).map(t => t.id === id ? { ...t, status: col.key, sortOrder: newSortOrder } : t));
                       updateTask(id, { status: col.key, sortOrder: newSortOrder });
                     }
