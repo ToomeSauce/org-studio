@@ -22,7 +22,7 @@ const TRIGGER_COOLDOWN_MS = 60_000; // 1 minute
 const lastTriggerByAgent: Record<string, number> = {};
 
 // Loop detection: max loops on same task+status before escalation
-const MAX_LOOPS_BEFORE_ESCALATION = 3;
+
 const NOTIFY_CHAT_ID = process.env.NOTIFY_CHAT_ID || '';
 
 async function readStore(): Promise<StoreData> {
@@ -67,7 +67,12 @@ function getAgentRole(store: StoreData, agentId: string): string | undefined {
 /**
  * Loop detection: increment loopCount on in-progress/QA tasks for an agent.
  * Returns tasks that have exceeded the max loop threshold (stalled).
+ * 
+ * A "loop" means the scheduler dispatched the agent but the task status didn't change.
+ * Comments and other activity reset the counter — the agent IS making progress.
  */
+const MAX_LOOPS_BEFORE_ESCALATION = 6; // raised from 3 — agents need room for complex tasks
+
 async function detectAndIncrementLoops(store: StoreData, agentId: string): Promise<{ stalled: any[]; incremented: number }> {
   const agentName = getAgentName(store, agentId);
   const nameLower = agentName.toLowerCase();
@@ -81,8 +86,19 @@ async function detectAndIncrementLoops(store: StoreData, agentId: string): Promi
     if (t.status !== 'in-progress' && t.status !== 'qa') continue;
     if (t.loopPausedAt) continue; // already paused
 
+    // Reset loop count if agent posted a comment since last dispatch
+    // (comments = progress, even without status change)
+    const lastComment = (t.comments || []).filter((c: any) => 
+      (c.author?.toLowerCase() === nameLower || c.author?.toLowerCase() === agentId) && c.type !== 'system'
+    ).pop();
+    const lastDispatchTime = t._lastDispatchedAt || 0;
+    if (lastComment?.createdAt && lastComment.createdAt > lastDispatchTime) {
+      store.tasks[i] = { ...t, loopCount: 0, _lastDispatchedAt: Date.now() };
+      continue; // has recent activity, don't increment
+    }
+
     const newCount = (t.loopCount || 0) + 1;
-    store.tasks[i] = { ...t, loopCount: newCount };
+    store.tasks[i] = { ...t, loopCount: newCount, _lastDispatchedAt: Date.now() };
     incremented++;
 
     if (newCount >= MAX_LOOPS_BEFORE_ESCALATION) {
@@ -148,36 +164,56 @@ async function pauseStalledTasks(store: StoreData, agentId: string, stalledTasks
 
 /** Check if an agent has actionable work (backlog or in-progress tasks assigned to them). */
 function hasActionableWork(store: StoreData, agentId: string): boolean {
+  return getActionableWork(store, agentId).hasWork;
+}
+
+/**
+ * Detailed check for actionable work. Returns what TYPE of work exists.
+ * This distinction matters: an in-progress task means the agent is ALREADY working —
+ * don't re-dispatch. Only backlog/QA tasks need a new dispatch.
+ */
+function getActionableWork(store: StoreData, agentId: string): { hasWork: boolean; hasNewWork: boolean; hasInProgress: boolean } {
   const agentName = getAgentName(store, agentId);
   const nameLower = agentName.toLowerCase();
   const agentRole = getAgentRole(store, agentId);
   const isQa = agentRole === 'qa';
 
-  return store.tasks.some(t => {
+  let hasInProgress = false;
+  let hasNewWork = false;
+
+  for (const t of store.tasks) {
     const assignee = (t.assignee || '').toLowerCase();
     const testAssignee = (t.testAssignee || '').toLowerCase();
     const status = (t.status || '').toLowerCase();
 
     // Skip paused tasks — they don't count as actionable
-    if (t.loopPausedAt) return false;
+    if (t.loopPausedAt) continue;
 
-    // Standard work: backlog or in-progress tasks assigned to this agent
-    if ((assignee === nameLower || assignee === agentId) &&
-        (status === 'backlog' || status === 'in-progress')) {
-      return true;
+    const isAssigned = assignee === nameLower || assignee === agentId;
+
+    // In-progress: agent is already working on this
+    if (isAssigned && status === 'in-progress') {
+      hasInProgress = true;
+      continue;
     }
 
-    // QA work: tasks in qa column assigned to this agent (by testAssignee or qaLead)
+    // Backlog: new work to pick up
+    if (isAssigned && status === 'backlog') {
+      hasNewWork = true;
+    }
+
+    // QA work: tasks in qa column assigned to this agent
     if (status === 'qa') {
-      if (testAssignee === nameLower || testAssignee === agentId) return true;
-      if (isQa && (assignee === nameLower || assignee === agentId)) return true;
-      // Check if this agent is the qaLead
-      const qaLead = store.settings?.qaLead;
-      if (qaLead === agentId && !testAssignee) return true;
+      if (testAssignee === nameLower || testAssignee === agentId) { hasNewWork = true; }
+      else if (isQa && isAssigned) { hasNewWork = true; }
+      else {
+        const qaLead = store.settings?.qaLead;
+        if (qaLead === agentId && !testAssignee) { hasNewWork = true; }
+      }
     }
+  }
 
-    return false;
-  });
+  return { hasWork: hasInProgress || hasNewWork, hasNewWork, hasInProgress };
 }
 
 /** Quick gateway availability check with 3-second timeout. */
@@ -266,12 +302,16 @@ async function fireOneShot(store: StoreData, loop: AgentLoop): Promise<string | 
         const t = inFlightTimers.get(completedAgentId);
         if (t) { clearTimeout(t); inFlightTimers.delete(completedAgentId); }
         console.log(`fireOneShot: ${agentName} task completed, cleared in-flight`);
-        // Auto-dispatch next task if there's more backlog work
+        // Auto-dispatch next task if there's NEW work (backlog/QA), not in-progress
+        // In-progress means the agent is already working — don't interrupt with a new dispatch
         try {
           const freshStore = await readStore();
-          if (hasActionableWork(freshStore, loop.agentId)) {
-            console.log(`fireOneShot: ${agentName} has more work, re-dispatching`);
+          const work = getActionableWork(freshStore, loop.agentId);
+          if (work.hasNewWork) {
+            console.log(`fireOneShot: ${agentName} has new backlog/QA work, dispatching`);
             await fireOneShot(freshStore, loop);
+          } else if (work.hasInProgress) {
+            console.log(`fireOneShot: ${agentName} has in-progress work, skipping re-dispatch (agent is working)`);
           }
         } catch (e: any) {
           console.warn(`fireOneShot: auto-redispatch failed for ${agentName}:`, e.message);
