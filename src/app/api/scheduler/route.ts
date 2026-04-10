@@ -325,6 +325,23 @@ async function fireOneShot(store: StoreData, loop: AgentLoop): Promise<string | 
     inFlightAgents.delete(loop.agentId);
     const failTimer = inFlightTimers.get(loop.agentId);
     if (failTimer) { clearTimeout(failTimer); inFlightTimers.delete(loop.agentId); }
+
+    // Retry after delay — agent runtime may be restarting
+    const RETRY_DELAYS = [15000, 30000, 60000]; // 15s, 30s, 60s
+    const retryCount = (loop as any)._retryCount || 0;
+    if (retryCount < RETRY_DELAYS.length) {
+      const delay = RETRY_DELAYS[retryCount];
+      console.log(`fireOneShot: scheduling retry ${retryCount + 1}/${RETRY_DELAYS.length} for ${agentName} in ${delay/1000}s`);
+      setTimeout(async () => {
+        try {
+          const freshStore = await readStore();
+          const freshLoop = { ...loop, _retryCount: retryCount + 1 } as any;
+          await fireOneShot(freshStore, freshLoop);
+        } catch (retryErr: any) {
+          console.warn(`fireOneShot: retry ${retryCount + 1} failed for ${agentName}:`, retryErr?.message);
+        }
+      }, delay);
+    }
     return undefined;
   }
 }
