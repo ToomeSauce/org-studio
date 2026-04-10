@@ -246,12 +246,28 @@ export class HermesRuntime implements AgentRuntime {
 
     // Monitor the run via SSE events in the background
     const eventsUrl = `${url}/v1/runs/${runId}/events`;
+    // Monitor SSE with an inactivity timeout — if no events for 5 min, consider run dead
+    const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
+    const controller = new AbortController();
+    const overallTimeout = setTimeout(() => controller.abort(), 30 * 60 * 1000);
+    let inactivityTimer: any = null;
+    const resetInactivity = () => {
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+      inactivityTimer = setTimeout(() => {
+        console.warn(`[Hermes] Agent ${agentId} SSE inactivity timeout (${runId}) — no events for 5 min`);
+        controller.abort();
+      }, INACTIVITY_TIMEOUT_MS);
+    };
+    resetInactivity();
+
     globalThis.setTimeout(() => {
-      fetch(eventsUrl, { signal: AbortSignal.timeout(30 * 60 * 1000) })
+      fetch(eventsUrl, { signal: controller.signal })
         .then(async (res) => {
           if (!res.ok || !res.body) {
             console.error(`[Hermes] Agent ${agentId} events stream failed: ${res.status}`);
             if (opts?.onComplete) opts.onComplete(agentId);
+            clearTimeout(overallTimeout);
+            if (inactivityTimer) clearTimeout(inactivityTimer);
             return;
           }
           // Read SSE stream for completion events
@@ -262,6 +278,7 @@ export class HermesRuntime implements AgentRuntime {
             while (true) {
               const { done, value } = await reader.read();
               if (done) break;
+              resetInactivity(); // got data, reset inactivity timer
               buffer += decoder.decode(value, { stream: true });
               // Parse SSE lines
               const lines = buffer.split('\n');
@@ -300,12 +317,17 @@ export class HermesRuntime implements AgentRuntime {
               console.error(`[Hermes] Agent ${agentId} events error:`, e.message);
             }
           }
-          // Stream ended without terminal event
+          // Stream ended without terminal event — agent may have crashed or timed out
+          console.warn(`[Hermes] Agent ${agentId} SSE stream ended without run.completed/run.failed (${runId})`);
           if (opts?.onComplete) opts.onComplete(agentId);
+          clearTimeout(overallTimeout);
+          if (inactivityTimer) clearTimeout(inactivityTimer);
         })
         .catch((err) => {
           console.error(`[Hermes] Agent ${agentId} events fetch failed:`, err.message);
           if (opts?.onComplete) opts.onComplete(agentId);
+          clearTimeout(overallTimeout);
+          if (inactivityTimer) clearTimeout(inactivityTimer);
         });
     }, 0);
 
