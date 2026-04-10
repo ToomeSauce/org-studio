@@ -687,6 +687,25 @@ export class PostgresStoreProvider implements StoreProvider {
         comments,
         ...overflow,
       };
+
+      // Emit NOTIFY for task creation — triggers agent dispatch on local server
+      const changePayload = JSON.stringify({
+        type: 'task_created',
+        taskId: id,
+        status: status || 'backlog',
+        assignee: assignee || null,
+        projectId: projectId || null,
+        timestamp: Date.now(),
+        source: 'postgres',
+      });
+      try { await client.query(`NOTIFY org_studio_change, '${changePayload.replace(/'/g, "''")}'`); } catch {} // best-effort
+
+      return {
+        id, createdAt, createdBy, ticketNumber, title, status, projectId, assignee, priority,
+        testType, testAssignee, initiatedBy, description, doneWhen, constraints, testPlan,
+        reviewNotes, loopCount, loopPausedAt, loopPauseReason, lastActivityAt, statusHistory,
+        comments, ...overflow,
+      };
     } finally {
       client.release();
     }

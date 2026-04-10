@@ -841,6 +841,38 @@ async function initializePostgresListener() {
             }
           }
 
+          // Process new task creation — trigger agent dispatch
+          if (changeEvent.type === 'task_created' && changeEvent.assignee && changeEvent.status === 'backlog') {
+            console.log(`[LISTEN] New task created for ${changeEvent.assignee}, triggering dispatch`);
+            const apiKey = process.env.ORG_STUDIO_API_KEY || '';
+            const triggerHeaders = { 'Content-Type': 'application/json' };
+            if (apiKey) triggerHeaders['Authorization'] = `Bearer ${apiKey}`;
+            fetch(`http://127.0.0.1:${port}/api/scheduler`, {
+              method: 'POST',
+              headers: triggerHeaders,
+              body: JSON.stringify({ action: 'trigger', agentId: changeEvent.assignee }),
+            }).catch(e => console.warn('[LISTEN] Task trigger failed:', e.message));
+
+            // Also try resolving assignee name to agentId
+            try {
+              const freshStore = await refreshCachedStore();
+              if (freshStore) {
+                const teammates = freshStore.settings?.teammates || [];
+                const match = teammates.find(t =>
+                  t.name?.toLowerCase() === changeEvent.assignee.toLowerCase() ||
+                  t.agentId?.toLowerCase() === changeEvent.assignee.toLowerCase()
+                );
+                if (match?.agentId && match.agentId !== changeEvent.assignee) {
+                  fetch(`http://127.0.0.1:${port}/api/scheduler`, {
+                    method: 'POST',
+                    headers: triggerHeaders,
+                    body: JSON.stringify({ action: 'trigger', agentId: match.agentId }),
+                  }).catch(() => {});
+                }
+              }
+            } catch {} // best-effort
+          }
+
           // Read fresh store from Postgres via internal API (not local file)
           try {
             const freshStore = await refreshCachedStore();
