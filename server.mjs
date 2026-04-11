@@ -284,6 +284,17 @@ function generateOrgMd(store, forAgentId) {
   lines.push('Always include `version` when creating tasks for a sprint.');
   lines.push('');
 
+  lines.push('## Cross-Project Blockers');
+  lines.push('When you hit a blocker caused by another project:');
+  lines.push('1. **Mark your task as blocked** (status = blocked) with a comment explaining the issue.');
+  lines.push('2. **Create a new task** in the blocking project, assigned to that project's dev owner.');
+  lines.push('   - Reference your blocked task ID in the description.');
+  lines.push('3. The other dev owner fixes the issue and uses `addHandoff` to inject context back.');
+  lines.push('4. Your task auto-unblocks and you get dispatched to continue.');
+  lines.push('');
+  lines.push('**Do NOT** reassign your own task to another project's dev owner. Keep tasks in their project.');
+  lines.push('**Do NOT** fix issues in codebases you don't own - create a task for the owner instead.');
+  lines.push('');
   // Activity status — so agents can report what they're doing
   lines.push('## Activity Status');
   lines.push('Report your status (visible in Mission Control Live Activity feed):');

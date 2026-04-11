@@ -431,6 +431,12 @@ export async function POST(req: NextRequest) {
             triggeredAssignee = updated.assignee;
           }
 
+          // Trigger new assignee when an in-progress task is reassigned
+          if (updated.status === 'in-progress' && updates.assignee &&
+              updates.assignee !== t.assignee && updated.assignee) {
+            triggeredAssignee = updated.assignee;
+          }
+
           // Trigger QA agent when task moves to QA column
           if (updates.status === 'qa') {
             const qaAssignee = updated.testAssignee || store.settings?.qaLead;
