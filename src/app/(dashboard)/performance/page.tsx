@@ -31,6 +31,9 @@ export default function PerformancePage() {
   const storeData = useWSData<any>('store');
   const [teamMetrics, setTeamMetrics] = useState<AgentMetrics[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+  const [agentMetrics, setAgentMetrics] = useState<any[]>([]);
+  const [agentLoading, setAgentLoading] = useState(false);
 
   useEffect(() => {
     fetch('/api/metrics/team')
@@ -41,6 +44,21 @@ export default function PerformancePage() {
       })
       .catch(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (!selectedAgent) {
+      setAgentMetrics([]);
+      return;
+    }
+    setAgentLoading(true);
+    fetch(`/api/metrics/${selectedAgent}?limit=30`)
+      .then(res => res.json())
+      .then(data => {
+        setAgentMetrics((data.metrics || []).reverse()); // oldest first for charts
+        setAgentLoading(false);
+      })
+      .catch(() => setAgentLoading(false));
+  }, [selectedAgent]);
 
   const teammates: Teammate[] = storeData?.settings?.teammates || [];
 
@@ -105,8 +123,82 @@ export default function PerformancePage() {
               const tm =
                 teammateMap[metrics.agentId] ||
                 teammateMap[metrics.agentId.toLowerCase()];
-              return <AgentCard key={metrics.agentId} metrics={metrics} teammate={tm} />;
+              return (
+                <AgentCard
+                  key={metrics.agentId}
+                  metrics={metrics}
+                  teammate={tm}
+                  selected={selectedAgent === metrics.agentId}
+                  onClick={() => setSelectedAgent(selectedAgent === metrics.agentId ? null : metrics.agentId)}
+                />
+              );
             })}
+          </div>
+        )}
+
+        {/* Agent Drill-Down */}
+        {selectedAgent && (
+          <div className="border border-[var(--border-default)] rounded-[var(--radius-md)] bg-[var(--card)] p-6 space-y-6">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-[var(--text-primary)]">
+                {teammateMap[selectedAgent]?.emoji}{' '}
+                {teammateMap[selectedAgent]?.name || selectedAgent} — Daily Trends
+              </h2>
+              <button
+                onClick={() => setSelectedAgent(null)}
+                className="text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+              >
+                Close ✕
+              </button>
+            </div>
+
+            {agentLoading ? (
+              <p className="text-[var(--text-muted)] text-sm">Loading trends...</p>
+            ) : agentMetrics.length === 0 ? (
+              <p className="text-[var(--text-muted)] text-sm">No daily data available yet.</p>
+            ) : (
+              <div className="space-y-6">
+                {/* Tasks Completed per Day */}
+                <TrendChart
+                  title="Tasks Completed"
+                  data={agentMetrics.map(m => ({ label: formatDate(m.date), value: m.tasksCompleted || 0 }))}
+                  color="var(--accent-primary)"
+                />
+
+                {/* Throughput per Day */}
+                <TrendChart
+                  title="Throughput (tasks/hr)"
+                  data={agentMetrics.map(m => ({ label: formatDate(m.date), value: m.throughput || 0 }))}
+                  color="#22c55e"
+                  decimals={1}
+                />
+
+                {/* Avg Duration per Day */}
+                <TrendChart
+                  title="Avg Duration (min)"
+                  data={agentMetrics.map(m => ({ label: formatDate(m.date), value: m.avgDurationMin || 0 }))}
+                  color="#f59e0b"
+                  decimals={1}
+                />
+
+                {/* Chain Rate per Day */}
+                <TrendChart
+                  title="Chain Rate (%)"
+                  data={agentMetrics.map(m => ({
+                    label: formatDate(m.date),
+                    value: m.chainRate ? Math.round(m.chainRate * 100) : 0,
+                  }))}
+                  color="#3b82f6"
+                />
+
+                {/* Comments per Day */}
+                <TrendChart
+                  title="Comments"
+                  data={agentMetrics.map(m => ({ label: formatDate(m.date), value: m.commentsPosted || 0 }))}
+                  color="#8b5cf6"
+                />
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -123,7 +215,17 @@ function SummaryCard({ label, value }: { label: string; value: string | number }
   );
 }
 
-function AgentCard({ metrics, teammate }: { metrics: AgentMetrics; teammate?: Teammate }) {
+function AgentCard({
+  metrics,
+  teammate,
+  selected,
+  onClick,
+}: {
+  metrics: AgentMetrics;
+  teammate?: Teammate;
+  selected?: boolean;
+  onClick?: () => void;
+}) {
   const throughputColor =
     (metrics.avgThroughput || 0) > 2
       ? 'text-green-500'
@@ -137,7 +239,15 @@ function AgentCard({ metrics, teammate }: { metrics: AgentMetrics; teammate?: Te
     metrics.avgChainRate != null ? Math.round(metrics.avgChainRate * 100) : null;
 
   return (
-    <div className="p-5 bg-[var(--card)] border border-[var(--border-default)] rounded-[var(--radius-md)] space-y-4 hover:border-[var(--border-strong)] transition-colors">
+    <div
+      onClick={onClick}
+      className={clsx(
+        'p-5 bg-[var(--card)] border rounded-[var(--radius-md)] space-y-4 transition-colors cursor-pointer',
+        selected
+          ? 'border-[var(--accent-primary)] ring-1 ring-[var(--accent-primary)]'
+          : 'border-[var(--border-default)] hover:border-[var(--border-strong)]'
+      )}
+    >
       {/* Agent Header */}
       <div className="flex items-center gap-3">
         <span className="text-2xl">{teammate?.emoji || '🤖'}</span>
@@ -192,6 +302,63 @@ function MetricItem({
       <p className={clsx('text-lg font-semibold text-[var(--text-primary)]', className)}>
         {value}
       </p>
+    </div>
+  );
+}
+
+function formatDate(dateStr: string): string {
+  const d = new Date(dateStr);
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function TrendChart({
+  title,
+  data,
+  color,
+  decimals,
+}: {
+  title: string;
+  data: { label: string; value: number }[];
+  color: string;
+  decimals?: number;
+}) {
+  const maxVal = Math.max(...data.map(d => d.value), 1);
+  return (
+    <div>
+      <h3 className="text-sm font-medium text-[var(--text-secondary)] mb-2">{title}</h3>
+      <div className="flex items-end gap-1 h-24">
+        {data.map((d, i) => {
+          const height = maxVal > 0 ? (d.value / maxVal) * 100 : 0;
+          return (
+            <div key={i} className="flex-1 flex flex-col items-center group relative">
+              <div
+                className="w-full rounded-t transition-all"
+                style={{
+                  height: `${Math.max(height, 2)}%`,
+                  backgroundColor: color,
+                  opacity: d.value > 0 ? 1 : 0.15,
+                }}
+              />
+              {/* Tooltip on hover */}
+              <div className="absolute bottom-full mb-1 hidden group-hover:block bg-[var(--bg-primary)] border border-[var(--border-default)] rounded px-2 py-1 text-xs text-[var(--text-primary)] whitespace-nowrap shadow-lg z-10">
+                {d.label}: {decimals ? d.value.toFixed(decimals) : d.value}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {/* X-axis labels (show first, middle, last) */}
+      <div className="flex justify-between mt-1">
+        <span className="text-[10px] text-[var(--text-muted)]">{data[0]?.label || ''}</span>
+        {data.length > 2 && (
+          <span className="text-[10px] text-[var(--text-muted)]">
+            {data[Math.floor(data.length / 2)]?.label || ''}
+          </span>
+        )}
+        <span className="text-[10px] text-[var(--text-muted)]">
+          {data[data.length - 1]?.label || ''}
+        </span>
+      </div>
     </div>
   );
 }
