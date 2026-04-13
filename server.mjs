@@ -1563,6 +1563,205 @@ async function staleVisionCycleCheck(store) {
   }
 }
 
+/**
+ * Compute daily metrics for all agents and upsert to the metrics table.
+ * Accepts an optional targetDate (YYYY-MM-DD); defaults to today.
+ * Runs at startup + daily at midnight.
+ */
+async function computeDailyMetrics(targetDate) {
+  try {
+    const store = await refreshCachedStore();
+    if (!store?.tasks?.length) return;
+
+    const teammates = store.settings?.teammates || [];
+    const agents = teammates.filter(t => !t.isHuman && t.agentId);
+
+    const today = targetDate || new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const dayStart = new Date(today + 'T00:00:00Z').getTime();
+    const dayEnd = dayStart + 24 * 60 * 60 * 1000;
+
+    console.log(`[Metrics] Computing daily metrics for ${agents.length} agents (${today})`);
+
+    for (const agent of agents) {
+      const agentId = agent.agentId;
+      const nameLower = agent.name.toLowerCase();
+      const agentIdLower = agentId.toLowerCase();
+
+      // Filter tasks assigned to this agent
+      const agentTasks = store.tasks.filter(t => {
+        const assignee = (t.assignee || '').toLowerCase();
+        return assignee === nameLower || assignee === agentIdLower;
+      });
+
+      // --- Tasks completed/started today ---
+      let tasksCompleted = 0;
+      let tasksStarted = 0;
+      const durations = [];
+      const gaps = [];
+      let prevCompleted = null;
+      let bounceCount = 0;
+      let stallCount = 0;
+      let firstPassCount = 0;
+      let doneCount = 0;
+      let reviewNotesCount = 0;
+      let testPlanCount = 0;
+
+      for (const task of agentTasks) {
+        const history = task.statusHistory || [];
+        for (const h of history) {
+          if (!h.timestamp || h.timestamp < dayStart || h.timestamp >= dayEnd) continue;
+          if (h.status === 'done') {
+            tasksCompleted++;
+            doneCount++;
+            if (task.reviewNotes) reviewNotesCount++;
+            if (task.testPlan) testPlanCount++;
+          }
+          if (h.status === 'in-progress') {
+            tasksStarted++;
+          }
+        }
+
+        // Compute duration (first in-progress to last done within the day)
+        const startedAt = history.find(h => h.status === 'in-progress' && h.timestamp >= dayStart && h.timestamp < dayEnd)?.timestamp;
+        const completedAt = [...history].reverse().find(h => h.status === 'done' && h.timestamp >= dayStart && h.timestamp < dayEnd)?.timestamp;
+        if (startedAt && completedAt && completedAt > startedAt) {
+          durations.push((completedAt - startedAt) / 60000);
+          if (prevCompleted) {
+            const gap = (startedAt - prevCompleted) / 60000;
+            if (gap >= 0) gaps.push(gap);
+          }
+          prevCompleted = completedAt;
+        }
+
+        // Bounce detection: task went from review/qa back to in-progress
+        for (let i = 1; i < history.length; i++) {
+          if (history[i].timestamp < dayStart || history[i].timestamp >= dayEnd) continue;
+          if (history[i].status === 'in-progress' && (history[i-1]?.status === 'review' || history[i-1]?.status === 'qa')) {
+            bounceCount++;
+          }
+        }
+
+        // First-pass: went straight to done without bouncing
+        const dayHistory = history.filter(h => h.timestamp >= dayStart && h.timestamp < dayEnd);
+        const statusSequence = dayHistory.map(h => h.status);
+        if (statusSequence.includes('done') && !statusSequence.includes('blocked')) {
+          let bounced = false;
+          for (let i = 1; i < statusSequence.length; i++) {
+            if (statusSequence[i] === 'in-progress' && (statusSequence[i-1] === 'review' || statusSequence[i-1] === 'qa')) {
+              bounced = true;
+              break;
+            }
+          }
+          if (!bounced) firstPassCount++;
+        }
+
+        // Stall detection
+        if (task.loopPausedAt && task.loopPausedAt >= dayStart && task.loopPausedAt < dayEnd) {
+          stallCount++;
+        }
+      }
+
+      // --- Comments ---
+      let commentsPosted = 0;
+      let mentionsSent = 0;
+      let mentionsReceived = 0;
+      for (const task of store.tasks) {
+        for (const comment of (task.comments || [])) {
+          if (!comment.createdAt || comment.createdAt < dayStart || comment.createdAt >= dayEnd) continue;
+          if (comment.type === 'system') continue;
+          const author = (comment.author || '').toLowerCase();
+          if (author === nameLower || author === agentIdLower) {
+            commentsPosted++;
+            const mentionMatches = (comment.content || '').match(/@[\w-]+/g) || [];
+            mentionsSent += mentionMatches.length;
+          }
+          const mentions = comment.mentions || [];
+          if (mentions.some(m => m.toLowerCase() === nameLower || m.toLowerCase() === agentIdLower)) {
+            mentionsReceived++;
+          }
+        }
+      }
+
+      // --- Compute derived metrics ---
+      const avgDuration = durations.length > 0 ? durations.reduce((a, b) => a + b, 0) / durations.length : null;
+      const medianDuration = durations.length > 0 ? durations.sort((a, b) => a - b)[Math.floor(durations.length / 2)] : null;
+      const avgGap = gaps.length > 0 ? gaps.reduce((a, b) => a + b, 0) / gaps.length : null;
+      const chainRate = gaps.length > 0 ? gaps.filter(g => g < 2).length / gaps.length : null;
+
+      let activeMinutes = 0;
+      if (durations.length > 0) {
+        activeMinutes = durations.reduce((a, b) => a + b, 0) + gaps.filter(g => g < 30).reduce((a, b) => a + b, 0);
+      }
+      const throughput = activeMinutes > 0 ? (tasksCompleted / (activeMinutes / 60)) : null;
+      const firstPassRate = doneCount > 0 ? firstPassCount / doneCount : null;
+      const reviewNotesRate = doneCount > 0 ? reviewNotesCount / doneCount : null;
+      const testPlanRate = doneCount > 0 ? testPlanCount / doneCount : null;
+
+      // --- Kudos/flags ---
+      let kudosCount = 0;
+      let flagCount = 0;
+      try {
+        const kudosRes = await fetch(`http://127.0.0.1:${port}/api/kudos?agentId=${agentId}&limit=100`);
+        if (kudosRes.ok) {
+          const kudosData = await kudosRes.json();
+          const allKudos = kudosData.kudos || [];
+          for (const k of allKudos) {
+            const ts = new Date(k.createdAt || k.created_at).getTime();
+            if (ts >= dayStart && ts < dayEnd) {
+              if (k.type === 'kudos') kudosCount++;
+              if (k.type === 'flag') flagCount++;
+            }
+          }
+        }
+      } catch {} // best-effort
+
+      // Skip agents with zero activity
+      if (tasksCompleted === 0 && tasksStarted === 0 && commentsPosted === 0) continue;
+
+      // --- Upsert ---
+      const metrics = {
+        tasks_completed: tasksCompleted,
+        tasks_started: tasksStarted,
+        avg_duration_min: avgDuration ? Math.round(avgDuration * 10) / 10 : null,
+        median_duration_min: medianDuration ? Math.round(medianDuration * 10) / 10 : null,
+        avg_gap_min: avgGap ? Math.round(avgGap * 10) / 10 : null,
+        chain_rate: chainRate ? Math.round(chainRate * 1000) / 1000 : null,
+        throughput: throughput ? Math.round(throughput * 10) / 10 : null,
+        first_pass_rate: firstPassRate ? Math.round(firstPassRate * 1000) / 1000 : null,
+        bounce_count: bounceCount,
+        stall_count: stallCount,
+        comments_posted: commentsPosted,
+        mentions_received: mentionsReceived,
+        mentions_sent: mentionsSent,
+        kudos_count: kudosCount,
+        flag_count: flagCount,
+        review_notes_rate: reviewNotesRate ? Math.round(reviewNotesRate * 1000) / 1000 : null,
+        test_plan_rate: testPlanRate ? Math.round(testPlanRate * 1000) / 1000 : null,
+        active_minutes: Math.round(activeMinutes),
+        versions_completed: 0,
+      };
+
+      try {
+        const apiKey = process.env.ORG_STUDIO_API_KEY || '';
+        const headers = { 'Content-Type': 'application/json' };
+        if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+        await fetch(`http://127.0.0.1:${port}/api/metrics/${agentId}`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ date: today, metrics }),
+        });
+        console.log(`[Metrics] ${agent.name}: ${tasksCompleted} completed, ${commentsPosted} comments, throughput ${throughput?.toFixed(1) || '?'}/hr`);
+      } catch (e) {
+        console.warn(`[Metrics] Failed to upsert for ${agentId}:`, e.message);
+      }
+    }
+
+    console.log(`[Metrics] Daily computation complete`);
+  } catch (e) {
+    console.error('[Metrics] Computation error:', e.message);
+  }
+}
+
 // --- Start ---
 server.listen(port, async () => {
   console.log(`▲ Org Studio ready on http://localhost:${port}`);
@@ -1576,6 +1775,24 @@ server.listen(port, async () => {
 
   // Initialize PostgreSQL LISTEN for bidirectional sync
   await initializePostgresListener();
+
+  // Daily metrics computation — runs at startup (15s delay) + daily at midnight
+  setTimeout(async () => {
+    await computeDailyMetrics(); // today
+    // Backfill yesterday if not yet computed
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    await computeDailyMetrics(yesterday);
+  }, 15000);
+  // Schedule daily at midnight
+  const _metricsNow = new Date();
+  const _metricsMidnight = new Date(_metricsNow);
+  _metricsMidnight.setHours(24, 0, 0, 0);
+  const _msUntilMidnight = _metricsMidnight.getTime() - _metricsNow.getTime();
+  setTimeout(() => {
+    computeDailyMetrics();
+    setInterval(computeDailyMetrics, 24 * 60 * 60 * 1000);
+  }, _msUntilMidnight);
+  console.log(`[Metrics] Scheduled: startup in 15s, then daily at midnight (${Math.round(_msUntilMidnight / 60000)}m from now)`);
 
   // Start watchdog after 60s, then every 30 minutes
   setTimeout(() => {

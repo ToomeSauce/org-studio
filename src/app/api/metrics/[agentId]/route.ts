@@ -25,3 +25,27 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
 }
+
+/**
+ * POST /api/metrics/{agentId} — Upsert daily metrics
+ * Body: { date: "YYYY-MM-DD", metrics: { ... } }
+ */
+export async function POST(request: NextRequest, { params }: { params: Promise<{ agentId: string }> }) {
+  const { agentId } = await params;
+  const provider = getStoreProvider();
+
+  if (!provider.upsertMetrics) {
+    return NextResponse.json({ error: 'Metrics not available (requires PostgreSQL)' }, { status: 501 });
+  }
+
+  try {
+    const { date, metrics } = await request.json();
+    if (!date || !metrics) {
+      return NextResponse.json({ error: 'Missing date or metrics' }, { status: 400 });
+    }
+    const result = await provider.upsertMetrics(agentId, date, metrics);
+    return NextResponse.json({ ok: true, result });
+  } catch (e: any) {
+    return NextResponse.json({ error: e.message }, { status: 500 });
+  }
+}
