@@ -1661,12 +1661,16 @@ async function computeDailyMetrics(targetDate) {
         }
       }
 
-      // --- Comments ---
+      // --- Comments + Mention Response Time ---
       let commentsPosted = 0;
       let mentionsSent = 0;
       let mentionsReceived = 0;
+      const mentionResponseTimes = []; // minutes between @mention and agent reply
+
       for (const task of store.tasks) {
-        for (const comment of (task.comments || [])) {
+        const comments = task.comments || [];
+        for (let ci = 0; ci < comments.length; ci++) {
+          const comment = comments[ci];
           if (!comment.createdAt || comment.createdAt < dayStart || comment.createdAt >= dayEnd) continue;
           if (comment.type === 'system') continue;
           const author = (comment.author || '').toLowerCase();
@@ -1678,9 +1682,27 @@ async function computeDailyMetrics(targetDate) {
           const mentions = comment.mentions || [];
           if (mentions.some(m => m.toLowerCase() === nameLower || m.toLowerCase() === agentIdLower)) {
             mentionsReceived++;
+            // Find the agent's next reply on this task (any comment after this one by the agent)
+            for (let ri = ci + 1; ri < comments.length; ri++) {
+              const reply = comments[ri];
+              if (reply.type === 'system') continue;
+              const replyAuthor = (reply.author || '').toLowerCase();
+              if (replyAuthor === nameLower || replyAuthor === agentIdLower) {
+                if (reply.createdAt && reply.createdAt > comment.createdAt) {
+                  const responseMin = (reply.createdAt - comment.createdAt) / 60000;
+                  if (responseMin < 1440) { // ignore responses > 24h (likely unrelated)
+                    mentionResponseTimes.push(responseMin);
+                  }
+                }
+                break; // only count the first reply
+              }
+            }
           }
         }
       }
+      const mentionResponseMin = mentionResponseTimes.length > 0
+        ? Math.round((mentionResponseTimes.reduce((a, b) => a + b, 0) / mentionResponseTimes.length) * 10) / 10
+        : null;
 
       // --- Compute derived metrics ---
       const avgDuration = durations.length > 0 ? durations.reduce((a, b) => a + b, 0) / durations.length : null;
@@ -1733,6 +1755,7 @@ async function computeDailyMetrics(targetDate) {
         comments_posted: commentsPosted,
         mentions_received: mentionsReceived,
         mentions_sent: mentionsSent,
+        mention_response_min: mentionResponseMin,
         kudos_count: kudosCount,
         flag_count: flagCount,
         review_notes_rate: reviewNotesRate ? Math.round(reviewNotesRate * 1000) / 1000 : null,
@@ -1750,7 +1773,7 @@ async function computeDailyMetrics(targetDate) {
           headers,
           body: JSON.stringify({ date: today, metrics }),
         });
-        console.log(`[Metrics] ${agent.name}: ${tasksCompleted} completed, ${commentsPosted} comments, throughput ${throughput?.toFixed(1) || '?'}/hr`);
+        console.log(`[Metrics] ${agent.name}: ${tasksCompleted} completed, ${commentsPosted} comments, throughput ${throughput?.toFixed(1) || '?'}/hr${mentionResponseMin ? `, mention response ${mentionResponseMin}m` : ''}`);
       } catch (e) {
         console.warn(`[Metrics] Failed to upsert for ${agentId}:`, e.message);
       }
