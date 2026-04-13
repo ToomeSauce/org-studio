@@ -6,6 +6,7 @@ import { clsx } from 'clsx';
 import TeamHealthSection from '@/components/TeamHealthSection';
 import QualityScorecardSection from '@/components/QualityScorecardSection';
 import CulturalAlignmentSection from '@/components/CulturalAlignmentSection';
+import AgentComparisonSection from '@/components/AgentComparisonSection';
 
 interface Teammate {
   agentId?: string;
@@ -171,6 +172,9 @@ export default function PerformancePage() {
 
         {/* Cultural Alignment */}
         <CulturalAlignmentSection />
+
+        {/* Agent Comparison Table */}
+        <AgentComparisonSection />
 
         {/* Team Summary */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
