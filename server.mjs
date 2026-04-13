@@ -1582,6 +1582,7 @@ async function computeDailyMetrics(targetDate) {
 
     console.log(`[Metrics] Computing daily metrics for ${agents.length} agents (${today})`);
 
+    let computedCount = 0;
     for (const agent of agents) {
       const agentId = agent.agentId;
       const nameLower = agent.name.toLowerCase();
@@ -1822,16 +1823,20 @@ async function computeDailyMetrics(targetDate) {
           body: JSON.stringify({ date: today, metrics }),
         });
         console.log(`[Metrics] ${agent.name}: ${tasksCompleted} completed, ${commentsPosted} comments, throughput ${throughput?.toFixed(1) || '?'}/hr${mentionResponseMin ? `, mention response ${mentionResponseMin}m` : ''}`);
+        computedCount++;
       } catch (e) {
         console.warn(`[Metrics] Failed to upsert for ${agentId}:`, e.message);
       }
     }
 
-    console.log(`[Metrics] Daily computation complete`);
+    console.log(`[Metrics] Daily computation complete (${today}: ${computedCount} agents)`);
+    return computedCount;
   } catch (e) {
     console.error('[Metrics] Computation error:', e.message);
   }
 }
+// Expose for API route (backfill endpoint)
+globalThis.__computeDailyMetrics = computeDailyMetrics;
 
 // --- Start ---
 server.listen(port, async () => {
