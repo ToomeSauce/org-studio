@@ -34,6 +34,8 @@ export default function PerformancePage() {
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [agentMetrics, setAgentMetrics] = useState<any[]>([]);
   const [agentLoading, setAgentLoading] = useState(false);
+  const [selectedProject, setSelectedProject] = useState<string>('all');
+  const [versionData, setVersionData] = useState<any[]>([]);
 
   useEffect(() => {
     fetch('/api/metrics/team')
@@ -70,6 +72,62 @@ export default function PerformancePage() {
     }
     return map;
   }, [teammates]);
+
+  const versionVelocity = useMemo(() => {
+    if (!storeData?.tasks || !storeData?.projects) return [];
+    const projects = storeData.projects.filter((p: any) => !p.isArchived);
+    const tasks = storeData.tasks;
+    const results: any[] = [];
+
+    for (const project of projects) {
+      if (selectedProject !== 'all' && project.id !== selectedProject) continue;
+
+      const versionMap: Record<string, any[]> = {};
+      for (const task of tasks) {
+        if (task.projectId !== project.id || !task.version || task.isArchived) continue;
+        if (!versionMap[task.version]) versionMap[task.version] = [];
+        versionMap[task.version].push(task);
+      }
+
+      for (const [version, vTasks] of Object.entries(versionMap)) {
+        const doneTasks = (vTasks as any[]).filter((t: any) => t.status === 'done');
+        if (doneTasks.length === 0) continue;
+
+        let earliestStart = Infinity;
+        let latestDone = 0;
+        for (const task of vTasks as any[]) {
+          for (const h of (task.statusHistory || [])) {
+            if (h.status === 'in-progress' && h.timestamp < earliestStart) {
+              earliestStart = h.timestamp;
+            }
+            if (h.status === 'done' && h.timestamp > latestDone) {
+              latestDone = h.timestamp;
+            }
+          }
+        }
+
+        const durationHours =
+          earliestStart < Infinity && latestDone > 0
+            ? (latestDone - earliestStart) / (1000 * 60 * 60)
+            : null;
+
+        results.push({
+          projectName: project.name,
+          projectId: project.id,
+          version,
+          totalTasks: (vTasks as any[]).length,
+          doneTasks: doneTasks.length,
+          durationHours,
+          isComplete: doneTasks.length === (vTasks as any[]).length,
+        });
+      }
+    }
+
+    return results.sort((a, b) => {
+      if (a.projectId !== b.projectId) return a.projectName.localeCompare(b.projectName);
+      return parseFloat(a.version) - parseFloat(b.version);
+    });
+  }, [storeData, selectedProject]);
 
   // Team totals
   const totals = useMemo(() => {
@@ -135,6 +193,97 @@ export default function PerformancePage() {
             })}
           </div>
         )}
+
+        {/* Version Velocity */}
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-[var(--text-primary)]">Version Velocity</h2>
+            <select
+              value={selectedProject}
+              onChange={(e) => setSelectedProject(e.target.value)}
+              className="px-3 py-1.5 bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-md)] text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+            >
+              <option value="all">All Projects</option>
+              {(storeData?.projects || [])
+                .filter((p: any) => !p.isArchived)
+                .map((p: any) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+            </select>
+          </div>
+
+          {versionVelocity.length === 0 ? (
+            <div className="p-6 border border-[var(--border-default)] rounded-[var(--radius-md)] text-center">
+              <p className="text-sm text-[var(--text-muted)]">No version data available.</p>
+            </div>
+          ) : (
+            <div className="border border-[var(--border-default)] rounded-[var(--radius-md)] overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-[var(--bg-secondary)] border-b border-[var(--border-default)]">
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-[var(--text-muted)]">Project</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-[var(--text-muted)]">Version</th>
+                    <th className="text-right px-4 py-3 text-xs font-semibold text-[var(--text-muted)]">Tasks</th>
+                    <th className="text-right px-4 py-3 text-xs font-semibold text-[var(--text-muted)]">Duration</th>
+                    <th className="px-4 py-3 text-xs font-semibold text-[var(--text-muted)]">Velocity</th>
+                    <th className="text-center px-4 py-3 text-xs font-semibold text-[var(--text-muted)]">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {versionVelocity.map((v, i) => {
+                    const durationStr =
+                      v.durationHours != null
+                        ? v.durationHours < 1
+                          ? `${Math.round(v.durationHours * 60)}m`
+                          : v.durationHours < 24
+                          ? `${v.durationHours.toFixed(1)}h`
+                          : `${(v.durationHours / 24).toFixed(1)}d`
+                        : '—';
+                    const velocity =
+                      v.durationHours && v.durationHours > 0
+                        ? (v.doneTasks / v.durationHours).toFixed(1)
+                        : '—';
+                    const maxDuration = Math.max(
+                      ...versionVelocity.filter((x: any) => x.durationHours).map((x: any) => x.durationHours),
+                      1
+                    );
+                    const barWidth = v.durationHours ? (v.durationHours / maxDuration) * 100 : 0;
+
+                    return (
+                      <tr
+                        key={`${v.projectId}-${v.version}`}
+                        className="border-b border-[var(--border-subtle)] hover:bg-[var(--bg-secondary)] transition-colors"
+                      >
+                        <td className="px-4 py-3 text-[var(--text-secondary)]">{v.projectName}</td>
+                        <td className="px-4 py-3 font-medium text-[var(--text-primary)]">v{v.version}</td>
+                        <td className="px-4 py-3 text-right text-[var(--text-secondary)]">{v.doneTasks}/{v.totalTasks}</td>
+                        <td className="px-4 py-3 text-right text-[var(--text-secondary)] tabular-nums">{durationStr}</td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 h-2 bg-[var(--bg-tertiary)] rounded-full overflow-hidden">
+                              <div
+                                className="h-full bg-[var(--accent-primary)] rounded-full transition-all"
+                                style={{ width: `${Math.min(barWidth, 100)}%` }}
+                              />
+                            </div>
+                            <span className="text-xs text-[var(--text-muted)] tabular-nums w-12 text-right">{velocity}/hr</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          {v.isComplete ? (
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 dark:bg-green-950/30 text-green-700 dark:text-green-400">✅ Done</span>
+                          ) : (
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-950/30 text-blue-700 dark:text-blue-400">⚙️ {v.doneTasks}/{v.totalTasks}</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
 
         {/* Agent Drill-Down */}
         {selectedAgent && (
