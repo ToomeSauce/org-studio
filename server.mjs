@@ -1704,6 +1704,53 @@ async function computeDailyMetrics(targetDate) {
         ? Math.round((mentionResponseTimes.reduce((a, b) => a + b, 0) / mentionResponseTimes.length) * 10) / 10
         : null;
 
+      // --- Cross-Agent Collaboration ---
+      let handoffCount = 0;
+      const sharedTaskIds = new Set();
+      const mentionedAgents = {}; // agentName -> count (who this agent mentions most)
+      const mentionedByAgents = {}; // agentName -> count (who mentions this agent most)
+
+      for (const task of store.tasks) {
+        // Handoff tracking: devHandoff set by this agent
+        if (task.devHandoff?.author?.toLowerCase() === nameLower || task.devHandoff?.author?.toLowerCase() === agentIdLower) {
+          if (task.devHandoff.timestamp >= dayStart && task.devHandoff.timestamp < dayEnd) {
+            handoffCount++;
+          }
+        }
+
+        // Shared task detection: multiple agents commented on same task
+        const taskComments = (task.comments || []).filter(c =>
+          c.createdAt >= dayStart && c.createdAt < dayEnd && c.type !== 'system'
+        );
+        const commentAuthors = new Set(taskComments.map(c => (c.author || '').toLowerCase()));
+        if (commentAuthors.has(nameLower) || commentAuthors.has(agentIdLower)) {
+          if (commentAuthors.size > 1) sharedTaskIds.add(task.id);
+        }
+
+        // Per-agent mention breakdown
+        for (const comment of taskComments) {
+          const author = (comment.author || '').toLowerCase();
+          if (author === nameLower || author === agentIdLower) {
+            // Outbound mentions from this agent
+            for (const m of (comment.mentions || [])) {
+              const target = m.toLowerCase();
+              mentionedAgents[target] = (mentionedAgents[target] || 0) + 1;
+            }
+          }
+          // Inbound mentions to this agent
+          if ((comment.mentions || []).some(m => m.toLowerCase() === nameLower || m.toLowerCase() === agentIdLower)) {
+            mentionedByAgents[author] = (mentionedByAgents[author] || 0) + 1;
+          }
+        }
+      }
+
+      const collaboration = {
+        handoffCount,
+        sharedTaskCount: sharedTaskIds.size,
+        mentionedAgents, // who this agent mentions
+        mentionedByAgents, // who mentions this agent
+      };
+
       // --- Compute derived metrics ---
       const avgDuration = durations.length > 0 ? durations.reduce((a, b) => a + b, 0) / durations.length : null;
       const medianDuration = durations.length > 0 ? durations.sort((a, b) => a - b)[Math.floor(durations.length / 2)] : null;
@@ -1762,6 +1809,7 @@ async function computeDailyMetrics(targetDate) {
         test_plan_rate: testPlanRate ? Math.round(testPlanRate * 1000) / 1000 : null,
         active_minutes: Math.round(activeMinutes),
         versions_completed: 0,
+        collaboration, // stored in JSONB overflow
       };
 
       try {
