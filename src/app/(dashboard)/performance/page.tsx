@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useWSData } from '@/lib/ws';
 import { clsx } from 'clsx';
+import TeamHealthSection from '@/components/TeamHealthSection';
 
 interface Teammate {
   agentId?: string;
@@ -159,6 +160,9 @@ export default function PerformancePage() {
           <h1 className="text-3xl font-bold text-[var(--text-primary)]">Performance</h1>
           <p className="text-sm text-[var(--text-muted)] mt-1">Agent delivery metrics</p>
         </div>
+
+        {/* Team Health Section */}
+        <TeamHealthSection />
 
         {/* Team Summary */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
