@@ -64,6 +64,10 @@ export interface StoreProvider {
    */
   updateSettings(updates: Partial<Record<string, any>>): Promise<any>;
 
+  upsertMetrics?(agentId: string, date: string, metrics: Record<string, any>): Promise<any>;
+  getMetrics?(agentId: string, opts?: { from?: string; to?: string; limit?: number }): Promise<any[]>;
+  getTeamMetrics?(opts?: { from?: string; to?: string }): Promise<any[]>;
+
   /**
    * Health check — verify provider is operational
    */
@@ -914,6 +918,147 @@ export class PostgresStoreProvider implements StoreProvider {
     } finally {
       client.release();
     }
+  }
+
+  // --- Agent Metrics ---
+  async upsertMetrics(agentId: string, date: string, metrics: Record<string, any>): Promise<any> {
+    const pool = await this.getPool();
+    const id = `${agentId}-${date}`;
+    const {
+      tasks_completed, tasks_started, avg_duration_min, median_duration_min, avg_gap_min,
+      chain_rate, throughput, first_pass_rate, bounce_count, stall_count,
+      comments_posted, mentions_received, mentions_sent, mention_response_min,
+      kudos_count, flag_count, review_notes_rate, test_plan_rate, active_minutes,
+      versions_completed, ...overflow
+    } = metrics;
+    await pool.query(`
+      INSERT INTO org_studio_agent_metrics (
+        id, agent_id, date, tasks_completed, tasks_started, avg_duration_min,
+        median_duration_min, avg_gap_min, chain_rate, throughput, first_pass_rate,
+        bounce_count, stall_count, comments_posted, mentions_received, mentions_sent,
+        mention_response_min, kudos_count, flag_count, review_notes_rate, test_plan_rate,
+        active_minutes, versions_completed, data, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+              $17, $18, $19, $20, $21, $22, $23, $24, NOW())
+      ON CONFLICT (agent_id, date) DO UPDATE SET
+        tasks_completed = EXCLUDED.tasks_completed,
+        tasks_started = EXCLUDED.tasks_started,
+        avg_duration_min = EXCLUDED.avg_duration_min,
+        median_duration_min = EXCLUDED.median_duration_min,
+        avg_gap_min = EXCLUDED.avg_gap_min,
+        chain_rate = EXCLUDED.chain_rate,
+        throughput = EXCLUDED.throughput,
+        first_pass_rate = EXCLUDED.first_pass_rate,
+        bounce_count = EXCLUDED.bounce_count,
+        stall_count = EXCLUDED.stall_count,
+        comments_posted = EXCLUDED.comments_posted,
+        mentions_received = EXCLUDED.mentions_received,
+        mentions_sent = EXCLUDED.mentions_sent,
+        mention_response_min = EXCLUDED.mention_response_min,
+        kudos_count = EXCLUDED.kudos_count,
+        flag_count = EXCLUDED.flag_count,
+        review_notes_rate = EXCLUDED.review_notes_rate,
+        test_plan_rate = EXCLUDED.test_plan_rate,
+        active_minutes = EXCLUDED.active_minutes,
+        versions_completed = EXCLUDED.versions_completed,
+        data = EXCLUDED.data,
+        updated_at = NOW()
+    `, [
+      id, agentId, date,
+      tasks_completed || 0, tasks_started || 0,
+      avg_duration_min || null, median_duration_min || null, avg_gap_min || null,
+      chain_rate || null, throughput || null, first_pass_rate || null,
+      bounce_count || 0, stall_count || 0, comments_posted || 0,
+      mentions_received || 0, mentions_sent || 0, mention_response_min || null,
+      kudos_count || 0, flag_count || 0, review_notes_rate || null,
+      test_plan_rate || null, active_minutes || 0, versions_completed || 0,
+      JSON.stringify(overflow),
+    ]);
+    return { id, agentId, date, ...metrics };
+  }
+
+  async getMetrics(agentId: string, opts?: { from?: string; to?: string; limit?: number }): Promise<any[]> {
+    const pool = await this.getPool();
+    const conditions = ['agent_id = $1'];
+    const params: any[] = [agentId];
+    let paramIdx = 2;
+    if (opts?.from) { conditions.push(`date >= $${paramIdx}`); params.push(opts.from); paramIdx++; }
+    if (opts?.to) { conditions.push(`date <= $${paramIdx}`); params.push(opts.to); paramIdx++; }
+    const limit = opts?.limit || 90;
+    const result = await pool.query(
+      `SELECT * FROM org_studio_agent_metrics WHERE ${conditions.join(' AND ')} ORDER BY date DESC LIMIT ${limit}`,
+      params
+    );
+    return result.rows.map((row: any) => ({
+      id: row.id,
+      agentId: row.agent_id,
+      date: row.date,
+      tasksCompleted: row.tasks_completed,
+      tasksStarted: row.tasks_started,
+      avgDurationMin: parseFloat(row.avg_duration_min) || null,
+      medianDurationMin: parseFloat(row.median_duration_min) || null,
+      avgGapMin: parseFloat(row.avg_gap_min) || null,
+      chainRate: parseFloat(row.chain_rate) || null,
+      throughput: parseFloat(row.throughput) || null,
+      firstPassRate: parseFloat(row.first_pass_rate) || null,
+      bounceCount: row.bounce_count,
+      stallCount: row.stall_count,
+      commentsPosted: row.comments_posted,
+      mentionsReceived: row.mentions_received,
+      mentionsSent: row.mentions_sent,
+      mentionResponseMin: parseFloat(row.mention_response_min) || null,
+      kudosCount: row.kudos_count,
+      flagCount: row.flag_count,
+      reviewNotesRate: parseFloat(row.review_notes_rate) || null,
+      testPlanRate: parseFloat(row.test_plan_rate) || null,
+      activeMinutes: row.active_minutes,
+      versionsCompleted: row.versions_completed,
+      data: typeof row.data === 'string' ? JSON.parse(row.data) : (row.data || {}),
+    }));
+  }
+
+  async getTeamMetrics(opts?: { from?: string; to?: string }): Promise<any[]> {
+    const pool = await this.getPool();
+    const conditions: string[] = [];
+    const params: any[] = [];
+    let paramIdx = 1;
+    if (opts?.from) { conditions.push(`date >= $${paramIdx}`); params.push(opts.from); paramIdx++; }
+    if (opts?.to) { conditions.push(`date <= $${paramIdx}`); params.push(opts.to); paramIdx++; }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const result = await pool.query(
+      `SELECT agent_id,
+        SUM(tasks_completed) as total_completed,
+        SUM(tasks_started) as total_started,
+        AVG(avg_duration_min) as avg_duration,
+        AVG(chain_rate) as avg_chain_rate,
+        AVG(throughput) as avg_throughput,
+        AVG(first_pass_rate) as avg_first_pass,
+        SUM(bounce_count) as total_bounces,
+        SUM(stall_count) as total_stalls,
+        SUM(comments_posted) as total_comments,
+        SUM(kudos_count) as total_kudos,
+        SUM(flag_count) as total_flags,
+        COUNT(DISTINCT date) as active_days
+      FROM org_studio_agent_metrics ${where}
+      GROUP BY agent_id
+      ORDER BY total_completed DESC`,
+      params
+    );
+    return result.rows.map((row: any) => ({
+      agentId: row.agent_id,
+      totalCompleted: parseInt(row.total_completed) || 0,
+      totalStarted: parseInt(row.total_started) || 0,
+      avgDuration: parseFloat(row.avg_duration) || null,
+      avgChainRate: parseFloat(row.avg_chain_rate) || null,
+      avgThroughput: parseFloat(row.avg_throughput) || null,
+      avgFirstPass: parseFloat(row.avg_first_pass) || null,
+      totalBounces: parseInt(row.total_bounces) || 0,
+      totalStalls: parseInt(row.total_stalls) || 0,
+      totalComments: parseInt(row.total_comments) || 0,
+      totalKudos: parseInt(row.total_kudos) || 0,
+      totalFlags: parseInt(row.total_flags) || 0,
+      activeDays: parseInt(row.active_days) || 0,
+    }));
   }
 
   async health(): Promise<boolean> {
