@@ -8,6 +8,70 @@
 import { Task, Project } from './store';
 import crypto from 'crypto';
 
+const STATUS_ORDER: Record<string, number> = {
+  backlog: 0,
+  planning: 1,
+  'in-progress': 2,
+  qa: 3,
+  review: 4,
+  done: 5,
+};
+
+/**
+ * Get the timestamp when a task was last moved to 'done'
+ */
+function getDoneTimestamp(task: Task): number | null {
+  const history = task.statusHistory || [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].status === 'done') return history[i].timestamp;
+  }
+  if (task.status === 'done') return task.lastActivityAt || task.createdAt;
+  return null;
+}
+
+/**
+ * Check if a task had any backward status moves (a bounce)
+ */
+function hasBounce(task: Task): boolean {
+  const history = task.statusHistory || [];
+  for (let i = 1; i < history.length; i++) {
+    const prev = STATUS_ORDER[history[i - 1].status] ?? -1;
+    const curr = STATUS_ORDER[history[i].status] ?? -1;
+    if (curr < prev) return true;
+  }
+  return false;
+}
+
+/**
+ * Format milliseconds into a human-readable duration string
+ */
+function formatDuration(ms: number): string {
+  const hours = ms / (1000 * 60 * 60);
+  if (hours < 1) return `${Math.round(hours * 60)}m`;
+  if (hours < 24) return `${Math.round(hours)}h`;
+  return `${Math.round(hours / 24)}d`;
+}
+
+/**
+ * Compute version duration: from first in-progress to last done (ms)
+ */
+function getVersionDuration(tasks: Task[]): number | null {
+  let firstInProgress: number | null = null;
+  let lastDone: number | null = null;
+  for (const task of tasks) {
+    for (const entry of (task.statusHistory || [])) {
+      if (entry.status === 'in-progress') {
+        if (firstInProgress === null || entry.timestamp < firstInProgress) firstInProgress = entry.timestamp;
+      }
+      if (entry.status === 'done') {
+        if (lastDone === null || entry.timestamp > lastDone) lastDone = entry.timestamp;
+      }
+    }
+  }
+  if (!firstInProgress || !lastDone || lastDone <= firstInProgress) return null;
+  return lastDone - firstInProgress;
+}
+
 export interface DetectedSignal {
   id: string;
   agentId: string;
@@ -272,6 +336,216 @@ function detectRepeatedQABounces(tasks: Task[]): DetectedSignal[] {
 }
 
 /**
+ * SIGNAL 8: Milestone Streak
+ * Agent completed N consecutive tasks (N >= 10) with no backward status moves
+ */
+function detectMilestoneStreak(tasks: Task[], agentName: string): DetectedSignal | null {
+  const doneTasks = tasks
+    .filter(t => t.assignee === agentName && t.status === 'done' && !t.isArchived)
+    .sort((a, b) => (getDoneTimestamp(b) ?? 0) - (getDoneTimestamp(a) ?? 0)); // newest first
+
+  if (doneTasks.length < 10) return null;
+
+  let streak = 0;
+  for (const task of doneTasks) {
+    if (hasBounce(task)) break;
+    streak++;
+  }
+
+  if (streak < 10) return null;
+
+  // Round down to nearest 10 to avoid re-firing every task
+  const roundedStreak = Math.floor(streak / 10) * 10;
+
+  return {
+    id: signalId('milestone-streak', agentName, `streak-${roundedStreak}`),
+    agentId: agentName,
+    agentName,
+    type: 'kudos',
+    values: ['autonomy', 'people-first'],
+    note: `${agentName} hit a ${streak}-task clean streak — no bounces or rework`,
+    evidence: `last ${streak} tasks completed cleanly`,
+    detectedAt: Date.now(),
+  };
+}
+
+/**
+ * SIGNAL 9: Perfect Week
+ * Agent completed 5+ tasks in last 7 days with zero backward status moves
+ */
+function detectPerfectWeek(tasks: Task[], agentName: string): DetectedSignal | null {
+  const now = Date.now();
+  const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+
+  const weekTasks = tasks.filter(t => {
+    if (t.assignee !== agentName || t.status !== 'done' || t.isArchived) return false;
+    const doneTs = getDoneTimestamp(t);
+    return doneTs !== null && now - doneTs < SEVEN_DAYS;
+  });
+
+  if (weekTasks.length < 5) return null;
+  if (weekTasks.some(t => hasBounce(t))) return null;
+
+  const timestamps = weekTasks.map(t => getDoneTimestamp(t) ?? 0).filter(ts => ts > 0);
+  const minTs = Math.min(...timestamps);
+  const maxTs = Math.max(...timestamps);
+  const startDate = new Date(minTs).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const endDate = new Date(maxTs).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+  // ISO week for stable signal ID
+  const weekDate = new Date(maxTs);
+  const dayOfWeek = weekDate.getUTCDay() || 7;
+  weekDate.setUTCDate(weekDate.getUTCDate() + 4 - dayOfWeek);
+  const yearStart = new Date(Date.UTC(weekDate.getUTCFullYear(), 0, 1));
+  const isoWeek = `${weekDate.getUTCFullYear()}-W${Math.ceil(((weekDate.getTime() - yearStart.getTime()) / 86400000 + 1) / 7)}`;
+
+  return {
+    id: signalId('perfect-week', agentName, isoWeek),
+    agentId: agentName,
+    agentName,
+    type: 'kudos',
+    values: ['people-first'],
+    note: `${agentName} had a perfect week — ${weekTasks.length} tasks, zero bounces`,
+    evidence: `week of ${startDate}–${endDate}`,
+    detectedAt: Date.now(),
+  };
+}
+
+/**
+ * SIGNAL 10: High-Volume Day
+ * Agent completed 10+ tasks on a single day
+ */
+function detectHighVolumeDay(tasks: Task[], agentName: string): DetectedSignal | null {
+  const doneTasks = tasks.filter(t => t.assignee === agentName && t.status === 'done' && !t.isArchived);
+
+  const byDate: Record<string, Task[]> = {};
+  for (const task of doneTasks) {
+    const doneTs = getDoneTimestamp(task);
+    if (!doneTs) continue;
+    const dateStr = new Date(doneTs).toISOString().slice(0, 10);
+    if (!byDate[dateStr]) byDate[dateStr] = [];
+    byDate[dateStr].push(task);
+  }
+
+  const qualifyingDays = Object.entries(byDate)
+    .filter(([, dayTasks]) => dayTasks.length >= 10)
+    .sort(([a], [b]) => b.localeCompare(a)); // newest first
+
+  if (qualifyingDays.length === 0) return null;
+
+  const [dateStr, dayTasks] = qualifyingDays[0];
+  const displayDate = new Date(dateStr + 'T12:00:00Z').toLocaleDateString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric',
+  });
+
+  return {
+    id: signalId('high-volume-day', agentName, dateStr),
+    agentId: agentName,
+    agentName,
+    type: 'kudos',
+    values: ['autonomy'],
+    note: `${agentName} completed ${dayTasks.length} tasks on ${displayDate} — massive output`,
+    evidence: `${dayTasks.length} tasks on ${displayDate}`,
+    detectedAt: Date.now(),
+  };
+}
+
+/**
+ * SIGNAL 11: Throughput Leader
+ * Agent has the highest avgThroughput on the team
+ */
+async function detectThroughputLeader(agentName: string): Promise<DetectedSignal | null> {
+  try {
+    const response = await fetch('http://localhost:4501/api/metrics/team', {
+      headers: { 'X-Internal-Request': 'true' },
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    const metrics: Array<{ agentId: string; avgThroughput: number }> = data.metrics || [];
+
+    if (metrics.length === 0) return null;
+
+    const sorted = [...metrics].sort((a, b) => (b.avgThroughput ?? 0) - (a.avgThroughput ?? 0));
+    const top = sorted[0];
+    if (!top || (top.avgThroughput ?? 0) <= 0) return null;
+
+    // Match by agentId or name (case-insensitive)
+    const isTopAgent = top.agentId === agentName ||
+      top.agentId.toLowerCase() === agentName.toLowerCase();
+    if (!isTopAgent) return null;
+
+    const teamAvg = metrics.reduce((sum, m) => sum + (m.avgThroughput ?? 0), 0) / metrics.length;
+    const roundedTop = Math.round(top.avgThroughput * 100) / 100;
+    const roundedAvg = Math.round(teamAvg * 100) / 100;
+
+    return {
+      id: signalId('throughput-leader', agentName, 'leader'),
+      agentId: agentName,
+      agentName,
+      type: 'kudos',
+      values: ['autonomy'],
+      note: `${agentName} leads the team in throughput at ${roundedTop}/hr`,
+      evidence: `team average: ${roundedAvg}/hr`,
+      detectedAt: Date.now(),
+    };
+  } catch (err) {
+    console.warn('[signal-detector] Throughput leader fetch failed:', err);
+    return null;
+  }
+}
+
+/**
+ * SIGNAL 12: Fastest Version
+ * Agent shipped current project version faster than any prior version
+ */
+function detectFastestVersion(tasks: Task[], agentName: string, projects: Project[]): DetectedSignal | null {
+  const devOwnedProjects = projects.filter(p => p.devOwner === agentName && p.currentVersion);
+
+  for (const project of devOwnedProjects) {
+    const currentVersion = project.currentVersion!;
+    const projectTasks = tasks.filter(t => t.projectId === project.id && !t.isArchived && t.version);
+
+    const byVersion: Record<string, Task[]> = {};
+    for (const task of projectTasks) {
+      const v = task.version!;
+      if (!byVersion[v]) byVersion[v] = [];
+      byVersion[v].push(task);
+    }
+
+    const currentTasks = byVersion[currentVersion] || [];
+    if (currentTasks.length === 0) continue;
+    if (!currentTasks.every(t => t.status === 'done')) continue;
+
+    const currentDuration = getVersionDuration(currentTasks);
+    if (!currentDuration) continue;
+
+    const priorDurations = Object.entries(byVersion)
+      .filter(([v, vTasks]) => v !== currentVersion && vTasks.every(t => t.status === 'done'))
+      .map(([, vTasks]) => getVersionDuration(vTasks))
+      .filter((d): d is number => d !== null);
+
+    if (priorDurations.length === 0) continue;
+
+    const bestPrior = Math.min(...priorDurations);
+    if (currentDuration >= bestPrior) continue;
+
+    return {
+      id: signalId('fastest-version', agentName, `${project.id}:${currentVersion}`),
+      agentId: agentName,
+      agentName,
+      type: 'kudos',
+      values: ['autonomy', 'curiosity'],
+      note: `${agentName} shipped ${currentVersion} in ${formatDuration(currentDuration)} — fastest version yet for ${project.name}`,
+      evidence: `${formatDuration(currentDuration)} vs prior best of ${formatDuration(bestPrior)}`,
+      projectId: project.id,
+      detectedAt: Date.now(),
+    };
+  }
+
+  return null;
+}
+
+/**
  * SIGNAL 7: Scope Creep
  * Agent created 3+ new tasks on a project they're not the devOwner of
  * NOTE: Task interface doesn't have 'createdBy', so this signal is disabled
@@ -310,6 +584,21 @@ export async function detectSignals(store: StoreData): Promise<DetectedSignal[]>
 
     const fastDelivery = detectFastDelivery(tasks, agentName);
     if (fastDelivery) signals.push(fastDelivery);
+
+    const milestoneStreak = detectMilestoneStreak(tasks, agentName);
+    if (milestoneStreak) signals.push(milestoneStreak);
+
+    const perfectWeek = detectPerfectWeek(tasks, agentName);
+    if (perfectWeek) signals.push(perfectWeek);
+
+    const highVolumeDay = detectHighVolumeDay(tasks, agentName);
+    if (highVolumeDay) signals.push(highVolumeDay);
+
+    const fastestVersion = detectFastestVersion(tasks, agentName, projects);
+    if (fastestVersion) signals.push(fastestVersion);
+
+    const throughputLeader = await detectThroughputLeader(agentName);
+    if (throughputLeader) signals.push(throughputLeader);
   }
 
   // NEGATIVE SIGNALS: Global scans (filter to registered agents only)
