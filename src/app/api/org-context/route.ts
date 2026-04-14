@@ -112,6 +112,22 @@ export async function GET(request: NextRequest) {
     operatingPrinciples = await generatePrinciples(agentId);
   }
 
+  // Fetch coaching insights for agent (best-effort)
+  let coachingInsights = undefined;
+  if (agentId) {
+    try {
+      const res = await fetch(`${BASE_URL}/api/metrics/coaching-insights?agent=${agentId}`, {
+        headers: INTERNAL_HEADERS,
+      });
+      if (res.ok) {
+        const data = await res.json();
+        coachingInsights = data.insights;
+      }
+    } catch {
+      // silently ignore
+    }
+  }
+
   // Fetch performance metrics (best-effort, won't fail if unavailable)
   const { teamPerformance, agentPerformance } = await fetchMetrics(agentId || undefined);
 
@@ -122,6 +138,7 @@ export async function GET(request: NextRequest) {
     operatingPrinciples,
     agentPerformance,
     teamPerformance,
+    coachingInsights,
   };
 
   // JSON format — structured data for programmatic consumption

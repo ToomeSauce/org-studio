@@ -7,6 +7,7 @@ import TeamHealthSection from '@/components/TeamHealthSection';
 import QualityScorecardSection from '@/components/QualityScorecardSection';
 import CulturalAlignmentSection from '@/components/CulturalAlignmentSection';
 import AgentComparisonSection from '@/components/AgentComparisonSection';
+import { CoachingInsight } from '@/lib/coaching-insights';
 
 interface Teammate {
   agentId?: string;
@@ -38,6 +39,8 @@ export default function PerformancePage() {
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [agentMetrics, setAgentMetrics] = useState<any[]>([]);
   const [agentLoading, setAgentLoading] = useState(false);
+  const [coachingInsights, setCoachingInsights] = useState<CoachingInsight[] | null>(null);
+  const [coachingLoading, setCoachingLoading] = useState(false);
   const [selectedProject, setSelectedProject] = useState<string>('all');
   const [versionData, setVersionData] = useState<any[]>([]);
 
@@ -54,6 +57,7 @@ export default function PerformancePage() {
   useEffect(() => {
     if (!selectedAgent) {
       setAgentMetrics([]);
+      setCoachingInsights(null);
       return;
     }
     setAgentLoading(true);
@@ -64,6 +68,17 @@ export default function PerformancePage() {
         setAgentLoading(false);
       })
       .catch(() => setAgentLoading(false));
+
+    // Fetch coaching insights
+    setCoachingLoading(true);
+    setCoachingInsights(null);
+    fetch(`/api/metrics/coaching-insights?agent=${selectedAgent}`)
+      .then(res => res.json())
+      .then(data => {
+        setCoachingInsights(data.insights || []);
+        setCoachingLoading(false);
+      })
+      .catch(() => setCoachingLoading(false));
   }, [selectedAgent]);
 
   const teammates: Teammate[] = storeData?.settings?.teammates || [];
@@ -364,6 +379,13 @@ export default function PerformancePage() {
                 />
               </div>
             )}
+
+            {/* Coaching Insights */}
+            <CoachingInsightsPanel
+              agentName={teammateMap[selectedAgent]?.name || selectedAgent}
+              insights={coachingInsights}
+              loading={coachingLoading}
+            />
           </div>
         )}
       </div>
@@ -524,6 +546,88 @@ function TrendChart({
           {data[data.length - 1]?.label || ''}
         </span>
       </div>
+    </div>
+  );
+}
+
+function insightIcon(type: CoachingInsight['type']): string {
+  if (type === 'warning') return '⚠️';
+  if (type === 'celebration') return '🎉';
+  if (type === 'improvement') return '📈';
+  return '💡';
+}
+
+function SeverityBar({ severity }: { severity: number }) {
+  return (
+    <div className="flex gap-0.5" title={`Severity: ${severity}/5`}>
+      {Array.from({ length: 5 }).map((_, i) => (
+        <div
+          key={i}
+          className={clsx(
+            'w-2.5 h-2 rounded-sm',
+            i < severity ? 'bg-[var(--text-muted)] opacity-80' : 'bg-[var(--bg-tertiary)]'
+          )}
+        />
+      ))}
+    </div>
+  );
+}
+
+function CoachingInsightsPanel({
+  agentName,
+  insights,
+  loading,
+}: {
+  agentName: string;
+  insights: CoachingInsight[] | null;
+  loading: boolean;
+}) {
+  const borderColor = (type: CoachingInsight['type']) => {
+    if (type === 'warning') return 'border-l-red-400 dark:border-l-red-600';
+    if (type === 'celebration' || type === 'improvement') return 'border-l-green-400 dark:border-l-green-600';
+    return 'border-l-blue-400 dark:border-l-blue-600';
+  };
+
+  const rowBg = (type: CoachingInsight['type']) => {
+    if (type === 'warning') return 'bg-red-50 dark:bg-red-950/20';
+    if (type === 'celebration' || type === 'improvement') return 'bg-green-50 dark:bg-green-950/20';
+    return 'bg-blue-50 dark:bg-blue-950/20';
+  };
+
+  return (
+    <div className="bg-[var(--card)] border border-[var(--border-default)] rounded-[var(--radius-md)] p-5 space-y-3">
+      <h3 className="text-sm font-semibold text-[var(--text-primary)]">
+        📋 Coaching Insights for {agentName}
+      </h3>
+
+      {loading && (
+        <p className="text-sm text-[var(--text-muted)]">Generating insights...</p>
+      )}
+
+      {!loading && insights && insights.length === 0 && (
+        <p className="text-sm text-[var(--text-muted)]">No insights available yet.</p>
+      )}
+
+      {!loading && insights && insights.map((insight, i) => (
+        <div
+          key={i}
+          className={clsx(
+            'flex items-start gap-3 px-4 py-3 rounded-[var(--radius-md)] border-l-4',
+            borderColor(insight.type),
+            rowBg(insight.type)
+          )}
+        >
+          <span className="text-base mt-0.5 shrink-0">{insightIcon(insight.type)}</span>
+          <div className="flex-1 min-w-0">
+            <span className="font-semibold text-sm text-[var(--text-primary)]">{insight.title}</span>
+            <span className="text-sm text-[var(--text-secondary)] ml-2">— {insight.message}</span>
+          </div>
+          <div className="shrink-0 flex flex-col items-end gap-1">
+            <SeverityBar severity={insight.severity} />
+            <span className="text-[10px] text-[var(--text-muted)]">{insight.severity}/5</span>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

@@ -3,6 +3,7 @@
 
 import { Teammate } from './teammates';
 import { OperatingPrinciple } from './principles-generator';
+import { CoachingInsight } from './coaching-insights';
 
 export interface AgentPerformance {
   totalCompleted: number;
@@ -30,6 +31,7 @@ interface OrgContext {
   operatingPrinciples?: OperatingPrinciple[];
   agentPerformance?: AgentPerformance;
   teamPerformance?: TeamPerformance;
+  coachingInsights?: CoachingInsight[];
 }
 
 export function generateOrgMd(ctx: OrgContext, forAgentId?: string): string {
@@ -116,16 +118,29 @@ export function generateOrgMd(ctx: OrgContext, forAgentId?: string): string {
       lines.push('');
     }
 
-    // Generate one insight line
-    let insight = 'Your metrics are in line with team averages.';
-    if (ap.avgFirstPass != null && ap.avgFirstPass < tp.avgFirstPass - 0.05) {
-      insight = `Your first-pass rate (${agentFirstPassStr}) is below team average (${teamFirstPassStr}) — ${ap.totalBounces} bounces. Focus on getting tasks right on the first attempt.`;
-    } else if (ap.avgThroughput != null && ap.avgThroughput > tp.avgThroughput * 1.5) {
-      insight = `Strong throughput (${agentThroughputStr}) — well above team average (${teamThroughputStr}). Keep it up.`;
-    } else if (ap.avgThroughput != null && ap.avgThroughput < tp.avgThroughput * 0.7) {
-      insight = `Your throughput (${agentThroughputStr}) is below team average (${teamThroughputStr}). Look for ways to move faster.`;
+    // Coaching insights section (from pattern detectors)
+    if (ctx.coachingInsights && ctx.coachingInsights.length > 0) {
+      lines.push('**Coaching:**');
+      const top3 = ctx.coachingInsights.slice(0, 3);
+      for (const insight of top3) {
+        let icon = '💡';
+        if (insight.type === 'warning') icon = '⚠️';
+        else if (insight.type === 'celebration') icon = '🎉';
+        else if (insight.type === 'improvement') icon = '📈';
+        lines.push(`- ${icon} ${insight.title}: ${insight.message} (severity: ${insight.severity})`);
+      }
+    } else {
+      // Fallback: single static insight line
+      let insight = 'Your metrics are in line with team averages.';
+      if (ap.avgFirstPass != null && ap.avgFirstPass < tp.avgFirstPass - 0.05) {
+        insight = `Your first-pass rate (${agentFirstPassStr}) is below team average (${teamFirstPassStr}) — ${ap.totalBounces} bounces. Focus on getting tasks right on the first attempt.`;
+      } else if (ap.avgThroughput != null && ap.avgThroughput > tp.avgThroughput * 1.5) {
+        insight = `Strong throughput (${agentThroughputStr}) — well above team average (${teamThroughputStr}). Keep it up.`;
+      } else if (ap.avgThroughput != null && ap.avgThroughput < tp.avgThroughput * 0.7) {
+        insight = `Your throughput (${agentThroughputStr}) is below team average (${teamThroughputStr}). Look for ways to move faster.`;
+      }
+      lines.push(`**Insight:** ${insight}`);
     }
-    lines.push(`**Insight:** ${insight}`);
     lines.push('');
   } else if (!forAgentId && ctx.teamPerformance) {
     const tp = ctx.teamPerformance;
