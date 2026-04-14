@@ -7,6 +7,7 @@ import TeamHealthSection from '@/components/TeamHealthSection';
 import QualityScorecardSection from '@/components/QualityScorecardSection';
 import CulturalAlignmentSection from '@/components/CulturalAlignmentSection';
 import AgentComparisonSection from '@/components/AgentComparisonSection';
+import WeeklyDigestSection from '@/components/WeeklyDigestSection';
 import { CoachingInsight } from '@/lib/coaching-insights';
 
 interface Teammate {
@@ -178,6 +179,9 @@ export default function PerformancePage() {
           <h1 className="text-3xl font-bold text-[var(--text-primary)]">Performance</h1>
           <p className="text-sm text-[var(--text-muted)] mt-1">Agent delivery metrics</p>
         </div>
+
+        {/* Weekly Digest */}
+        <WeeklyDigestSection />
 
         {/* Team Health Section */}
         <TeamHealthSection />
