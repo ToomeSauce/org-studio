@@ -544,6 +544,16 @@ export async function POST(req: NextRequest) {
                   } catch (e: any) {
                     console.error(`[Vision Autonomy] Auto-launch failed:`, e?.message);
                   }
+                } else {
+                  // No next version to auto-launch — auto-pause the project
+                  // This ensures the UI shows "Launch" instead of "Pause",
+                  // accurately reflecting that no work is flowing.
+                  console.log(`[Vision Autonomy] No next version to auto-launch for ${versionCompletionTriggered.projectId} — auto-pausing project`);
+                  versionCompletionTriggered.project.autonomy.autoAdvance = false;
+                  await getStoreProvider().updateProject(versionCompletionTriggered.projectId, {
+                    currentVersion: null,
+                    autonomy: versionCompletionTriggered.project.autonomy,
+                  });
                 }
               }
             } catch (e) {
