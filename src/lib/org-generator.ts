@@ -4,11 +4,32 @@
 import { Teammate } from './teammates';
 import { OperatingPrinciple } from './principles-generator';
 
+export interface AgentPerformance {
+  totalCompleted: number;
+  totalBounces: number;
+  avgThroughput: number | null;
+  avgFirstPass: number | null;
+  avgChainRate: number | null;
+  activeDays: number;
+  recentDays: { date: string; completed: number; throughput: number | null; firstPassRate: number | null }[];
+}
+
+export interface TeamPerformance {
+  totalCompleted: number;
+  avgThroughput: number;
+  avgFirstPass: number;
+  totalBounces: number;
+  agentCount: number;
+  avgActiveDays: number;
+}
+
 interface OrgContext {
   missionStatement: string;
   values?: { name: string; items: { letter: string; icon: string; title: string; description: string }[] };
   teammates: Teammate[];
   operatingPrinciples?: OperatingPrinciple[];
+  agentPerformance?: AgentPerformance;
+  teamPerformance?: TeamPerformance;
 }
 
 export function generateOrgMd(ctx: OrgContext, forAgentId?: string): string {
@@ -56,6 +77,68 @@ export function generateOrgMd(ctx: OrgContext, forAgentId?: string): string {
       }
       lines.push('');
     }
+  }
+
+  // Performance section
+  if (forAgentId && ctx.agentPerformance && ctx.teamPerformance) {
+    const ap = ctx.agentPerformance;
+    const tp = ctx.teamPerformance;
+
+    lines.push('## Performance');
+    lines.push('> Your delivery metrics. Use these to self-assess and improve.');
+    lines.push('');
+
+    const agentThroughputStr = ap.avgThroughput != null ? `${ap.avgThroughput.toFixed(1)}/hr` : 'N/A';
+    const teamThroughputStr = `${tp.avgThroughput.toFixed(1)}/hr`;
+    const agentFirstPassStr = ap.avgFirstPass != null ? `${Math.round(ap.avgFirstPass * 100)}%` : 'N/A';
+    const teamFirstPassStr = `${Math.round(tp.avgFirstPass * 100)}%`;
+    const teamAvgBounces = (tp.totalBounces / tp.agentCount).toFixed(1);
+    const teamAvgDays = tp.avgActiveDays.toFixed(1);
+
+    lines.push('| Metric | You | Team Avg |');
+    lines.push('|--------|-----|----------|');
+    lines.push(`| Tasks Completed | ${ap.totalCompleted} | ${(tp.totalCompleted / tp.agentCount).toFixed(1)} |`);
+    lines.push(`| Throughput | ${agentThroughputStr} | ${teamThroughputStr} |`);
+    lines.push(`| First Pass Rate | ${agentFirstPassStr} | ${teamFirstPassStr} |`);
+    lines.push(`| Bounce Count | ${ap.totalBounces} | ${teamAvgBounces} |`);
+    lines.push(`| Active Days | ${ap.activeDays} | ${teamAvgDays} |`);
+    lines.push('');
+
+    if (ap.recentDays.length > 0) {
+      lines.push('**Recent 7-Day Trend:**');
+      for (const day of ap.recentDays.slice(0, 7)) {
+        const date = new Date(day.date);
+        const label = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        const thr = day.throughput != null ? `${day.throughput.toFixed(1)}/hr throughput` : 'N/A throughput';
+        const fpr = day.firstPassRate != null ? `, ${Math.round(day.firstPassRate * 100)}% first-pass` : '';
+        lines.push(`- ${label}: ${day.completed} tasks, ${thr}${fpr}`);
+      }
+      lines.push('');
+    }
+
+    // Generate one insight line
+    let insight = 'Your metrics are in line with team averages.';
+    if (ap.avgFirstPass != null && ap.avgFirstPass < tp.avgFirstPass - 0.05) {
+      insight = `Your first-pass rate (${agentFirstPassStr}) is below team average (${teamFirstPassStr}) — ${ap.totalBounces} bounces. Focus on getting tasks right on the first attempt.`;
+    } else if (ap.avgThroughput != null && ap.avgThroughput > tp.avgThroughput * 1.5) {
+      insight = `Strong throughput (${agentThroughputStr}) — well above team average (${teamThroughputStr}). Keep it up.`;
+    } else if (ap.avgThroughput != null && ap.avgThroughput < tp.avgThroughput * 0.7) {
+      insight = `Your throughput (${agentThroughputStr}) is below team average (${teamThroughputStr}). Look for ways to move faster.`;
+    }
+    lines.push(`**Insight:** ${insight}`);
+    lines.push('');
+  } else if (!forAgentId && ctx.teamPerformance) {
+    const tp = ctx.teamPerformance;
+
+    lines.push('## Team Performance');
+    lines.push('> Aggregate delivery metrics across the team.');
+    lines.push('');
+    lines.push(`- **Total Tasks Completed:** ${tp.totalCompleted}`);
+    lines.push(`- **Team Avg Throughput:** ${tp.avgThroughput.toFixed(1)}/hr`);
+    lines.push(`- **Team Avg First Pass:** ${Math.round(tp.avgFirstPass * 100)}%`);
+    lines.push(`- **Total Bounces:** ${tp.totalBounces}`);
+    lines.push(`- **Active Agents:** ${tp.agentCount}`);
+    lines.push('');
   }
 
   // Your Domain (agent-specific section)
