@@ -156,10 +156,11 @@ export async function POST(
           return NextResponse.json({ action: 'deleted', version });
         } else if (action === 'reorder') {
           // Update sort_order for each version in the order array
+          // sort_order ASC = first in array appears first
           for (let i = 0; i < order.length; i++) {
             await client.query(
               'UPDATE org_studio_roadmap_versions SET sort_order = $1 WHERE project_id = $2 AND version = $3',
-              [order.length - i, projectId, order[i]]
+              [i + 1, projectId, order[i]]
             );
           }
 
@@ -252,7 +253,7 @@ function handleFileBasedRoadmap(
         data.versions.push(newVersion);
       }
 
-      data.versions.sort((a: any, b: any) => b.sort_order - a.sort_order);
+      data.versions.sort((a: any, b: any) => (a.sort_order ?? parseFloat(a.version)) - (b.sort_order ?? parseFloat(b.version)));
       fs.writeFileSync(roadmapPath, JSON.stringify(data, null, 2));
 
       return NextResponse.json({ action: 'upserted', version });
@@ -265,7 +266,11 @@ function handleFileBasedRoadmap(
     } else if (action === 'reorder') {
       const { order } = payload;
       const versionMap = new Map(data.versions.map((v: any) => [v.version, v]));
-      data.versions = order.map((v: string) => versionMap.get(v)).filter(Boolean);
+      data.versions = order.map((v: string, i: number) => {
+        const ver: any = versionMap.get(v);
+        if (ver) ver.sort_order = i + 1;
+        return ver;
+      }).filter(Boolean);
 
       fs.writeFileSync(roadmapPath, JSON.stringify(data, null, 2));
 
