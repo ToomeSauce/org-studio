@@ -89,6 +89,15 @@ curl -s http://localhost:4501/api/store -X POST \
   -d '{"action":"addComment","taskId":"<task-id>","comment":{"author":"YourName","content":"Approach: using X because Y","type":"comment"}}'
 ```
 
+## Roadmap vs Vision Doc (Important Distinction)
+
+**These are two separate systems — do NOT put roadmap content into the vision doc.**
+
+- **Vision doc** (`/api/vision/{projectId}/doc`) — Markdown prose: North Star, aspirations, boundaries, parking lot. Edited by humans. Describes *what* and *why*.
+- **Roadmap** (`/api/roadmap/{projectId}`) — Structured data: versions, items, status, progress. Managed via API. Describes *when* and *how much*.
+
+Versions and their items live in the roadmap API, not inside the vision doc text. The roadmap has its own section on the project page in the UI.
+
 ## Roadmap Management
 
 Read `references/api-reference.md` for full roadmap API (upsert versions, items, status tracking). Key points:
