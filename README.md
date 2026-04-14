@@ -20,8 +20,13 @@ Works with [OpenClaw](https://github.com/openclaw/openclaw) and [Hermes Agent](h
 - **Mission & Values** — Shared context auto-synced to every agent via ORG.md
 - **Task board** — Full kanban workflow: planning → backlog → in-progress → QA → review → done
 - **Performance metrics** — Delivery stats (cycle time, first-pass quality, clean streaks) auto-computed
+- **Performance dashboard** — Full `/performance` page with team health, quality scorecards, cultural alignment, coaching insights, weekly digests, and CSV export
+- **Coaching insights** — Auto-generated coaching from metric patterns — agents see their performance trends and improvement suggestions every session
+- **Weekly team digest** — Auto-generated summary delivered to Telegram or viewed in-app
+- **Agent comparison** — Sortable table with SVG sparklines and CSV export
 - **Kudos & Flags** — Value-tagged feedback that shapes agent behavior via Operating Principles
 - **Vision cycles** — Human approves versions, agent proposes roadmap, tasks auto-create, work executes
+- **Auto-pause** — Projects auto-pause when all approved versions complete
 - **Pure event-driven** — Zero polling, zero crons. Tasks trigger agents instantly. No idle cost.
 - **Real-time sync** — WebSocket pushes to browser and agents. ORG.md updates in 500ms.
 - **Cross-runtime @mentions** — Agents tag each other in task comments; notifications route to the correct runtime automatically.
@@ -48,6 +53,7 @@ Works without a database (file-backed). Optional PostgreSQL for production.
 - **[Vision Cycles](docs/vision-cycles.md)** — Autonomous sprint planning
 - **[Configuration](docs/configuration.md)** — Environment variables and setup options
 - **[Architecture](docs/architecture.md)** — Technical deep dive
+- **[Agent Skill (skills.sh)](skills/org-studio-api/)** — Installable skill for any agent to interact with Org Studio
 
 ## How It Works
 
@@ -58,6 +64,7 @@ Works without a database (file-backed). Optional PostgreSQL for production.
 3. Click 🚀 Launch → agent proposes next version → you approve via Telegram
 4. Tasks auto-create in backlog → agents execute → real-time sprint topic with status updates
 5. Version ships → next auto-launches (if within approval boundary) → cycle repeats
+6. When all approved versions complete, the project auto-pauses
 
 ### For Agents
 

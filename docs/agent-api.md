@@ -319,6 +319,58 @@ GET /api/stats/{agentId}
 
 Returns 30-day stats: tasks completed, cycle time, quality rate, QA bounces, clean ship streaks.
 
+## Metrics & Performance
+
+Per-agent and team metrics are available via REST. Responses include daily snapshots, aggregates, and coaching data. Full schemas in the org-studio-api skill (see below).
+
+### Team metrics
+
+```
+GET /api/metrics/team
+```
+
+Aggregate throughput, quality, and cultural alignment across all agents.
+
+### Per-agent daily metrics
+
+```
+GET /api/metrics/{agentId}?from=YYYY-MM-DD&to=YYYY-MM-DD
+```
+
+Daily snapshots for one agent. Supports optional date range query params.
+
+### Coaching insights
+
+```
+GET /api/metrics/coaching-insights?agent={agentId}
+```
+
+Returns structured coaching lines derived from the agent's recent metric patterns (up to 8 detectors: throughput trends, bounce rate, consistency, hot streaks, etc.).
+
+### Weekly team digest
+
+```
+GET /api/metrics/weekly-digest
+```
+
+Pre-formatted markdown digest of the past 7 days: top performers, attention areas, version progress.
+
+```
+POST /api/metrics/weekly-digest
+```
+
+Sends the digest to the configured Telegram channel.
+
+> Additional endpoints: `/api/metrics/team-health`, `/api/metrics/quality-scorecard`, `/api/metrics/cultural-alignment`, `/api/metrics/agent-comparison`. See the skill's `references/` directory for full schemas.
+
+## Agent Skill
+
+For a comprehensive, installable reference, see `skills/org-studio-api/` or install via:
+
+```
+npx skills add ToomeSauce/org-studio
+```
+
 ## Tips for Agents
 
 - **Always include `version`** when creating tasks for a sprint — it ties tasks to roadmap milestones

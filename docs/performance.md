@@ -34,6 +34,11 @@ The system watches agent behavior and auto-detects signals:
 - **Clean Sprint** — version shipped with zero QA bounces
 - **Going Dark** — task stalled 4+ hours with no updates
 - **Repeated Bounces** — quality pattern needs attention
+- **Milestone Streak** — 10+ consecutive tasks completed without a bounce
+- **Perfect Week** — 5+ tasks completed with zero bounces in a 7-day window
+- **High-Volume Day** — 10+ tasks completed in a single day
+- **Throughput Leader** — highest task throughput on the team for the period
+- **Fastest Version** — shipped a version faster than the agent's prior average
 
 Signals are auto-confirmed by default — no manual review needed. The system creates kudos and flags as it detects them. If you prefer to review before confirming, set `autoConfirmSignals: false` in Settings.
 
@@ -120,6 +125,64 @@ Computed automatically from task data:
 - **QA bounces** — reliability
 
 Visible on agent cards in the Team page.
+
+## Performance Dashboard (`/performance`)
+
+A dedicated dashboard for reviewing team and agent performance across multiple dimensions:
+
+- **Weekly Digest** — Team summary, top performers, attention areas, and version progress for the past 7 days
+- **Team Health** — Velocity trend, activity heatmap, stalls, and review bottlenecks
+- **Quality Scorecard** — First-pass rate, reviewNotes coverage, testPlan adoption, and clean streaks
+- **Cultural Alignment** — PACT values breakdown, agent×value heatmap, timeline of kudos/flags, and auto-generated principles
+- **Agent Comparison** — Sortable table with SVG sparklines and CSV export
+- **Agent Cards** — Per-agent drill-down with daily trend charts and a coaching insights panel
+- **Version Velocity** — Delivery speed table with project filter
+
+Access at `http://localhost:4501/performance`.
+
+## Metrics APIs
+
+Per-agent and team-level metrics are available via REST. Full schemas and examples in [agent-api.md](agent-api.md) and the org-studio-api skill.
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/metrics/team` | Aggregate metrics across all agents |
+| `GET /api/metrics/{agentId}` | Daily metric snapshots for one agent (supports `?from=&to=` date range) |
+| `GET /api/metrics/team-health` | Velocity trends, stalls, review bottlenecks |
+| `GET /api/metrics/quality-scorecard` | First-pass rates, reviewNotes/testPlan coverage |
+| `GET /api/metrics/cultural-alignment` | PACT breakdown, agent×value heatmap |
+| `GET /api/metrics/agent-comparison` | Sortable comparison table data |
+| `GET /api/metrics/coaching-insights?agent=X` | Coaching insights for a specific agent |
+| `GET /api/metrics/weekly-digest` | Pre-formatted weekly team digest |
+| `POST /api/metrics/weekly-digest` | Send weekly digest to Telegram |
+
+## Coaching Insights
+
+The coaching engine (`coaching-insights.ts`) analyzes each agent's recent metric history and generates actionable suggestions. Eight pattern detectors run on every ORG.md sync:
+
+1. **Declining Throughput** — tasks/day dropping over the past week
+2. **Rising Bounces** — QA bounce rate increasing
+3. **Comment Activity** — low engagement in task comments (possible isolation)
+4. **Consistency Gap** — high variance in daily output (feast-or-famine pattern)
+5. **Hot Streak** — sustained high throughput (positive reinforcement)
+6. **Review Bottleneck** — tasks piling up in review without approval
+7. **Stall Pattern** — recurring long gaps between task start and completion
+8. **Quality Improvement** — bounce rate declining (positive reinforcement)
+
+Insights surface in two places:
+- **ORG.md** — A `## Performance` section injected at every session start, containing a You vs Team Avg table, 7-day trend, and 2-3 coaching lines
+- **Dashboard** — Agent card drill-down panel shows the same insights with sparkline charts
+
+## Weekly Team Digest
+
+A pre-formatted markdown summary generated from the past 7 days of team activity:
+
+- Overall team throughput and velocity trend
+- Top performers by tasks completed
+- Agents needing attention (stalls, rising bounces)
+- Version progress across all active projects
+
+The digest is available at `GET /api/metrics/weekly-digest`. Send it to Telegram via `POST /api/metrics/weekly-digest` (uses the configured bot token). It can also be viewed inline on the Performance Dashboard.
 
 ## The Informed Captain Model
 

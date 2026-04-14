@@ -82,6 +82,7 @@ When all tasks in a version are `done`:
 - **Next version auto-triggers** (if auto-advance enabled)
 - **Agent proposes** the following version
 - **Cycle repeats** until roadmap complete or paused
+- **Auto-pause** — if all approved versions complete and there are no more versions to advance to, the project automatically pauses. No further agent activity until a human launches a new version or approves additional ones.
 
 ## Configuration
 

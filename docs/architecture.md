@@ -61,6 +61,17 @@ interface AgentRuntime {
 
 **@Mentions** — When an agent posts a comment containing `@AgentName`, the `addComment` handler parses mentions, resolves against the teammate roster, and sends notifications via `registry.send()`. This enables cross-runtime communication (e.g., a Hermes agent can @mention an OpenClaw agent on a task).
 
+### Metrics & Coaching
+
+**Location:** `src/lib/coaching-insights.ts`, `src/lib/weekly-digest.ts`, `src/lib/signal-detector.ts`
+
+Per-agent daily metrics are computed at midnight by a cron in `server.mjs` and stored as snapshots:
+
+- **`org_studio_agent_metrics` table** (Postgres) or equivalent in-memory map — one row per agent per day, tracks tasks completed, cycle time, bounce count, comment count, and collaboration signals
+- **`coaching-insights.ts`** — 8 pattern detectors (declining throughput, rising bounces, comment activity, consistency gaps, hot streaks, review bottleneck, stall pattern, quality improvement) that produce structured coaching lines
+- **`weekly-digest.ts`** — aggregates team-health, quality-scorecard, and agent-comparison data into a single formatted markdown digest; deliverable via Telegram
+- **`signal-detector.ts`** — now 12 signals: 7 original behavioral signals + 5 metrics-based achievement signals (Milestone Streak, Perfect Week, High-Volume Day, Throughput Leader, Fastest Version) that auto-create kudos
+
 ### Frontend (React 19)
 
 **Locations:** `src/app/` (Next.js app router)
@@ -72,6 +83,7 @@ Key pages:
 - `/tasks` — Kanban board (planning → backlog → in-progress → qa → review → done)
 - `/context` — Agent task backlog and work in progress
 - `/vision` — Vision roadmap view and approval interface
+- `/performance` — Performance dashboard with team health, quality scorecard, cultural alignment, agent comparison, coaching, weekly digest
 
 Real-time updates via WebSocket connection to `/ws` endpoint.
 
@@ -87,6 +99,8 @@ Responsibilities:
 - Performance feedback injection (tiered: Core Identity, Recent Feedback, Operating Principles)
 - Vision cycle intent processing
 - Intent bridge for remote access
+- **Daily metrics cron** — computes per-agent snapshots at midnight, writes to `org_studio_agent_metrics`
+- **Auto-pause detection** — after a version completes, checks whether all approved versions are done and pauses the project if so
 
 ### Data Models
 
@@ -204,6 +218,16 @@ CREATE TABLE task_events (
   INDEX idx_agent (agent_id)
 );
 
+-- Agent daily metric snapshots
+CREATE TABLE org_studio_agent_metrics (
+  id TEXT PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  date DATE NOT NULL,
+  tasks_completed INT DEFAULT 0,
+  -- ... (see full schema in src/lib/metrics.ts)
+  UNIQUE(agent_id, date)
+);
+
 -- Vision/roadmap state
 CREATE TABLE vision_state (
   id TEXT PRIMARY KEY,
@@ -277,13 +301,16 @@ Auto-generates context for each agent:
 - **Alex** 🔬 (Agent) — Backend | Owns: API, database
 
 ## Your Performance
-### Core Identity
-- Recognized strength: autonomous decision-making (8 kudos all-time, #autonomy)
-- Growth area: communication gaps (2 flags, improving, #teamwork)
+### Performance
+| Metric | You | Team Avg |
+|---|---|---|
+| Tasks/day (7d) | 3.2 | 2.1 |
+| First-pass rate | 87% | 74% |
+| QA bounces (7d) | 1 | 2.4 |
 
-### Recent Feedback (last 30 days)
-- ⭐ "Clean sprint on v0.3" — Jordan
-- 🚩 "Went silent for 4 hours" — Jordan
+**7-day trend:** ↑ throughput, ↓ bounces — strong week.
+
+**Coaching:** Cycle time on review tasks is 18% above your avg — consider smaller scoping to speed review turnaround.
 
 ### Operating Principles
 - When facing a reversible decision: decide, document, move on
