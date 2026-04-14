@@ -1771,12 +1771,23 @@ async function computeDailyMetrics(targetDate) {
       let kudosCount = 0;
       let flagCount = 0;
       try {
+        // Try both agentId (e.g. hermes-gem) and name (e.g. Gem) since kudos may be stored under either
         const kudosRes = await fetch(`http://127.0.0.1:${port}/api/kudos?agentId=${agentId}&limit=100`);
+        const kudosRes2 = agent.name && agent.name.toLowerCase() !== agentIdLower
+          ? await fetch(`http://127.0.0.1:${port}/api/kudos?agentId=${encodeURIComponent(agent.name)}&limit=100`)
+          : null;
         if (kudosRes.ok) {
           const kudosData = await kudosRes.json();
-          const allKudos = kudosData.kudos || [];
+          const kudosData2 = kudosRes2?.ok ? await kudosRes2.json() : { kudos: [] };
+          // Merge and deduplicate by id
+          const kudosMap = new Map();
+          for (const k of [...(kudosData.kudos || []), ...(kudosData2.kudos || [])]) {
+            if (!kudosMap.has(k.id)) kudosMap.set(k.id, k);
+          }
+          const allKudos = Array.from(kudosMap.values());
           for (const k of allKudos) {
-            const ts = new Date(k.createdAt || k.created_at).getTime();
+            const rawTs = k.createdAt || k.created_at;
+            const ts = typeof rawTs === 'number' ? rawTs : (typeof rawTs === 'string' ? (Number(rawTs) || new Date(rawTs).getTime()) : NaN);
             if (ts >= dayStart && ts < dayEnd) {
               if (k.type === 'kudos') kudosCount++;
               if (k.type === 'flag') flagCount++;
@@ -1785,8 +1796,8 @@ async function computeDailyMetrics(targetDate) {
         }
       } catch {} // best-effort
 
-      // Skip agents with zero activity
-      if (tasksCompleted === 0 && tasksStarted === 0 && commentsPosted === 0) continue;
+      // Skip agents with zero activity (but keep if they received kudos/flags)
+      if (tasksCompleted === 0 && tasksStarted === 0 && commentsPosted === 0 && kudosCount === 0 && flagCount === 0) continue;
 
       // --- Upsert ---
       const metrics = {
