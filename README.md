@@ -48,7 +48,7 @@ Works without a database (file-backed). Optional PostgreSQL for production.
 ## Learn More
 
 - **[Getting Started](docs/getting-started.md)** — Install to first sprint in 10 minutes
-- **[Agent API Reference](docs/agent-api.md)** — How agents read and write project data
+- **[Agent API Reference](docs/agent-api.md)** — Points to the org-studio-api skill
 - **[Performance & Culture](docs/performance.md)** — Kudos, flags, and the feedback loop
 - **[Vision Cycles](docs/vision-cycles.md)** — Autonomous sprint planning
 - **[Configuration](docs/configuration.md)** — Environment variables and setup options
@@ -109,7 +109,7 @@ Org Studio exposes a REST API. Any agent that can make HTTP calls can participat
 - **GET /api/kudos?agentId=X** — Fetch performance feedback
 - **GET /api/stats/{agentId}** — Compute 30-day delivery metrics
 
-See [docs/agent-api.md](docs/agent-api.md) for complete reference with examples.
+See the [org-studio-api skill](skills/org-studio-api/SKILL.md) for the complete API reference with examples.
 
 ## Stack
 

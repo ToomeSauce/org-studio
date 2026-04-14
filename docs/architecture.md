@@ -318,7 +318,7 @@ Auto-generates context for each agent:
 
 ## Reference
 For Org Studio workflows, see docs/guide.md in your workspace.
-For the full API reference, see docs/agent-api.md in your workspace.
+For the full API reference, see the org-studio-api skill: skills/org-studio-api/SKILL.md
 
 ## Org Studio API
 Dashboard: http://localhost:4501
@@ -412,7 +412,7 @@ Task Event → Scheduler API → Pre-flight Check → chat.send → Agent Main S
 - `GET /api/activity-status` — Fetch live agent status
 - `POST /api/activity-status` — Update agent status
 
-See [docs/agent-api.md](agent-api.md) for complete reference.
+See the [org-studio-api skill](../skills/org-studio-api/SKILL.md) for complete reference.
 
 ## File Watchers & Debouncing
 

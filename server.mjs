@@ -240,7 +240,7 @@ function generateOrgMd(store, forAgentId) {
 
   lines.push('## Reference');
   lines.push('For Org Studio workflows and usage, see docs/guide.md in your workspace.');
-  lines.push('For the full API reference, see docs/agent-api.md in your workspace.');
+  lines.push('For the full API reference, see the org-studio-api skill: skills/org-studio-api/SKILL.md');
   lines.push('');
 
   // API quick reference — so agents can interact with Org Studio immediately
@@ -340,12 +340,15 @@ function syncOrgFiles(store) {
   const agents = teammates.filter(t => !t.isHuman && t.agentId);
   let synced = 0;
 
-  // Copy docs/guide.md and docs/agent-api.md to each workspace if they exist
+  // Copy docs/guide.md and skills/org-studio-api/ to each workspace if they exist
   const guideSrc = join(process.cwd(), 'docs', 'guide.md');
   const guideContent = existsSync(guideSrc) ? readFileSync(guideSrc, 'utf-8') : null;
   
-  const apiDocSrc = join(process.cwd(), 'docs', 'agent-api.md');
-  const apiDocContent = existsSync(apiDocSrc) ? readFileSync(apiDocSrc, 'utf-8') : null;
+  // Sync the org-studio-api skill (SKILL.md + references/) as the canonical API reference
+  const skillDir = join(process.cwd(), 'skills', 'org-studio-api');
+  const skillContent = existsSync(join(skillDir, 'SKILL.md')) ? readFileSync(join(skillDir, 'SKILL.md'), 'utf-8') : null;
+  const apiRefContent = existsSync(join(skillDir, 'references', 'api-reference.md')) ? readFileSync(join(skillDir, 'references', 'api-reference.md'), 'utf-8') : null;
+  const metricsRefContent = existsSync(join(skillDir, 'references', 'metrics-reference.md')) ? readFileSync(join(skillDir, 'references', 'metrics-reference.md'), 'utf-8') : null;
 
   for (const agent of agents) {
     const workspaceDir = resolveWorkspaceDir(agent.agentId);
@@ -354,21 +357,25 @@ function syncOrgFiles(store) {
     const content = generateOrgMd(store, agent.agentId);
     try {
       writeFileSync(orgPath, content);
-      // Sync docs/guide.md and docs/agent-api.md alongside ORG.md
-      if (guideContent || apiDocContent) {
+      // Sync docs/guide.md and org-studio-api skill alongside ORG.md
+      if (guideContent || skillContent) {
         const docsDir = join(workspaceDir, 'docs');
         mkdirSync(docsDir, { recursive: true });
         if (guideContent) {
           writeFileSync(join(docsDir, 'guide.md'), guideContent);
         }
-        if (apiDocContent) {
-          writeFileSync(join(docsDir, 'agent-api.md'), apiDocContent);
+        if (skillContent) {
+          const skillOutDir = join(workspaceDir, 'skills', 'org-studio-api', 'references');
+          mkdirSync(skillOutDir, { recursive: true });
+          writeFileSync(join(workspaceDir, 'skills', 'org-studio-api', 'SKILL.md'), skillContent);
+          if (apiRefContent) writeFileSync(join(skillOutDir, 'api-reference.md'), apiRefContent);
+          if (metricsRefContent) writeFileSync(join(skillOutDir, 'metrics-reference.md'), metricsRefContent);
         }
       }
       synced++;
     } catch {}
   }
-  if (synced > 0) console.log(`  ORG.md + docs/guide.md + docs/agent-api.md synced to ${synced} agent workspace(s)`);
+  if (synced > 0) console.log(`  ORG.md + docs/guide.md + skills/org-studio-api synced to ${synced} agent workspace(s)`);
 
   // Async: fetch performance data and append to ORG.md for each agent
   appendPerformanceToOrgFiles(agents).catch(e => {

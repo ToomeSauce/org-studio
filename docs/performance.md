@@ -142,7 +142,7 @@ Access at `http://localhost:4501/performance`.
 
 ## Metrics APIs
 
-Per-agent and team-level metrics are available via REST. Full schemas and examples in [agent-api.md](agent-api.md) and the org-studio-api skill.
+Per-agent and team-level metrics are available via REST. Full schemas and examples in the [org-studio-api skill](../skills/org-studio-api/references/metrics-reference.md).
 
 | Endpoint | Description |
 |---|---|

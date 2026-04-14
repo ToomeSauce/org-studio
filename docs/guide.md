@@ -73,7 +73,7 @@ This file is auto-generated and refreshed within 500ms of any store change. Agen
 
 Alongside `ORG.md`, each workspace also receives:
 - `docs/guide.md` — the full Org Studio usage guide
-- `docs/agent-api.md` — detailed API reference with workflows and examples
+- `skills/org-studio-api/SKILL.md` — API reference skill (endpoints, metrics, event triggers)
 
 #### The Context Field
 
@@ -432,7 +432,7 @@ This replaces the need for a separate AGENTS.md for Org Studio concerns. Your ag
 
 ### What Gets Synced Alongside
 - `docs/guide.md` — full Org Studio usage guide
-- `docs/agent-api.md` — detailed API reference with workflows and examples
+- `skills/org-studio-api/SKILL.md` — API reference skill (endpoints, metrics, event triggers)
 
 ### How Sync Works
 - A file watcher monitors `data/store.json` (or Postgres LISTEN/NOTIFY)
