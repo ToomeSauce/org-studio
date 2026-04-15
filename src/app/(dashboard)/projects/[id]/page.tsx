@@ -52,6 +52,7 @@ interface RoadmapVersion {
   progress?: { done: number; total: number };
   shipped_at?: number | null;
   sort_order?: number;
+  version_type?: 'outcome' | 'foundation' | 'chore';
 }
 
 // Extract section from markdown
@@ -302,6 +303,14 @@ export default function ProjectDetailPage() {
 
   // Helper: calculate overall outcome completion
   const getOutcomesSummary = () => {
+    // Derive from outcome-type roadmap versions (new model)
+    const outcomeVersions = roadmap.filter(v => (v.version_type || 'outcome') === 'outcome');
+    if (outcomeVersions.length > 0) {
+      const completed = outcomeVersions.filter(v => v.status === 'shipped').length;
+      const percent = Math.round((completed / outcomeVersions.length) * 100);
+      return { total: outcomeVersions.length, completed, percent };
+    }
+    // Fallback to legacy project.outcomes for backward compat
     if (!project.outcomes || project.outcomes.length === 0) {
       return { total: 0, completed: 0, percent: 0 };
     }

@@ -25,6 +25,7 @@ interface RoadmapVersion {
   status: 'shipped' | 'current' | 'future';
   date?: string;
   items: Array<{ text: string; done: boolean }>;
+  version_type?: 'outcome' | 'foundation' | 'chore';
 }
 
 function parseRoadmapVersions(content: string): RoadmapVersion[] {
@@ -200,16 +201,17 @@ function StatusStrip({ project }: { project: ProjectWithVision }) {
       <p className="text-xs text-[var(--text-muted)]">
         {versionText} · {statusText} · {detail}
       </p>
-      {/* Outcomes progress summary */}
+      {/* Outcomes progress summary — shows legacy project.outcomes if available.
+           New outcome tracking derives from outcome-type roadmap versions (not available here without per-project fetches). */}
       {project.outcomes && project.outcomes.length > 0 && (
         <div className="flex flex-col items-center gap-1">
           <span className="text-xs font-semibold text-[var(--text-secondary)]">
-            Outcomes: {project.outcomes.filter(o => o.done).length}/{project.outcomes.length}
+            Outcomes (legacy): {project.outcomes.filter((o: any) => o.done).length}/{project.outcomes.length}
           </span>
           <div className="w-32 h-1.5 bg-[var(--bg-secondary)] rounded-full overflow-hidden">
             <div
               className="h-full bg-[var(--accent)] transition-all duration-300"
-              style={{ width: `${project.outcomes.length > 0 ? Math.round((project.outcomes.filter(o => o.done).length / project.outcomes.length) * 100) : 0}%` }}
+              style={{ width: `${project.outcomes.length > 0 ? Math.round((project.outcomes.filter((o: any) => o.done).length / project.outcomes.length) * 100) : 0}%` }}
             />
           </div>
         </div>

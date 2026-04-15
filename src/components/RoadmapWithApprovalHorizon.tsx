@@ -42,6 +42,7 @@ interface RoadmapVersion {
   progress?: { done: number; total: number };
   shipped_at?: number | null;
   sort_order?: number;
+  version_type?: 'outcome' | 'foundation' | 'chore';
 }
 
 interface Project {
@@ -97,11 +98,13 @@ export function RoadmapWithApprovalHorizon({
     title: string;
     status: 'planned' | 'current' | 'shipped';
     items: RoadmapItem[];
+    version_type: 'outcome' | 'foundation' | 'chore';
   }>({
     version: '',
     title: '',
     status: 'planned',
     items: [],
+    version_type: 'outcome',
   });
 
   const [newForm, setNewForm] = useState({
@@ -150,7 +153,7 @@ export function RoadmapWithApprovalHorizon({
   const currentIdx = sortedVersions.findIndex(v => v.version === currentVersion);
   const currentVersionObj = currentIdx !== -1 ? sortedVersions[currentIdx] : null;
 
-  const saveVersion = async (version: string, title: string, status: string, items: RoadmapItem[]) => {
+  const saveVersion = async (version: string, title: string, status: string, items: RoadmapItem[], versionType?: string) => {
     setLoading(true);
     try {
       const response = await fetch(`/api/roadmap/${projectId}`, {
@@ -162,6 +165,7 @@ export function RoadmapWithApprovalHorizon({
           title,
           status,
           items,
+          versionType: versionType || 'outcome',
         }),
       });
 
@@ -224,7 +228,7 @@ export function RoadmapWithApprovalHorizon({
       idx === itemIndex ? { ...item, done: !item.done } : item
     );
 
-    await saveVersion(versionData.version, versionData.title, versionData.status, updatedItems);
+    await saveVersion(versionData.version, versionData.title, versionData.status, updatedItems, versionData.version_type || 'outcome');
   };
 
   const updateApproval = (versionNum: string | null) => {
@@ -328,6 +332,7 @@ export function RoadmapWithApprovalHorizon({
       title: v.title,
       status: v.status,
       items: v.items,
+      version_type: v.version_type || 'outcome',
     });
     setEditingVersionId(v.id);
     // Ensure the version is expanded so the edit form is visible
@@ -340,13 +345,19 @@ export function RoadmapWithApprovalHorizon({
 
   const cancelEdit = () => {
     setEditingVersionId(null);
-    setEditForm({ version: '', title: '', status: 'planned', items: [] });
+    setEditForm({ version: '', title: '', status: 'planned', items: [], version_type: 'outcome' });
   };
 
   const renderVersionRow = (version: RoadmapVersion, isApproved: boolean = false, bgColor?: string) => {
     const isEditing = editingVersionId === version.id;
     const isExpanded = expandedVersionIds.has(version.id);
     const progress = version.progress || { done: version.items.filter((i) => i.done).length, total: version.items.length };
+    const versionType = version.version_type || 'outcome';
+    const typeBadge = getVersionTypeBadge(versionType);
+    const isNonShipped = version.status !== 'shipped';
+    const typeBgClass = (isNonShipped && versionType !== 'outcome')
+      ? 'bg-gray-50 dark:bg-gray-900/30'
+      : '';
 
     return (
       <div
@@ -356,7 +367,7 @@ export function RoadmapWithApprovalHorizon({
           isApproved === false && 'opacity-50 hover:opacity-80 transition-opacity',
           isEditing
             ? 'border-[var(--accent-primary)] bg-[var(--bg-secondary)]'
-            : bgColor || 'border-[var(--border-color)]'
+            : bgColor || (typeBgClass || 'border-[var(--border-color)]')
         )}
       >
         {/* Header Row */}
@@ -381,6 +392,7 @@ export function RoadmapWithApprovalHorizon({
                 className={clsx('text-[var(--text-muted)] flex-shrink-0', isExpanded && 'rotate-90 transition-transform')}
               />
             )}
+            <span title={`Version type: ${versionType}`}>{typeBadge}</span>
             <span className="font-medium">v{version.version}</span>
             <span className="text-sm text-[var(--text-secondary)]">— {version.title}</span>
           </div>
@@ -448,6 +460,15 @@ export function RoadmapWithApprovalHorizon({
                     <option value="current">🔵 Current</option>
                     <option value="shipped">🟢 Shipped</option>
                   </select>
+                  <select
+                    value={editForm.version_type}
+                    onChange={(e) => setEditForm({ ...editForm, version_type: e.target.value as any })}
+                    className="w-full px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
+                  >
+                    <option value="outcome">🎯 Outcome (user-facing result)</option>
+                    <option value="foundation">🏗️ Foundation (scaffolding/plumbing)</option>
+                    <option value="chore">🧹 Chore (refactor/tech debt)</option>
+                  </select>
                 </div>
 
                 {/* Items Editor */}
@@ -514,7 +535,8 @@ export function RoadmapWithApprovalHorizon({
                         cleanVersion,
                         editForm.title,
                         editForm.status,
-                        editForm.items.filter((i) => i.title.trim())
+                        editForm.items.filter((i) => i.title.trim()),
+                        editForm.version_type
                       )
                     }}
                     disabled={!editForm.title.trim() || loading}
@@ -572,6 +594,14 @@ export function RoadmapWithApprovalHorizon({
         )}
       </div>
     );
+  };
+
+  const getVersionTypeBadge = (vt: string) => {
+    switch (vt) {
+      case 'foundation': return '🏗️';
+      case 'chore': return '🧹';
+      default: return '🎯';
+    }
   };
 
   const renderApprovalCard = () => (

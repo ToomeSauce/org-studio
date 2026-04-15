@@ -19,6 +19,7 @@ interface RoadmapVersion {
   progress?: { done: number; total: number };
   shipped_at?: number | null;
   sort_order?: number;
+  version_type?: 'outcome' | 'foundation' | 'chore';
 }
 
 export async function GET(
@@ -39,7 +40,7 @@ export async function GET(
 
       try {
         const result = await client.query(
-          `SELECT id, version, title, status, items, shipped_at, sort_order
+          `SELECT id, version, title, status, items, shipped_at, sort_order, version_type
            FROM org_studio_roadmap_versions
            WHERE project_id = $1
            ORDER BY sort_order ASC, version ASC`,
@@ -54,6 +55,7 @@ export async function GET(
           items: row.items || [],
           shipped_at: row.shipped_at,
           sort_order: row.sort_order,
+          version_type: row.version_type || 'outcome',
           progress: calculateProgress(row.items || []),
         }));
 
@@ -80,7 +82,7 @@ export async function POST(
   try {
     const { projectId } = await params;
     const body = await req.json();
-    const { action, version, title, status, items, order } = body;
+    const { action, version, title, status, items, order, versionType } = body;
 
     // Authenticate request (supports both session cookies and API keys)
     const authError = await authenticateRequest(req);
@@ -99,15 +101,17 @@ export async function POST(
           const versionId = `rv-${projectId}-${version.replace(/\./g, '-')}`;
           const sortOrder = parseFloat(version);
 
+          const resolvedVersionType = versionType || 'outcome';
           await client.query(
             `INSERT INTO org_studio_roadmap_versions 
-              (id, project_id, version, title, status, items, sort_order, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+              (id, project_id, version, title, status, items, sort_order, created_at, version_type)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
              ON CONFLICT (project_id, version) DO UPDATE SET
               title = EXCLUDED.title,
               status = EXCLUDED.status,
               items = EXCLUDED.items,
-              sort_order = EXCLUDED.sort_order`,
+              sort_order = EXCLUDED.sort_order,
+              version_type = EXCLUDED.version_type`,
             [
               versionId,
               projectId,
@@ -117,6 +121,7 @@ export async function POST(
               JSON.stringify(items || []),
               sortOrder,
               Date.now(),
+              resolvedVersionType,
             ]
           );
 
@@ -146,6 +151,7 @@ export async function POST(
             action: 'upserted',
             version,
             id: versionId,
+            version_type: resolvedVersionType,
           });
         } else if (action === 'delete') {
           await client.query(
@@ -203,7 +209,10 @@ function readRoadmapsFromFile(projectId: string): RoadmapVersion[] {
         const bOrder = b.sort_order ?? parseFloat(b.version);
         return aOrder - bOrder;
       });
-      return versions;
+      return versions.map((v: any) => ({
+        ...v,
+        version_type: v.version_type || 'outcome',
+      }));
     }
 
     return [];
@@ -235,7 +244,7 @@ function handleFileBasedRoadmap(
     }
 
     if (action === 'upsert') {
-      const { version, title, status, items } = payload;
+      const { version, title, status, items, versionType } = payload;
       const idx = data.versions.findIndex((v: any) => v.version === version);
 
       const newVersion = {
@@ -245,6 +254,7 @@ function handleFileBasedRoadmap(
         status,
         items,
         sort_order: parseFloat(version),
+        version_type: versionType || 'outcome',
       };
 
       if (idx >= 0) {

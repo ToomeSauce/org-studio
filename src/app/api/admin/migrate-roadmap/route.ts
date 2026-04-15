@@ -75,6 +75,19 @@ export async function POST(req: NextRequest) {
       }
       console.log('✅ Indexes ready\n');
 
+      // Add version_type column
+      console.log('📋 Adding version_type column...');
+      try {
+        await client.query(`
+          ALTER TABLE org_studio_roadmap_versions
+          ADD COLUMN IF NOT EXISTS version_type TEXT DEFAULT 'outcome'
+          CHECK (version_type IN ('outcome', 'foundation', 'chore'));
+        `);
+        console.log('✅ version_type column ready\n');
+      } catch (err: any) {
+        console.log('version_type column may already exist:', err.message);
+      }
+
       // Step 2: Fetch all vision docs
       console.log('📖 Fetching vision docs...');
       

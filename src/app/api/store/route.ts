@@ -562,37 +562,29 @@ export async function POST(req: NextRequest) {
           })();
         }
 
-        // **NEW: Handle outcome completion**
-        if (payload.updates?.status === 'done' && payload.id) {
-          const completedTask = store.tasks.find(t => t.id === payload.id);
-          if (completedTask?.projectId) {
-            (async () => {
-              try {
-                const { checkOutcomeCompletion } = await import('@/lib/vision-completion');
-                const project = store.projects.find(p => p.id === completedTask.projectId);
-                if (!project) return;
-
-              const result = await checkOutcomeCompletion(project, store.tasks);
-              if (result.completedOutcomeIds.length > 0) {
-                console.log(`[Outcome Tracking] ${result.message}`);
-                // Auto-mark outcomes as done
-                for (const outcomeId of result.completedOutcomeIds) {
-                  const outcome = project.outcomes?.find((o: any) => o.id === outcomeId);
-                  if (outcome) {
-                    outcome.done = true;
-                    outcome.completedAt = Date.now();
-                  }
+        // **Handle outcome-type version completion**
+        // When a version ships (all tasks done), if it's an outcome-type version, log the completion
+        // The old checkOutcomeCompletion call is replaced by version-type tracking
+        if (versionCompletionTriggered) {
+          (async () => {
+            try {
+              const port = process.env.GATEWAY_PORT || process.env.PORT || '4501';
+              const roadmapRes = await fetch(`http://localhost:${port}/api/roadmap/${versionCompletionTriggered.projectId}`);
+              if (roadmapRes.ok) {
+                const roadmapData = await roadmapRes.json();
+                const versions: any[] = roadmapData.versions || [];
+                const completedVersion = versions.find(v => v.version === versionCompletionTriggered.project.currentVersion);
+                if (completedVersion && (completedVersion.version_type || 'outcome') === 'outcome') {
+                  const outcomeVersions = versions.filter(v => (v.version_type || 'outcome') === 'outcome');
+                  const shippedOutcomes = outcomeVersions.filter(v => v.status === 'shipped').length;
+                  const totalOutcomes = outcomeVersions.length;
+                  console.log(`[Outcome Tracking] Outcome-type version shipped: v${completedVersion.version} — ${shippedOutcomes}/${totalOutcomes} outcome versions complete`);
                 }
-                // Persist the updated outcomes
-                await getStoreProvider().updateProject(completedTask.projectId, {
-                  outcomes: project.outcomes,
-                });
               }
             } catch (e) {
-              console.error('[Outcome Tracking] Completion check error:', e);
+              console.error('[Outcome Tracking] Version-type outcome check error:', e);
             }
           })();
-          }
         }
 
         return NextResponse.json({ ok: true });

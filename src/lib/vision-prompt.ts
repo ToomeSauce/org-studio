@@ -18,6 +18,7 @@ export interface VersionProposalResponse {
     outcomeIds?: string[];
   }>;
   rationale: string;
+  versionType?: 'outcome' | 'foundation' | 'chore';
   lifecycleSuggestion?: {
     current: string;
     suggested: string;
@@ -194,7 +195,9 @@ async function parseRoadmapStructured(projectId: string, fallbackContent: string
     const result: string[] = [];
     
     for (const version of roadmapVersions) {
-      const header = `### v${version.version}: ${version.title}`;
+      const vt = version.version_type || 'outcome';
+      const typeEmoji = vt === 'foundation' ? '🏗️' : vt === 'chore' ? '🧹' : '🎯';
+      const header = `### v${version.version}: ${version.title} [${typeEmoji} ${vt}]`;
       const isShipped = version.status === 'shipped';
       
       if (isShipped) {
@@ -343,6 +346,10 @@ export async function buildVisionPrompt(
   const aspirations = parseAspirations(docContent);
   const budget = getVersionBudget(project.lifecycle);
 
+  // Fetch roadmap versions for outcome progress computation
+  const roadmapVersions = await getRoadmapVersions(project.id);
+  const outcomeVersions = roadmapVersions.filter(v => (v.version_type || 'outcome') === 'outcome');
+
   // **NEW: Cross-reference roadmap items with actual board tasks**
   // If a roadmap item has a corresponding "done" task on the board, mark it as done
   // This keeps the vision cycle in sync with reality without manual VISION.md updates
@@ -409,35 +416,15 @@ ${aspirations.map(a => `- ${a}`).join('\n') || '(none defined)'}
 ### Boundaries (what NOT to do)
 ${boundaries.map(b => `- ${b}`).join('\n') || '(none defined)'}
 
-### Outcomes (success criteria)
+### Outcome Progress (derived from outcome-type versions)
 ${
-  project.outcomes
-    ?.filter(o => !o.done)
-    .map(o => `- [ ] ${o.text}`)
-    .join('\n') || '(no outcomes defined)'
-}
-
-### Completed Outcomes
-${
-  project.outcomes
-    ?.filter(o => o.done)
-    .map(o => `- [x] ${o.text}`)
-    .join('\n') || '(none completed yet)'
+  outcomeVersions.length === 0
+    ? '(no outcome-type versions defined)'
+    : outcomeVersions.map(v => `- [${v.status === 'shipped' ? 'x' : ' '}] v${v.version}: ${v.title}`).join('\n')
 }
 
 ### Guardrails (boundaries + contribution criteria)
 ${project.guardrails || '(no guardrails defined)'}
-
-### OUTCOME EVOLUTION
-
-When 80%+ of existing outcomes are completed (checked off), you MAY propose up to 2 new outcomes alongside your version proposal.
-
-Each proposed outcome MUST:
-- Satisfy the Guardrails above (contribution criteria)
-- Include a one-line justification naming the specific user who benefits
-- Not overlap with existing outcomes (done or pending)
-
-If outcomes are NOT 80%+ done, omit the proposedOutcomes field entirely.
 
 ### Dependency Status
 ${depHealth.length > 0 ? depHealth.join('\n') : '(no dependencies)'}
@@ -465,7 +452,8 @@ Propose the next version plan OR report that no meaningful improvements exist.
 7. **Guardrail compliance** — all proposed work must respect the Guardrails section
 8. **Outcome alignment** — every proposed task should serve at least one incomplete outcome
 9. **Version number must follow the roadmap** — find the FIRST unshipped version in the structured roadmap above and propose THAT version. Do NOT invent a new version number or re-propose a shipped version. Current version in Meta is ${currentVersion || 'unknown'}.
-10. **Outcome evolution** — if 80%+ outcomes are done, you may propose up to 2 new outcomes in \`proposedOutcomes\`. Each must name the user who benefits.
+10. **Version type** — classify your version as \`outcome\` (user-facing result), \`foundation\` (scaffolding/plumbing), or \`chore\` (refactor/tech debt). Outcome-type version titles must describe exactly one user-facing result — not two combined with "and".
+11. **Outcome evolution** — if 80%+ of outcome-type versions are shipped, you may propose up to 2 new outcome-type versions. Each must name the user who benefits.
 
 **IF no meaningful improvements exist:** Return ONLY this marker:
 \`\`\`
@@ -476,6 +464,7 @@ NO_IMPROVEMENTS_FOUND
 \`\`\`json
 {
   "version": "next version number (e.g. if current is 0.3, propose 0.4)",
+  "versionType": "outcome|foundation|chore (default: outcome. Use 'outcome' when the version delivers a user-facing result. Use 'foundation' for scaffolding/plumbing. Use 'chore' for refactors/tech debt.)",
   "tasks": [
     {
       "title": "short task title",
@@ -489,13 +478,7 @@ NO_IMPROVEMENTS_FOUND
     "current": "${project.lifecycle || 'building'}",
     "suggested": "building|mature|bau|sunset (or null to keep current)",
     "reasons": ["reason 1", "reason 2"]
-  },
-  "proposedOutcomes": [
-    {
-      "text": "outcome description",
-      "justification": "who benefits and why"
-    }
-  ]
+  }
 }
 \`\`\`
 

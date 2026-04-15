@@ -19,6 +19,7 @@ interface RoadmapVersion {
   progress?: { done: number; total: number };
   shipped_at?: number | null;
   sort_order?: number;
+  version_type?: 'outcome' | 'foundation' | 'chore';
 }
 
 interface RoadmapEditorProps {
