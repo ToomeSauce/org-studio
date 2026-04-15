@@ -972,6 +972,70 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: true, project: updatedProject });
       }
 
+      case 'approveOutcome': {
+        // payload: { projectId, pendingOutcomeId, editedText? }
+        const project = store.projects.find((p: any) => p.id === payload.projectId);
+        if (!project) return NextResponse.json({ error: 'Project not found' }, { status: 404 });
+        if (!payload.pendingOutcomeId) return NextResponse.json({ error: 'Missing pendingOutcomeId' }, { status: 400 });
+
+        const pendingOutcomes = project.pendingOutcomes || [];
+        const pendingOutcome = pendingOutcomes.find((o: any) => o.id === payload.pendingOutcomeId);
+        if (!pendingOutcome) return NextResponse.json({ error: 'Pending outcome not found' }, { status: 404 });
+
+        // Create new active outcome from pending outcome
+        const outcomeId = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+        const newOutcome = {
+          id: outcomeId,
+          text: payload.editedText || pendingOutcome.text,
+          done: false,
+          createdAt: Date.now(),
+        };
+
+        // Add to active outcomes
+        const outcomes = [...(project.outcomes || []), newOutcome];
+        // Remove from pendingOutcomes
+        const updatedPendingOutcomes = pendingOutcomes.filter((o: any) => o.id !== payload.pendingOutcomeId);
+
+        await getStoreProvider().updateProject(payload.projectId, { outcomes, pendingOutcomes: updatedPendingOutcomes });
+        const updatedProject = { ...project, outcomes, pendingOutcomes: updatedPendingOutcomes };
+        return NextResponse.json({ ok: true, project: updatedProject });
+      }
+
+      case 'rejectOutcome': {
+        // payload: { projectId, pendingOutcomeId, reason? }
+        const project = store.projects.find((p: any) => p.id === payload.projectId);
+        if (!project) return NextResponse.json({ error: 'Project not found' }, { status: 404 });
+        if (!payload.pendingOutcomeId) return NextResponse.json({ error: 'Missing pendingOutcomeId' }, { status: 400 });
+
+        const pendingOutcomes = (project.pendingOutcomes || []).filter((o: any) => o.id !== payload.pendingOutcomeId);
+        await getStoreProvider().updateProject(payload.projectId, { pendingOutcomes });
+        return NextResponse.json({ ok: true });
+      }
+
+      case 'proposeOutcomes': {
+        // payload: { projectId, outcomes: Array<{text, justification}>, proposedBy }
+        const project = store.projects.find((p: any) => p.id === payload.projectId);
+        if (!project) return NextResponse.json({ error: 'Project not found' }, { status: 404 });
+        if (!Array.isArray(payload.outcomes) || payload.outcomes.length === 0) {
+          return NextResponse.json({ error: 'Missing or empty outcomes array' }, { status: 400 });
+        }
+
+        const now = Date.now();
+        const proposedBy = payload.proposedBy || 'agent';
+        const newPendingOutcomes = payload.outcomes.map((o: { text: string; justification: string }) => ({
+          id: Math.random().toString(36).slice(2, 10) + now.toString(36),
+          text: o.text,
+          justification: o.justification || '',
+          proposedBy,
+          proposedAt: now,
+        }));
+
+        // Append to existing pendingOutcomes (don't replace)
+        const pendingOutcomes = [...(project.pendingOutcomes || []), ...newPendingOutcomes];
+        await getStoreProvider().updateProject(payload.projectId, { pendingOutcomes });
+        return NextResponse.json({ ok: true, pendingOutcomes });
+      }
+
       default:
         return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 });
     }

@@ -24,6 +24,10 @@ export interface VersionProposalResponse {
     reasons: string[];
   };
   markerNoImprovements?: boolean;
+  proposedOutcomes?: Array<{
+    text: string;
+    justification: string;
+  }>;
 }
 
 /**
@@ -424,6 +428,17 @@ ${
 ### Guardrails (boundaries + contribution criteria)
 ${project.guardrails || '(no guardrails defined)'}
 
+### OUTCOME EVOLUTION
+
+When 80%+ of existing outcomes are completed (checked off), you MAY propose up to 2 new outcomes alongside your version proposal.
+
+Each proposed outcome MUST:
+- Satisfy the Guardrails above (contribution criteria)
+- Include a one-line justification naming the specific user who benefits
+- Not overlap with existing outcomes (done or pending)
+
+If outcomes are NOT 80%+ done, omit the proposedOutcomes field entirely.
+
 ### Dependency Status
 ${depHealth.length > 0 ? depHealth.join('\n') : '(no dependencies)'}
 
@@ -450,6 +465,7 @@ Propose the next version plan OR report that no meaningful improvements exist.
 7. **Guardrail compliance** — all proposed work must respect the Guardrails section
 8. **Outcome alignment** — every proposed task should serve at least one incomplete outcome
 9. **Version number must follow the roadmap** — find the FIRST unshipped version in the structured roadmap above and propose THAT version. Do NOT invent a new version number or re-propose a shipped version. Current version in Meta is ${currentVersion || 'unknown'}.
+10. **Outcome evolution** — if 80%+ outcomes are done, you may propose up to 2 new outcomes in \`proposedOutcomes\`. Each must name the user who benefits.
 
 **IF no meaningful improvements exist:** Return ONLY this marker:
 \`\`\`
@@ -473,7 +489,13 @@ NO_IMPROVEMENTS_FOUND
     "current": "${project.lifecycle || 'building'}",
     "suggested": "building|mature|bau|sunset (or null to keep current)",
     "reasons": ["reason 1", "reason 2"]
-  }
+  },
+  "proposedOutcomes": [
+    {
+      "text": "outcome description",
+      "justification": "who benefits and why"
+    }
+  ]
 }
 \`\`\`
 

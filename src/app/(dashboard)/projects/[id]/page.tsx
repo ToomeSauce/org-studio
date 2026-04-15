@@ -172,6 +172,7 @@ export default function ProjectDetailPage() {
   const [editingGuardrails, setEditingGuardrails] = useState(false);
   const [guardrailsEditContent, setGuardrailsEditContent] = useState('');
   const [guardrailsSaving, setGuardrailsSaving] = useState(false);
+  const [pendingOutcomeAction, setPendingOutcomeAction] = useState<string | null>(null);
   const [newOutcomeText, setNewOutcomeText] = useState('');
   const [addingOutcome, setAddingOutcome] = useState(false);
 
@@ -423,6 +424,66 @@ export default function ProjectDetailPage() {
       setEditingGuardrails(false);
     } finally {
       setGuardrailsSaving(false);
+    }
+  };
+
+  const handleApproveOutcome = async (pendingOutcomeId: string) => {
+    setPendingOutcomeAction(pendingOutcomeId + ':approve');
+    try {
+      await fetch('/api/store', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'approveOutcome',
+          projectId,
+          pendingOutcomeId,
+        }),
+      });
+    } catch (e) {
+      console.error('Failed to approve outcome:', e);
+    } finally {
+      setPendingOutcomeAction(null);
+    }
+  };
+
+  const handleRejectOutcome = async (pendingOutcomeId: string) => {
+    setPendingOutcomeAction(pendingOutcomeId + ':reject');
+    try {
+      await fetch('/api/store', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'rejectOutcome',
+          projectId,
+          pendingOutcomeId,
+        }),
+      });
+    } catch (e) {
+      console.error('Failed to reject outcome:', e);
+    } finally {
+      setPendingOutcomeAction(null);
+    }
+  };
+
+  const handleApproveAllOutcomes = async () => {
+    setPendingOutcomeAction('all:approve');
+    try {
+      const pendingOutcomes = project?.pendingOutcomes || [];
+      for (const outcome of pendingOutcomes) {
+        await fetch('/api/store', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'approveOutcome',
+            projectId,
+            pendingOutcomeId: outcome.id,
+          }),
+        });
+      }
+    } catch (e) {
+      console.error('Failed to approve all outcomes:', e);
+    } finally {
+      setPendingOutcomeAction(null);
     }
   };
 
@@ -986,6 +1047,96 @@ export default function ProjectDetailPage() {
             )}
           </div>
         </details>
+
+        {/* Pending Outcomes Banner — shown when agents have proposed new outcomes */}
+        {project.pendingOutcomes && project.pendingOutcomes.length > 0 && (
+          <div className="rounded-2xl border border-amber-200 dark:border-amber-700/50 overflow-hidden">
+            <div className="h-1 bg-amber-400 dark:bg-amber-500" />
+            <div className="bg-amber-50 dark:bg-amber-950/20 p-5 space-y-4">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-lg">🔮</span>
+                  <h2 className="font-semibold text-amber-800 dark:text-amber-300 text-sm">
+                    Proposed Outcomes
+                  </h2>
+                  <span className="text-xs text-amber-600 dark:text-amber-400 font-normal">
+                    {project.pendingOutcomes.length} awaiting review
+                  </span>
+                </div>
+                {project.pendingOutcomes.length >= 2 && (
+                  <button
+                    onClick={handleApproveAllOutcomes}
+                    disabled={pendingOutcomeAction === 'all:approve'}
+                    className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-50 flex items-center gap-1"
+                  >
+                    {pendingOutcomeAction === 'all:approve' ? (
+                      <Loader className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <span>✅</span>
+                    )}
+                    Approve All
+                  </button>
+                )}
+              </div>
+
+              <div className="space-y-3">
+                {project.pendingOutcomes.map((outcome: any) => {
+                  const isActioning =
+                    pendingOutcomeAction === outcome.id + ':approve' ||
+                    pendingOutcomeAction === outcome.id + ':reject' ||
+                    pendingOutcomeAction === 'all:approve';
+                  return (
+                    <div
+                      key={outcome.id}
+                      className="bg-white dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/30 rounded-xl p-4 space-y-2"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0 space-y-1">
+                          <p className="text-sm font-medium text-[var(--text-primary)]">{outcome.text}</p>
+                          {outcome.justification && (
+                            <p className="text-xs text-amber-700 dark:text-amber-400">{outcome.justification}</p>
+                          )}
+                          <p className="text-xs text-[var(--text-muted)]">
+                            Proposed by <strong>{outcome.proposedBy}</strong>
+                            {outcome.proposedAt && (
+                              <> &middot; {new Date(outcome.proposedAt).toLocaleDateString()}</>
+                            )}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <button
+                            onClick={() => handleApproveOutcome(outcome.id)}
+                            disabled={isActioning}
+                            className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-50 flex items-center gap-1"
+                            title="Approve this outcome"
+                          >
+                            {pendingOutcomeAction === outcome.id + ':approve' ? (
+                              <Loader className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <>✅ Approve</>
+                            )}
+                          </button>
+                          <button
+                            onClick={() => handleRejectOutcome(outcome.id)}
+                            disabled={isActioning}
+                            className="px-3 py-1.5 border border-red-200 dark:border-red-700/50 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 flex items-center gap-1"
+                            title="Reject this outcome"
+                          >
+                            {pendingOutcomeAction === outcome.id + ':reject' ? (
+                              <Loader className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <>❌ Reject</>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Guardrails Section */}
         <details open className="rounded-2xl border border-[var(--border-color)] overflow-hidden group">

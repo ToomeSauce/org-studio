@@ -40,6 +40,13 @@ export interface Project {
     createdAt: number;
     completedAt?: number;
   }>;
+  pendingOutcomes?: Array<{
+    id: string;
+    text: string;
+    justification: string;  // One-line: who benefits and why
+    proposedBy: string;      // Agent name
+    proposedAt: number;
+  }>;
   guardrails?: string; // Combined boundaries + contribution criteria
 }
 
