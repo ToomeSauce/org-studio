@@ -175,6 +175,15 @@ export function generateOrgMd(ctx: OrgContext, forAgentId?: string): string {
     }
   }
 
+  // API Reference
+  lines.push('## API Reference');
+  lines.push('Install the Org Studio skill for full API docs, version types, task workflow, and roadmap management:');
+  lines.push('```');
+  lines.push('npx skills add ToomeSauce/org-studio');
+  lines.push('```');
+  lines.push('If already installed, the skill is available in your workspace. See `references/api-reference.md` for endpoint schemas.');
+  lines.push('');
+
   // Team roster
   lines.push('## Team');
   for (const t of ctx.teammates) {
