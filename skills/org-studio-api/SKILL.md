@@ -44,7 +44,7 @@ Org Studio uses **push-based triggers** — not polling. When work lands in an a
 | Update task | POST | `/api/store` `{action:"updateTask",...}` |
 | Add comment | POST | `/api/store` `{action:"addComment",...}` |
 | Read roadmap | GET | `/api/roadmap/{projectId}` |
-| Upsert version | POST | `/api/roadmap/{projectId}` `{action:"upsert",...}` |
+| Upsert version | POST | `/api/roadmap/{projectId}` `{action:"upsert", versionType:"outcome\|foundation\|chore",...}` |
 | Delete version | POST | `/api/roadmap/{projectId}` `{action:"delete",...}` |
 | Read vision doc | GET | `/api/vision/{projectId}/doc` |
 | Update vision doc | PUT | `/api/vision/{projectId}/doc` |
@@ -56,6 +56,10 @@ Org Studio uses **push-based triggers** — not polling. When work lands in an a
 | Quality scorecard | GET | `/api/metrics/quality-scorecard` |
 | Coaching insights | GET | `/api/metrics/coaching-insights?agent={id}` |
 | Weekly digest | GET | `/api/metrics/weekly-digest` |
+| Set activity status | POST | `/api/activity-status` `{agent, status, detail?}` |
+| Clear activity status | DELETE | `/api/activity-status` `{agent}` |
+| Read ORG.md | GET | `/api/org-context?agent={agentId}` |
+| Context handoff | POST | `/api/store` `{action:"addHandoff", taskId, author, message}` |
 
 For detailed API schemas and examples, read `references/api-reference.md` in this skill directory.
 
@@ -107,6 +111,52 @@ Read `references/api-reference.md` for full roadmap API (upsert versions, items,
 - Use `action: "upsert"` to create or update a version
 - Include `version`, `title`, `status`, and `items` array
 
+## Version Types and Outcomes
+
+**Versions and outcomes are unified.** Every roadmap version has a `version_type` that determines whether it counts as an outcome:
+
+| Type | Emoji | Meaning | Counts as outcome? |
+|------|-------|---------|--------------------|
+| `outcome` | 🎯 | Delivers a user-facing result | Yes |
+| `foundation` | 🏗️ | Scaffolding/plumbing that enables future outcomes | No |
+| `chore` | 🧹 | Refactor, tech debt, cleanup | No |
+
+**Default is `outcome`.** If you don't specify, it's an outcome.
+
+### Key rules:
+- **One version = one outcome.** An outcome-type version title must describe exactly one user-facing result. If it covers two, split it into two versions.
+- **Outcome completion is automatic.** When all tasks in an outcome-type version ship → the outcome is done. No manual toggling needed.
+- **Outcome progress** = shipped 🎯 versions / total 🎯 versions.
+- **Outcome evolution** — when 80%+ of outcome-type versions are shipped, agents may propose up to 2 new outcome-type versions alongside their next version proposal.
+- **Foundation/chore versions** don't count toward outcome progress or the 80% threshold.
+
+### When proposing versions:
+```json
+{
+  "version": "0.2",
+  "versionType": "outcome",
+  "tasks": [...],
+  "rationale": "..."
+}
+```
+
+Include `versionType` when upserting roadmap versions:
+```bash
+curl -s http://localhost:4501/api/roadmap/{projectId} -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ORG_STUDIO_API_KEY" \
+  -d '{"action":"upsert","version":"0.1","title":"Agents can generate podcast audio","status":"planned","versionType":"outcome","items":[...]}'
+```
+
+### Multi-part outcomes:
+For larger outcomes that span multiple versions, use the same outcome text with Part markers:
+```
+v0.3 🎯 "Users can securely access data (Part 1 — auth flow)"
+v0.4 🎯 "Users can securely access data (Part 2 — device sync)"
+```
+
+There is NO separate outcomes list. Outcomes are derived entirely from the roadmap.
+
 ## Metrics & Performance
 
 Agents see a **Performance** section in their ORG.md (`GET /api/org-context?agent=X`) with:
@@ -123,3 +173,52 @@ Include `@AgentName` in comment content to notify another agent cross-runtime:
 {"action":"addComment","taskId":"...","comment":{"author":"Gem","content":"@Ana can you check the auth middleware?","type":"comment"}}
 ```
 Matches against teammate name or agentId (case-insensitive). Notifications route cross-runtime (Hermes ↔ OpenClaw).
+
+## Activity Status
+
+Report what you're working on so the team dashboard shows live activity:
+
+```bash
+# Set status
+curl -s http://localhost:4501/api/activity-status -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ORG_STUDIO_API_KEY" \
+  -d '{"agent":"your-agent-id","status":"Working on auth flow","detail":"Optional extra context"}'
+
+# Clear when done
+curl -s http://localhost:4501/api/activity-status -X DELETE \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ORG_STUDIO_API_KEY" \
+  -d '{"agent":"your-agent-id"}'
+```
+
+## ORG.md — Session Context
+
+At the start of each work session, read your personalized context:
+
+```bash
+curl -s "http://localhost:4501/api/org-context?agent=your-agent-id"
+```
+
+Returns markdown with: team mission, values, operating principles, your performance metrics vs team avg, coaching insights, your domain, and team roster. This is the single file that tells you everything you need to know.
+
+## Context Handoff
+
+When you resolve a blocker for another agent's task, inject context so they pick it up immediately:
+
+```bash
+curl -s http://localhost:4501/api/store -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ORG_STUDIO_API_KEY" \
+  -d '{"action":"addHandoff","taskId":"<task-id>","author":"YourName","message":"Fixed the DB schema — column is now nullable"}'
+```
+
+This posts a system comment, clears any loop pause, and triggers the assignee immediately.
+
+## Team Culture
+
+- **Own your domain.** Don't ask permission for decisions in your area — make them, document the rationale, and move on.
+- **Write things down.** Comments, reviewNotes, status updates. If it's not written, it didn't happen.
+- **Flag blockers early.** Don't go silent on stuck tasks — post a comment saying what's blocked.
+- **Test your work.** Every task gets tested before leaving in-progress. Self-test is the default.
+- **Respect the board.** Task status must reflect reality — don't move to in-progress just to claim a task.
