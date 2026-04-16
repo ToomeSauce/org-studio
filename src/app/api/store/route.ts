@@ -286,8 +286,9 @@ function piggybackStuckCheck(store: any) {
   lastStuckCheck = now;
 
   const teammates = store.settings?.teammates || [];
-  const stuckAgents = new Set<string>();
+  const triggeredAgents = new Set<string>();
 
+  // 1. Stuck in-progress tasks (existing check)
   for (const task of store.tasks) {
     if (task.isArchived || task.loopPausedAt) continue;
     if (task.status !== 'in-progress') continue;
@@ -305,9 +306,46 @@ function piggybackStuckCheck(store: any) {
       t.name?.toLowerCase() === assignee.toLowerCase() || t.agentId === assignee.toLowerCase()
     );
     const agentId = match?.agentId;
-    if (agentId && !stuckAgents.has(agentId)) {
-      stuckAgents.add(agentId);
+    if (agentId && !triggeredAgents.has(agentId)) {
+      triggeredAgents.add(agentId);
       triggerAgentLoop(assignee, store);
+    }
+  }
+
+  // 2. Idle agents with backlog work but nothing in-progress
+  // Safety net: if the done→next-backlog chain failed, this catches it
+  const IDLE_BACKLOG_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes with idle backlog
+  const agentBacklog: Record<string, { assignee: string; oldestCreated: number }> = {};
+  const agentHasActive = new Set<string>();
+
+  for (const task of store.tasks) {
+    if (task.isArchived || task.loopPausedAt) continue;
+    const assignee = task.assignee?.toLowerCase();
+    if (!assignee) continue;
+
+    if (['in-progress', 'qa', 'review'].includes(task.status)) {
+      agentHasActive.add(assignee);
+    } else if (task.status === 'backlog') {
+      const created = task.createdAt || 0;
+      if (!agentBacklog[assignee] || created < agentBacklog[assignee].oldestCreated) {
+        agentBacklog[assignee] = { assignee: task.assignee, oldestCreated: created };
+      }
+    }
+  }
+
+  for (const [assigneeLower, info] of Object.entries(agentBacklog)) {
+    if (agentHasActive.has(assigneeLower)) continue; // Already working on something
+    if (triggeredAgents.has(assigneeLower)) continue; // Already triggered above
+    if (now - info.oldestCreated < IDLE_BACKLOG_THRESHOLD_MS) continue; // Too recent
+
+    const match = teammates.find((t: any) =>
+      t.name?.toLowerCase() === assigneeLower || t.agentId === assigneeLower
+    );
+    const agentId = match?.agentId;
+    if (agentId && !triggeredAgents.has(agentId)) {
+      triggeredAgents.add(agentId);
+      console.log(`[Sweep] Idle agent ${info.assignee} has backlog work — triggering`);
+      triggerAgentLoop(info.assignee, store);
     }
   }
 }
