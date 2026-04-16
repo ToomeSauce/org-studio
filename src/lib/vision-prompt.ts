@@ -25,10 +25,6 @@ export interface VersionProposalResponse {
     reasons: string[];
   };
   markerNoImprovements?: boolean;
-  proposedOutcomes?: Array<{
-    text: string;
-    justification: string;
-  }>;
 }
 
 /**
@@ -453,7 +449,7 @@ Propose the next version plan OR report that no meaningful improvements exist.
 8. **Outcome alignment** — every proposed task should serve at least one incomplete outcome
 9. **Version number must follow the roadmap** — find the FIRST unshipped version in the structured roadmap above and propose THAT version. Do NOT invent a new version number or re-propose a shipped version. Current version in Meta is ${currentVersion || 'unknown'}.
 10. **Version type** — classify your version as \`outcome\` (user-facing result), \`foundation\` (scaffolding/plumbing), or \`chore\` (refactor/tech debt). Outcome-type version titles must describe exactly one user-facing result — not two combined with "and".
-11. **Outcome evolution** — if 80%+ of outcome-type versions are shipped, you may propose up to 2 new outcome-type versions. Each must name the user who benefits.
+11. **Outcome evolution** — if 80%+ of outcome-type versions are shipped, you may include up to 2 additional outcome-type versions in your roadmap proposal. Each must name the user who benefits.
 
 **IF no meaningful improvements exist:** Return ONLY this marker:
 \`\`\`

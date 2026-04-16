@@ -275,6 +275,12 @@ export function RoadmapWithApprovalHorizon({
     const approvalIndex = getApprovalIndex(plannedVersions);
     
     if (approvalIndex < plannedVersions.length - 1) {
+      const nextVersion = plannedVersions[approvalIndex + 1];
+      // Block if any items are missing taskId (not ready for launch)
+      const hasIncompleteItems = nextVersion.items?.some((item: any) => !item.taskId);
+      if (hasIncompleteItems) {
+        return; // Can't approve past incomplete version
+      }
       updateApproval(plannedVersions[approvalIndex + 1].version);
     }
   };
@@ -558,32 +564,25 @@ export function RoadmapWithApprovalHorizon({
                 {/* Items View */}
                 {version.items.length > 0 ? (
                   <div className="space-y-1 text-sm">
-                    {version.items.map((item, idx) => (
-                      <div
-                        key={idx}
-                        onClick={() => toggleItemDone(version, idx)}
-                        className="flex items-start gap-2 cursor-pointer p-2 rounded hover:bg-[var(--bg-secondary)] transition-colors"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={item.done}
-                          onChange={(e) => {
-                            e.stopPropagation();
-                            toggleItemDone(version, idx);
-                          }}
-                          className="w-4 h-4 rounded flex-shrink-0 mt-0.5"
-                        />
-                        <span
-                          className={clsx(
-                            'flex-1',
-                            item.done ? 'text-[var(--text-muted)]' : 'text-[var(--text-primary)]'
-                          )}
+                    {version.items.map((item, idx) => {
+                      const statusEmoji = item.done ? '✅' : item.taskId ? '⬜' : '📝';
+                      return (
+                        <div
+                          key={idx}
+                          className="flex items-start gap-2 p-2 rounded"
                         >
-                          {item.done && '✅ '}
-                          {item.title}
-                        </span>
-                      </div>
-                    ))}
+                          <span className="flex-shrink-0 mt-0.5">{statusEmoji}</span>
+                          <span
+                            className={clsx(
+                              'flex-1',
+                              item.done ? 'text-[var(--text-muted)]' : 'text-[var(--text-primary)]'
+                            )}
+                          >
+                            {item.title}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : (
                   <p className="text-sm text-[var(--text-muted)]">No items yet. Edit to add items.</p>
@@ -639,6 +638,22 @@ export function RoadmapWithApprovalHorizon({
           ▼
         </button>
       </div>
+      {(() => {
+        const plannedVersions = sortedVersions.filter(v => v.status !== 'shipped' && v.version !== currentVersion);
+        const approvalIndex = getApprovalIndex(plannedVersions);
+        if (approvalIndex < plannedVersions.length - 1) {
+          const nextVersion = plannedVersions[approvalIndex + 1];
+          const missingCount = nextVersion.items?.filter((item: any) => !item.taskId).length || 0;
+          if (missingCount > 0) {
+            return (
+              <span className="text-xs text-amber-400 ml-2">
+                ⚠️ v{nextVersion.version}: {missingCount} item(s) need planning tickets
+              </span>
+            );
+          }
+        }
+        return null;
+      })()}
     </div>
   );
 
@@ -786,11 +801,13 @@ export function RoadmapWithApprovalHorizon({
                     (item.taskId && t.id === item.taskId) || t.title?.toLowerCase().trim() === item.title?.toLowerCase().trim()
                   );
                   const taskStatus = matchedTask?.status;
-                  const statusIndicator = taskStatus === 'review' ? '👀'
-                    : taskStatus === 'blocked' ? '🔴'
-                    : taskStatus === 'in-progress' ? '🔄'
+                  const statusIndicator = taskStatus === 'blocked' ? '🔴'
+                    : taskStatus === 'review' ? '🟡'
+                    : taskStatus === 'in-progress' ? '👀'
                     : taskStatus === 'qa' ? '🧪'
-                    : item.done ? '✅' : '⬜';
+                    : item.done ? '✅'
+                    : item.taskId ? '⬜'   // has ticket = ready
+                    : '📝';               // no ticket = draft
                   const isClickable = !!matchedTask;
 
                   return (
@@ -806,7 +823,7 @@ export function RoadmapWithApprovalHorizon({
                             'font-medium hover:underline',
                             taskStatus === 'blocked' ? 'text-red-600 dark:text-red-400'
                             : taskStatus === 'review' ? 'text-amber-600 dark:text-amber-400'
-                            : taskStatus === 'in-progress' ? 'text-blue-600 dark:text-blue-400'
+                            : taskStatus === 'in-progress' ? 'text-[var(--text-primary)]'
                             : taskStatus === 'qa' ? 'text-teal-600 dark:text-teal-400'
                             : item.done ? 'text-[var(--text-muted)]'
                             : 'text-[var(--text-primary)]'

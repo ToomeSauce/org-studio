@@ -42,41 +42,6 @@ async function sendNotification(params: { sessionKey: string; message: string; i
 }
 
 /**
- * Helper: Store proposed outcomes via store API
- */
-async function storeProposedOutcomes(
-  projectId: string,
-  outcomes: Array<{ text: string; justification: string }>,
-  proposedBy: string
-): Promise<void> {
-  try {
-    const port = process.env.PORT || '4501';
-    const apiKey = process.env.ORG_STUDIO_API_KEY || '';
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
-
-    const res = await fetch(`http://127.0.0.1:${port}/api/store`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        action: 'proposeOutcomes',
-        projectId,
-        outcomes,
-        proposedBy,
-      }),
-    });
-
-    if (res.ok) {
-      console.log(`[Vision Complete] Stored ${outcomes.length} proposed outcome(s) for project ${projectId}`);
-    } else {
-      console.warn(`[Vision Complete] Failed to store proposed outcomes: HTTP ${res.status}`);
-    }
-  } catch (e: any) {
-    console.error(`[Vision Complete] Error storing proposed outcomes:`, e?.message);
-  }
-}
-
-/**
  * Helper: Check if a task title already exists for this project (done, review, qa, in-progress, or backlog)
  */
 function taskAlreadyExists(title: string, projectId: string, tasks: any[]): boolean {
@@ -240,7 +205,7 @@ export async function POST(
       );
     }
 
-    const { version, tasks, rationale, lifecycleSuggestion, proposedOutcomes } = proposal;
+    const { version, tasks, rationale, lifecycleSuggestion } = proposal;
 
     if (!version) {
       return NextResponse.json({ error: 'proposal.version is required' }, { status: 400 });
@@ -255,13 +220,6 @@ export async function POST(
       lifecycleSuggestion: lifecycleSuggestion || '',
       proposedAt: Date.now(),
     };
-
-    // Handle proposed outcomes (outcome evolution)
-    if (Array.isArray(proposedOutcomes) && proposedOutcomes.length > 0) {
-      const proposedBy = project.devOwner || project.owner || 'agent';
-      // Fire-and-forget — don't block the response
-      storeProposedOutcomes(projectId, proposedOutcomes, proposedBy).catch(() => {});
-    }
 
     const approvalMode = project.autonomy?.approvalMode || 'per-version';
     const currentVersion = project.currentVersion || '0.0';

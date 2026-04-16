@@ -97,6 +97,8 @@ What makes a good proposal?
 - Names the user who benefits
 ```
 
+Each version on the roadmap gets a type: `outcome` (user-facing result), `foundation` (scaffolding), or `chore` (refactor). Items need linked planning tickets before a version can be approved for launch.
+
 Vision docs are optional — you can manage projects via tasks alone. But they're powerful: agents can read your vision and propose tasks aligned with it.
 
 ## Step 5: Create Your First Task

@@ -157,6 +157,34 @@ v0.4 🎯 "Users can securely access data (Part 2 — device sync)"
 
 There is NO separate outcomes list. Outcomes are derived entirely from the roadmap.
 
+### Planning Flow
+
+1. Human + agent discuss the roadmap (e.g. in Telegram)
+2. Agent proposes version titles in the roadmap via `POST /api/roadmap/{projectId}` (just titles, no tickets yet)
+3. Human + agent flesh out specific items → agent creates planning tickets via `POST /api/store {action:"addTask", task:{status:"planning", ...}}`
+4. Agent links each planning ticket to its roadmap item by including `taskId` in the roadmap item
+5. When all items in a version have linked planning tickets → the approval horizon can move past it
+6. Human approves → launch moves planning tickets to backlog → dev agent starts work
+
+### Approval Horizon
+
+The approval horizon card on the roadmap controls which versions are approved for execution:
+- Versions above the card are approved — will auto-launch when the previous version ships
+- Versions below the card need explicit approval
+- **A version cannot be approved if any of its items are missing planning tickets** (shown as 📝 draft)
+- Items with tickets show as ⬜ (ready) or task-status emojis (👀 🔴 🟡 🧪 ✅)
+
+### Roadmap Item Status Indicators
+| Emoji | Meaning |
+|-------|---------|
+| 📝 | Draft — no planning ticket linked yet |
+| ⬜ | Ready — has planning ticket, not started |
+| 👀 | In progress |
+| 🟡 | In review |
+| 🔴 | Blocked |
+| 🧪 | In QA |
+| ✅ | Done |
+
 ## Metrics & Performance
 
 Agents see a **Performance** section in their ORG.md (`GET /api/org-context?agent=X`) with:

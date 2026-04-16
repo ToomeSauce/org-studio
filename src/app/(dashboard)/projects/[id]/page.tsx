@@ -170,13 +170,9 @@ export default function ProjectDetailPage() {
   const [roadmapLoading, setRoadmapLoading] = useState(true);
   const [justSavedProject, setJustSavedProject] = useState(false);
   const [launching, setLaunching] = useState(false);
-  const [launchWarning, setLaunchWarning] = useState<string | null>(null);
   const [editingGuardrails, setEditingGuardrails] = useState(false);
   const [guardrailsEditContent, setGuardrailsEditContent] = useState('');
   const [guardrailsSaving, setGuardrailsSaving] = useState(false);
-  const [pendingOutcomeAction, setPendingOutcomeAction] = useState<string | null>(null);
-  const [newOutcomeText, setNewOutcomeText] = useState('');
-  const [addingOutcome, setAddingOutcome] = useState(false);
 
   // Fetch vision doc - MUST be before early returns
   useEffect(() => {
@@ -368,57 +364,6 @@ export default function ProjectDetailPage() {
     }
   };
 
-  const handleAddOutcome = async () => {
-    if (!newOutcomeText.trim()) return;
-    setAddingOutcome(true);
-    try {
-      await fetch('/api/store', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'addOutcome',
-          projectId,
-          outcome: { text: newOutcomeText },
-        }),
-      });
-      setNewOutcomeText('');
-    } finally {
-      setAddingOutcome(false);
-    }
-  };
-
-  const handleToggleOutcome = async (outcomeId: string) => {
-    try {
-      await fetch('/api/store', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'toggleOutcome',
-          projectId,
-          outcomeId,
-        }),
-      });
-    } catch (e) {
-      console.error('Failed to toggle outcome:', e);
-    }
-  };
-
-  const handleRemoveOutcome = async (outcomeId: string) => {
-    try {
-      await fetch('/api/store', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'removeOutcome',
-          projectId,
-          outcomeId,
-        }),
-      });
-    } catch (e) {
-      console.error('Failed to remove outcome:', e);
-    }
-  };
-
   const handleSaveGuardrails = async () => {
     setGuardrailsSaving(true);
     try {
@@ -434,66 +379,6 @@ export default function ProjectDetailPage() {
       setEditingGuardrails(false);
     } finally {
       setGuardrailsSaving(false);
-    }
-  };
-
-  const handleApproveOutcome = async (pendingOutcomeId: string) => {
-    setPendingOutcomeAction(pendingOutcomeId + ':approve');
-    try {
-      await fetch('/api/store', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'approveOutcome',
-          projectId,
-          pendingOutcomeId,
-        }),
-      });
-    } catch (e) {
-      console.error('Failed to approve outcome:', e);
-    } finally {
-      setPendingOutcomeAction(null);
-    }
-  };
-
-  const handleRejectOutcome = async (pendingOutcomeId: string) => {
-    setPendingOutcomeAction(pendingOutcomeId + ':reject');
-    try {
-      await fetch('/api/store', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'rejectOutcome',
-          projectId,
-          pendingOutcomeId,
-        }),
-      });
-    } catch (e) {
-      console.error('Failed to reject outcome:', e);
-    } finally {
-      setPendingOutcomeAction(null);
-    }
-  };
-
-  const handleApproveAllOutcomes = async () => {
-    setPendingOutcomeAction('all:approve');
-    try {
-      const pendingOutcomes = project?.pendingOutcomes || [];
-      for (const outcome of pendingOutcomes) {
-        await fetch('/api/store', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'approveOutcome',
-            projectId,
-            pendingOutcomeId: outcome.id,
-          }),
-        });
-      }
-    } catch (e) {
-      console.error('Failed to approve all outcomes:', e);
-    } finally {
-      setPendingOutcomeAction(null);
     }
   };
 
@@ -541,64 +426,27 @@ export default function ProjectDetailPage() {
         }),
       });
 
-      // 2. Move planning tickets to backlog (or create new if no linked ticket)
-      let bareTicketCount = 0;
+      // 2. Move planning tickets to backlog (no create fallback)
       if (nextVersion.items?.length > 0) {
         for (const item of nextVersion.items) {
           if (item.taskId) {
-            // Found a linked ticket — move it to backlog
-            const existingTask = projectTasks.find(t => t.id === item.taskId);
-            if (existingTask && ['planning', 'backlog'].includes(existingTask.status)) {
-              // Move to backlog and assign to current devOwner
-              await fetch('/api/store', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  action: 'updateTask',
-                  id: item.taskId,
-                  updates: {
-                    status: 'backlog',
-                    assignee: project.devOwner || '',
-                    version: nextVersion.version,
-                  },
-                }),
-              });
-              // Check if ticket is bare (no description or doneWhen)
-              if (!existingTask.description && !existingTask.doneWhen) {
-                bareTicketCount++;
-              }
-              continue;
-            }
+            // Move linked ticket to backlog
+            await fetch('/api/store', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                action: 'updateTask',
+                id: item.taskId,
+                updates: {
+                  status: 'backlog',
+                  assignee: project.devOwner || '',
+                  version: nextVersion.version,
+                },
+              }),
+            });
           }
-
-          // Fallback: no linked ticket or ticket not found — create new (same as before)
-          const normalizedTitle = item.title?.toLowerCase().trim();
-          const existingTitles = new Set(
-            projectTasks.map(t => t.title?.toLowerCase().trim()).filter(Boolean)
-          );
-          if (normalizedTitle && existingTitles.has(normalizedTitle)) continue;
-          await fetch('/api/store', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'addTask',
-              task: {
-                title: item.title,
-                projectId: projectId,
-                status: 'backlog',
-                assignee: project.devOwner || '',
-                version: nextVersion.version,
-              },
-            }),
-          });
+          // No fallback — items without taskId should have been caught by approval gate
         }
-      }
-
-      // Warn about bare tickets (no description/doneWhen)
-      if (bareTicketCount > 0) {
-        console.warn(`[Launch] ${bareTicketCount} task(s) have no description or acceptance criteria`);
-        setLaunchWarning(`${bareTicketCount} task(s) launched without description or acceptance criteria`);
-        setTimeout(() => setLaunchWarning(null), 8000);
       }
 
       // 3. Update project — set currentVersion + approvedThrough
@@ -733,12 +581,6 @@ export default function ProjectDetailPage() {
               )}
             </div>
           </div>
-
-          {launchWarning && (
-            <div className="mt-2 px-3 py-2 bg-amber-500/10 border border-amber-500/20 rounded-[var(--radius-sm)] text-[var(--text-xs)] text-amber-400">
-              ⚠️ {launchWarning}
-            </div>
-          )}
 
           {/* Line 2: Team info */}
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-[var(--text-muted)] ml-6">
@@ -944,249 +786,6 @@ export default function ProjectDetailPage() {
           </div>
         </details>
 
-        {/* Outcomes Section */}
-        <details open className="rounded-2xl border border-[var(--border-color)] overflow-hidden group">
-          <summary className="cursor-pointer py-4 px-6 flex items-center justify-between text-sm font-semibold text-[var(--text-primary)] bg-[var(--bg-secondary)] hover:bg-[var(--bg-hover)] transition-colors select-none list-none">
-            <div className="flex items-center gap-2">
-              <ChevronRight size={14} className="text-[var(--text-muted)] group-open:rotate-90 transition-transform" />
-              Outcomes {project.outcomes && project.outcomes.length > 0 && (
-                <span className="text-xs font-normal text-[var(--text-muted)]">
-                  {getOutcomesSummary().completed}/{getOutcomesSummary().total}
-                </span>
-              )}
-            </div>
-            <button
-              onClick={(e) => {
-                e.preventDefault();
-                const input = document.querySelector('[placeholder="Add a measurable outcome..."],[placeholder="Add a new outcome..."]') as HTMLInputElement;
-                if (input) input.focus();
-              }}
-              className="p-1 hover:bg-[var(--bg-primary)] rounded transition-colors"
-              title="Add outcome"
-            >
-              <Plus size={12} className="text-[var(--text-muted)]" />
-            </button>
-          </summary>
-
-          <div className="border-t border-[var(--border-color)] p-6 space-y-4">
-            {project.outcomes && project.outcomes.length > 0 && (
-              <>
-                {/* Outcomes summary progress */}
-                <div className="space-y-2 pb-4 border-b border-[var(--border-color)]">
-                  <div className="text-xs font-semibold text-[var(--text-secondary)]">
-                    {getOutcomesSummary().completed} of {getOutcomesSummary().total} outcomes achieved
-                  </div>
-                  <div className="w-full h-2 bg-[var(--bg-secondary)] rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-[var(--accent-primary)] transition-all duration-300"
-                      style={{ width: `${getOutcomesSummary().percent}%` }}
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  {project.outcomes.map((outcome: any) => {
-                    const progressData = getOutcomeProgress(outcome.id);
-                    return (
-                      <div key={outcome.id} className="p-3 bg-[var(--bg-secondary)] rounded-lg space-y-2">
-                        <div className="flex items-start gap-2">
-                          <input
-                            type="checkbox"
-                            checked={outcome.done}
-                            onChange={() => handleToggleOutcome(outcome.id)}
-                            className="mt-1 w-4 h-4 cursor-pointer"
-                          />
-                          <div className="flex-1 min-w-0">
-                            <span
-                              className={clsx(
-                                'block text-sm py-1',
-                                outcome.done
-                                  ? 'line-through text-[var(--text-muted)]'
-                                  : 'text-[var(--text-secondary)]'
-                              )}
-                            >
-                              {outcome.text}
-                            </span>
-                            {/* Progress indicator */}
-                            {progressData.linkedCount > 0 ? (
-                              <div className="text-xs text-[var(--text-muted)] mt-1">
-                                {progressData.doneCount}/{progressData.linkedCount} tasks
-                              </div>
-                            ) : (
-                              <div className="text-xs text-[var(--text-muted)] mt-1 italic">
-                                No tasks linked
-                              </div>
-                            )}
-                          </div>
-                          <button
-                            onClick={() => handleRemoveOutcome(outcome.id)}
-                            className="p-1 hover:bg-[var(--bg-hover)] rounded transition-colors flex-shrink-0 mt-1"
-                          >
-                            <X size={14} className="text-[var(--text-muted)]" />
-                          </button>
-                        </div>
-                        
-                        {/* Progress bar for linked tasks */}
-                        {progressData.linkedCount > 0 && (
-                          <div className="w-full h-1.5 bg-[var(--bg-primary)] rounded-full overflow-hidden">
-                            <div
-                              className="h-full bg-[var(--accent-primary)] transition-all duration-300"
-                              style={{ width: `${progressData.progress}%` }}
-                            />
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-
-                <div className="flex flex-col sm:flex-row gap-2 pt-2">
-                  <input
-                    type="text"
-                    value={newOutcomeText}
-                    onChange={(e) => setNewOutcomeText(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        handleAddOutcome();
-                      }
-                    }}
-                    placeholder="Add a new outcome..."
-                    className="flex-1 px-3 py-2 bg-[var(--bg-primary)] border border-[var(--border-default)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--accent-primary)]"
-                  />
-                  <button
-                    onClick={handleAddOutcome}
-                    disabled={!newOutcomeText.trim() || addingOutcome}
-                    className="w-full sm:w-auto px-3 py-2 bg-[var(--accent-primary)] text-white rounded-lg font-medium text-sm hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1"
-                  >
-                    <Plus size={14} />
-                    Add
-                  </button>
-                </div>
-              </>
-            )}
-
-            {/* Always show add input — even when no outcomes yet */}
-            {(!project.outcomes || project.outcomes.length === 0) && (
-              <div className="space-y-3">
-                <p className="text-sm text-[var(--text-muted)]">
-                  No outcomes defined yet. Add outcomes to track what success looks like.
-                </p>
-                <div className="flex flex-col sm:flex-row gap-2">
-                  <input
-                    type="text"
-                    value={newOutcomeText}
-                    onChange={(e) => setNewOutcomeText(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        handleAddOutcome();
-                      }
-                    }}
-                    placeholder="Add a measurable outcome..."
-                    className="flex-1 px-3 py-2 bg-[var(--bg-primary)] border border-[var(--border-default)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--accent-primary)]"
-                  />
-                  <button
-                    onClick={handleAddOutcome}
-                    disabled={!newOutcomeText.trim() || addingOutcome}
-                    className="w-full sm:w-auto px-3 py-2 bg-[var(--accent-primary)] text-white rounded-lg font-medium text-sm hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1"
-                  >
-                    <Plus size={14} />
-                    Add
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        </details>
-
-        {/* Pending Outcomes Banner — shown when agents have proposed new outcomes */}
-        {project.pendingOutcomes && project.pendingOutcomes.length > 0 && (
-          <div className="rounded-2xl border border-amber-200 dark:border-amber-700/50 overflow-hidden">
-            <div className="h-1 bg-amber-400 dark:bg-amber-500" />
-            <div className="bg-amber-50 dark:bg-amber-950/20 p-5 space-y-4">
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-lg">🔮</span>
-                  <h2 className="font-semibold text-amber-800 dark:text-amber-300 text-sm">
-                    Proposed Outcomes
-                  </h2>
-                  <span className="text-xs text-amber-600 dark:text-amber-400 font-normal">
-                    {project.pendingOutcomes.length} awaiting review
-                  </span>
-                </div>
-                {project.pendingOutcomes.length >= 2 && (
-                  <button
-                    onClick={handleApproveAllOutcomes}
-                    disabled={pendingOutcomeAction === 'all:approve'}
-                    className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-50 flex items-center gap-1"
-                  >
-                    {pendingOutcomeAction === 'all:approve' ? (
-                      <Loader className="w-3 h-3 animate-spin" />
-                    ) : (
-                      <span>✅</span>
-                    )}
-                    Approve All
-                  </button>
-                )}
-              </div>
-
-              <div className="space-y-3">
-                {project.pendingOutcomes.map((outcome: any) => {
-                  const isActioning =
-                    pendingOutcomeAction === outcome.id + ':approve' ||
-                    pendingOutcomeAction === outcome.id + ':reject' ||
-                    pendingOutcomeAction === 'all:approve';
-                  return (
-                    <div
-                      key={outcome.id}
-                      className="bg-white dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/30 rounded-xl p-4 space-y-2"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex-1 min-w-0 space-y-1">
-                          <p className="text-sm font-medium text-[var(--text-primary)]">{outcome.text}</p>
-                          {outcome.justification && (
-                            <p className="text-xs text-amber-700 dark:text-amber-400">{outcome.justification}</p>
-                          )}
-                          <p className="text-xs text-[var(--text-muted)]">
-                            Proposed by <strong>{outcome.proposedBy}</strong>
-                            {outcome.proposedAt && (
-                              <> &middot; {new Date(outcome.proposedAt).toLocaleDateString()}</>
-                            )}
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-2 flex-shrink-0">
-                          <button
-                            onClick={() => handleApproveOutcome(outcome.id)}
-                            disabled={isActioning}
-                            className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-50 flex items-center gap-1"
-                            title="Approve this outcome"
-                          >
-                            {pendingOutcomeAction === outcome.id + ':approve' ? (
-                              <Loader className="w-3 h-3 animate-spin" />
-                            ) : (
-                              <>✅ Approve</>
-                            )}
-                          </button>
-                          <button
-                            onClick={() => handleRejectOutcome(outcome.id)}
-                            disabled={isActioning}
-                            className="px-3 py-1.5 border border-red-200 dark:border-red-700/50 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 flex items-center gap-1"
-                            title="Reject this outcome"
-                          >
-                            {pendingOutcomeAction === outcome.id + ':reject' ? (
-                              <Loader className="w-3 h-3 animate-spin" />
-                            ) : (
-                              <>❌ Reject</>
-                            )}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* Guardrails Section */}
         <details open className="rounded-2xl border border-[var(--border-color)] overflow-hidden group">
