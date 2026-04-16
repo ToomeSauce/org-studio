@@ -339,7 +339,7 @@ function TasksPageInner() {
   const [newProject, setNewProject] = useState('');
   const [newAssignee, setNewAssignee] = useState('');
   const [newDescription, setNewDescription] = useState('');
-  const [newPriority, setNewPriority] = useState<'high' | 'medium' | 'low'>('medium');
+  // priority removed from UI — tasks use position-based ordering
   const [newDoneWhen, setNewDoneWhen] = useState('');
   const [newConstraints, setNewConstraints] = useState('');
   const [newContext, setNewContext] = useState('');
@@ -479,7 +479,6 @@ function TasksPageInner() {
     setNewProject('');
     setNewAssignee('');
     setNewDescription('');
-    setNewPriority('medium');
     setNewDoneWhen('');
     setNewConstraints('');
     setNewContext('');
@@ -512,7 +511,7 @@ function TasksPageInner() {
       projectId: newProject || (filterProject !== 'all' ? filterProject : (projects[0]?.id || '')),
       assignee: newAssignee || teammates[0]?.name || '',
       description: desc,
-      priority: newPriority,
+      priority: 'medium',
       testType: newTestType,
       testAssignee: newTestType === 'qa' ? (newTestAssignee || undefined) : undefined,
       ...seedFields,
@@ -923,15 +922,7 @@ function TasksPageInner() {
                           >
                             {agents.map(a => <option key={a} value={a}>{a}</option>)}
                           </select>
-                          <select
-                            value={newPriority}
-                            onChange={e => setNewPriority(e.target.value as 'high' | 'medium' | 'low')}
-                            className="w-full text-[var(--text-xs)] bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-sm)] px-2 py-1.5 text-[var(--text-secondary)] outline-none"
-                          >
-                            <option value="high">🔴 High</option>
-                            <option value="medium">🟡 Medium</option>
-                            <option value="low">🟢 Low</option>
-                          </select>
+
                         </div>
 
                         {/* Test type options — only show when QA lead is set */}
