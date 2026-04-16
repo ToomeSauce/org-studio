@@ -549,9 +549,17 @@ export default function ProjectDetailPage() {
                 );
                 if (!hasApprovedUnshipped) {
                   return (
-                    <span className="px-4 py-2 text-[var(--text-muted)] text-sm" title="Move the approval horizon down to approve more versions">
-                      ✅ All approved versions shipped
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        disabled
+                        title="Approve more versions on the roadmap below to re-enable launch"
+                        className="px-4 py-2 bg-[var(--bg-tertiary)] text-[var(--text-muted)] rounded-lg font-medium text-sm cursor-not-allowed flex items-center gap-2 opacity-60"
+                      >
+                        <span>🚀</span>
+                        Launch
+                      </button>
+                      <span className="text-[var(--text-xs)] text-[var(--text-muted)]">✅ All approved versions shipped</span>
+                    </div>
                   );
                 }
                 return (
