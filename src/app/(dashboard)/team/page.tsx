@@ -632,7 +632,7 @@ export default function TeamPage() {
               />
             );
           })}
-          <AddTeammateCard onAdd={addTeammate} gatewayConnected={gwAvailable} />
+          <AddTeammateCard onAdd={addTeammate} gatewayConnected={gwAvailable} existingAgentIds={teammates.filter(t => t.agentId).map(t => t.agentId)} />
         </div>
       </div>
 

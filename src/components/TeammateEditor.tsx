@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { clsx } from 'clsx';
 import { X, Upload, Plus, UserPlus } from 'lucide-react';
 import { COLOR_KEYS, COLOR_MAP, resolveColor } from '@/lib/teammates';
@@ -132,9 +132,10 @@ interface AddTeammateCardProps {
     domain: string; owns: string; defers: string; description: string; color: string; isHuman: boolean; agentId: string;
   }) => void;
   gatewayConnected?: boolean;
+  existingAgentIds?: string[];
 }
 
-export function AddTeammateCard({ onAdd, gatewayConnected }: AddTeammateCardProps) {
+export function AddTeammateCard({ onAdd, gatewayConnected, existingAgentIds }: AddTeammateCardProps) {
   const [open, setOpen] = useState(false);
   const defaultHuman = gatewayConnected || false;
   const [draft, setDraft] = useState({
@@ -142,11 +143,38 @@ export function AddTeammateCard({ onAdd, gatewayConnected }: AddTeammateCardProp
     title: '', domain: '', owns: '', defers: '', description: '', color: 'blue', isHuman: defaultHuman, agentId: '',
   });
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [runtimeAgents, setRuntimeAgents] = useState<Array<{id: string; name: string; runtime: string; emoji?: string}>>([]);
+  const [loadingAgents, setLoadingAgents] = useState(false);
+  const [showCustomId, setShowCustomId] = useState(false);
+
+  useEffect(() => {
+    if (!open || draft.isHuman) return;
+    setLoadingAgents(true);
+    fetch('/api/runtimes')
+      .then(r => r.json())
+      .then(data => {
+        const agents: Array<{id: string; name: string; runtime: string; emoji?: string}> = [];
+        for (const runtime of (data.runtimes || [])) {
+          for (const agent of (runtime.agents || [])) {
+            agents.push({
+              id: agent.id,
+              name: agent.name || agent.id,
+              runtime: runtime.name || runtime.id,
+              emoji: agent.emoji,
+            });
+          }
+        }
+        setRuntimeAgents(agents);
+      })
+      .catch(() => setRuntimeAgents([]))
+      .finally(() => setLoadingAgents(false));
+  }, [open, draft.isHuman]);
 
   const reset = () => {
     setDraft({ name: '', emoji: defaultHuman ? '👤' : '🤖', avatar: undefined, title: '', domain: '', owns: '', defers: '', description: '', color: 'blue', isHuman: defaultHuman, agentId: '' });
     setOpen(false);
     setShowEmojiPicker(false);
+    setShowCustomId(false);
   };
 
   const submit = () => {
@@ -230,12 +258,57 @@ export function AddTeammateCard({ onAdd, gatewayConnected }: AddTeammateCardProp
                 </button>
               </div>
               {!draft.isHuman && (
-                <input
-                  value={draft.agentId}
-                  onChange={e => setDraft(d => ({ ...d, agentId: e.target.value }))}
-                  placeholder="Agent ID (e.g. 'ana')"
-                  className="w-full bg-[var(--bg-secondary)] border border-[var(--border-strong)] rounded-[var(--radius-sm)] px-2 py-1.5 text-[var(--text-xs)] text-[var(--text-muted)] focus:outline-none focus:border-[var(--accent-primary)]"
-                />
+                <div className="space-y-1.5">
+                  {!showCustomId ? (
+                    <div>
+                      <select
+                        value={draft.agentId}
+                        onChange={e => {
+                          if (e.target.value === '__custom__') {
+                            setShowCustomId(true);
+                            setDraft(d => ({ ...d, agentId: '' }));
+                          } else {
+                            setDraft(d => ({ ...d, agentId: e.target.value }));
+                          }
+                        }}
+                        className="w-full bg-[var(--bg-secondary)] border border-[var(--border-strong)] rounded-[var(--radius-sm)] px-2 py-1.5 text-[var(--text-xs)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+                      >
+                        <option value="">Select agent...</option>
+                        {runtimeAgents
+                          .filter(a => !(existingAgentIds || []).includes(a.id))
+                          .map(a => (
+                            <option key={a.id} value={a.id}>
+                              {a.emoji || '🤖'} {a.name} — {a.runtime} ({a.id})
+                            </option>
+                          ))}
+                        {runtimeAgents.length > 0 && <option disabled>───────────</option>}
+                        <option value="__custom__">✏️ Enter custom ID...</option>
+                      </select>
+                      {loadingAgents && (
+                        <span className="text-[var(--text-xs)] text-[var(--text-muted)]">Loading agents...</span>
+                      )}
+                      {!loadingAgents && runtimeAgents.length === 0 && (
+                        <span className="text-[var(--text-xs)] text-[var(--text-muted)]">No runtimes connected. Enter ID manually.</span>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex gap-1.5">
+                      <input
+                        value={draft.agentId}
+                        onChange={e => setDraft(d => ({ ...d, agentId: e.target.value }))}
+                        placeholder="Agent ID (e.g. 'hermes-trevor')"
+                        autoFocus
+                        className="flex-1 bg-[var(--bg-secondary)] border border-[var(--border-strong)] rounded-[var(--radius-sm)] px-2 py-1.5 text-[var(--text-xs)] text-[var(--text-muted)] focus:outline-none focus:border-[var(--accent-primary)]"
+                      />
+                      <button
+                        onClick={() => { setShowCustomId(false); setDraft(d => ({ ...d, agentId: '' })); }}
+                        className="px-2 py-1 rounded-[var(--radius-sm)] text-[var(--text-xs)] text-[var(--text-muted)] hover:text-[var(--text-primary)] bg-[var(--bg-tertiary)]"
+                      >
+                        ← Back
+                      </button>
+                    </div>
+                  )}
+                </div>
               )}
             </>
           )}
