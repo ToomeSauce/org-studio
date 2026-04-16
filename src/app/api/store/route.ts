@@ -504,15 +504,8 @@ export async function POST(req: NextRequest) {
                 let changed = false;
                 for (const item of (version.items || [])) {
                   if (item.done) continue;
-                  // Primary: match by taskId (exact link from planning-aware launch)
+                  // Match by taskId only — no title fallback (title matching caused false positives with duplicate tickets)
                   if (item.taskId && item.taskId === taskId) {
-                    item.done = true;
-                    changed = true;
-                    break;
-                  }
-                  // Fallback: title match (legacy items without taskId)
-                  const itemLower = item.title?.toLowerCase().trim();
-                  if (itemLower === titleLower || titleLower?.includes(itemLower) || itemLower?.includes(titleLower)) {
                     item.done = true;
                     changed = true;
                     break;
