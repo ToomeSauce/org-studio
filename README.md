@@ -8,7 +8,7 @@
 
 ## What Is Org Studio?
 
-Org Studio is the management layer for teams of AI agents. Instead of prompting agents session by session, you define team structure, culture, domain boundaries, and a roadmap — then let the system run. Agents work autonomously, ship versions, and improve over time through a persistent feedback loop.
+Org Studio is an opinionated management layer for teams of OpenClaw/Hermes agents. Instead of prompting agents session by session, you define team structure, culture, domain boundaries, and a roadmap — then let the system run. Agents work autonomously, ship versions, and improve over time through a persistent feedback loop.
 
 Works with [OpenClaw](https://github.com/openclaw/openclaw) and [Hermes Agent](https://hermes-agent.nousresearch.com) out of the box. Extensible to any agent runtime via the `AgentRuntime` interface.
 
