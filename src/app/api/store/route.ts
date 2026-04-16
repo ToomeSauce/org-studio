@@ -461,10 +461,18 @@ export async function POST(req: NextRequest) {
                 const rmData = await rmRes.json();
                 const version = (rmData.versions || []).find((v: any) => v.version === updated.version);
                 if (!version) return;
+                const taskId = updated.id;
                 const titleLower = updated.title?.toLowerCase().trim();
                 let changed = false;
                 for (const item of (version.items || [])) {
                   if (item.done) continue;
+                  // Primary: match by taskId (exact link from planning-aware launch)
+                  if (item.taskId && item.taskId === taskId) {
+                    item.done = true;
+                    changed = true;
+                    break;
+                  }
+                  // Fallback: title match (legacy items without taskId)
                   const itemLower = item.title?.toLowerCase().trim();
                   if (itemLower === titleLower || titleLower?.includes(itemLower) || itemLower?.includes(titleLower)) {
                     item.done = true;
