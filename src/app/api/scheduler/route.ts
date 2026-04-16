@@ -242,19 +242,12 @@ async function checkGateway(): Promise<boolean> {
  * This allows the agent to work with full tools, sub-agent spawning, and no artificial timeout.
  */
 
-// Track agents currently being dispatched to prevent duplicate sends
-const inFlightAgents = new Set<string>();
-const inFlightTimers = new Map<string, NodeJS.Timeout>();
+// In-flight tracking — shared with store route via scheduler-bridge
+import { setInFlightAgent, clearInFlightAgent as bridgeClearInFlight, isInFlight } from '@/lib/runtimes/scheduler-bridge';
 
-// Called by runtimes when an agent finishes a task dispatch
+// Re-export for backward compat
 export function clearInFlightAgent(agentId: string) {
-  inFlightAgents.delete(agentId);
-  const timer = inFlightTimers.get(agentId);
-  if (timer) {
-    clearTimeout(timer);
-    inFlightTimers.delete(agentId);
-  }
-  console.log(`fireOneShot: cleared in-flight for agent ${agentId} (completed)`);
+  bridgeClearInFlight(agentId);
 }
 
 async function fireOneShot(store: StoreData, loop: AgentLoop): Promise<string | undefined> {
@@ -262,7 +255,7 @@ async function fireOneShot(store: StoreData, loop: AgentLoop): Promise<string | 
   const agentRole = getAgentRole(store, loop.agentId);
 
   // Prevent duplicate dispatch if agent is already in-flight
-  if (inFlightAgents.has(loop.agentId)) {
+  if (isInFlight(loop.agentId)) {
     console.log(`fireOneShot: skipping ${agentName} — already in-flight`);
     return undefined;
   }
@@ -282,28 +275,16 @@ async function fireOneShot(store: StoreData, loop: AgentLoop): Promise<string | 
 
   // Send to agent's main persistent session
   const sessionKey = `agent:${loop.agentId}:main`;
-  inFlightAgents.add(loop.agentId);
-
-  // Safety timeout: clear in-flight after 10 minutes in case the completion callback never fires
-  const IN_FLIGHT_TIMEOUT_MS = 10 * 60 * 1000;
-  const timer = setTimeout(() => {
-    inFlightAgents.delete(loop.agentId);
-    inFlightTimers.delete(loop.agentId);
-    console.log(`fireOneShot: cleared in-flight for ${agentName} (safety timeout)`);
-  }, IN_FLIGHT_TIMEOUT_MS);
-  inFlightTimers.set(loop.agentId, timer);
+  setInFlightAgent(loop.agentId);
 
   try {
     const result = await sendToAgent(loop.agentId, message, {
       sessionKey,
       idempotencyKey: `dispatch-${loop.agentId}-${Date.now()}`,
       onComplete: async (completedAgentId: string) => {
-        inFlightAgents.delete(completedAgentId);
-        const t = inFlightTimers.get(completedAgentId);
-        if (t) { clearTimeout(t); inFlightTimers.delete(completedAgentId); }
-        console.log(`fireOneShot: ${agentName} task completed, cleared in-flight`);
+        bridgeClearInFlight(completedAgentId);
+        console.log(`fireOneShot: ${agentName} task completed, cleared in-flight (onComplete callback)`);
         // Auto-dispatch next task if there's NEW work (backlog/QA), not in-progress
-        // In-progress means the agent is already working — don't interrupt with a new dispatch
         try {
           const freshStore = await readStore();
           const work = getActionableWork(freshStore, loop.agentId);
@@ -322,9 +303,7 @@ async function fireOneShot(store: StoreData, loop: AgentLoop): Promise<string | 
   } catch (e: any) {
     console.error(`fireOneShot: sendToAgent failed for ${agentName}:`, e?.message || e);
     // Clear in-flight on failure so agent can be retried
-    inFlightAgents.delete(loop.agentId);
-    const failTimer = inFlightTimers.get(loop.agentId);
-    if (failTimer) { clearTimeout(failTimer); inFlightTimers.delete(loop.agentId); }
+    bridgeClearInFlight(loop.agentId);
 
     // Retry after delay — agent runtime may be restarting
     const RETRY_DELAYS = [15000, 30000, 60000]; // 15s, 30s, 60s

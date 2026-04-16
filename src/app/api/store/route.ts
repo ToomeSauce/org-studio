@@ -546,7 +546,20 @@ export async function POST(req: NextRequest) {
         if (payload.updates?.status && ['done', 'review'].includes(payload.updates.status)) {
           const completed = store.tasks.find(t => t.id === payload.id);
           if (completed?.assignee) {
+            // Clear the in-flight lock — task completion is the definitive signal
+            // that the agent's dispatch session finished (OpenClaw doesn't have onComplete callbacks)
             const assigneeLower = completed.assignee.toLowerCase();
+            const teammates = store.settings?.teammates || [];
+            const match = teammates.find((t: any) =>
+              t.name?.toLowerCase() === assigneeLower || t.agentId === assigneeLower
+            );
+            if (match?.agentId) {
+              try {
+                const { clearInFlightAgent } = await import('@/lib/runtimes/scheduler-bridge');
+                clearInFlightAgent(match.agentId);
+              } catch {}
+            }
+
             const hasMoreBacklog = store.tasks.some(t =>
               !t.isArchived &&
               t.status === 'backlog' &&
