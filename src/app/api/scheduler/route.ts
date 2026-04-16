@@ -284,8 +284,8 @@ async function fireOneShot(store: StoreData, loop: AgentLoop): Promise<string | 
   const sessionKey = `agent:${loop.agentId}:main`;
   inFlightAgents.add(loop.agentId);
 
-  // Safety timeout: clear in-flight after 30 minutes in case the completion callback never fires
-  const IN_FLIGHT_TIMEOUT_MS = 30 * 60 * 1000;
+  // Safety timeout: clear in-flight after 10 minutes in case the completion callback never fires
+  const IN_FLIGHT_TIMEOUT_MS = 10 * 60 * 1000;
   const timer = setTimeout(() => {
     inFlightAgents.delete(loop.agentId);
     inFlightTimers.delete(loop.agentId);
