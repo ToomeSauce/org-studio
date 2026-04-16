@@ -1227,6 +1227,16 @@ async function sprintCompletionCheck() {
           project: project.name,
           message: `${project.name} — all versions shipped! Roadmap complete.`,
         });
+        // Clear currentVersion so project shows Launch button
+        await fetch(`http://127.0.0.1:${port}/api/store`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            action: 'updateProject',
+            id: project.id,
+            updates: { currentVersion: null },
+          }),
+        });
         continue;
       }
 
@@ -1235,8 +1245,8 @@ async function sprintCompletionCheck() {
       const nextNum = parseFloat(nextVersion.version);
       const approvedNum = parseFloat(approvedThrough);
       if (nextNum > approvedNum) {
-        console.log(`[Auto-Advance] ${project.name} v${nextVersion.version} not approved (approved through ${approvedThrough})`);
-        // Mark current as shipped but don't advance
+        console.log(`[Auto-Advance] ${project.name} v${nextVersion.version} not approved (approved through ${approvedThrough}) — pausing project`);
+        // Mark current as shipped and pause project
         await fetch(`http://127.0.0.1:${port}/api/roadmap/${project.id}`, {
           method: 'POST',
           headers,
@@ -1246,6 +1256,16 @@ async function sprintCompletionCheck() {
             title: versions[currentIdx]?.title || currentVersion,
             status: 'shipped',
             items: versions[currentIdx]?.items || [],
+          }),
+        });
+        // Clear currentVersion so project shows Launch button
+        await fetch(`http://127.0.0.1:${port}/api/store`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            action: 'updateProject',
+            id: project.id,
+            updates: { currentVersion: null },
           }),
         });
         continue;
