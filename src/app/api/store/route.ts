@@ -627,12 +627,34 @@ export async function POST(req: NextRequest) {
 
       case 'updateProject': {
         console.log('[API:store:updateProject]', { id: payload.id, updates: JSON.stringify(payload.updates).slice(0, 500) });
+        
+        // Check if devOwner is changing
+        const oldProject = store.projects.find((p: any) => p.id === payload.id);
+        const newDevOwner = payload.updates?.devOwner;
+        const devOwnerChanged = newDevOwner && oldProject?.devOwner && newDevOwner !== oldProject.devOwner;
+
         // PERF: Use targeted provider.updateProject() instead of full store write
         await getStoreProvider().updateProject(payload.id, payload.updates);
         console.log('[API:store:updateProject] completed for', payload.id);
 
         // Note: Vision cron management has been replaced by the Launch model
         // No auto-create/update/delete cron logic needed here anymore
+
+        // If devOwner changed, reassign active tasks (NOT done tasks) to new owner
+        if (devOwnerChanged) {
+          const projectTasks = store.tasks.filter((t: any) => 
+            t.projectId === payload.id && 
+            t.assignee?.toLowerCase() === oldProject.devOwner.toLowerCase()
+          );
+          for (const task of projectTasks) {
+            // Skip done tasks — they stay credited to whoever completed them
+            if (task.status === 'done') continue;
+            await getStoreProvider().updateTask(task.id, { assignee: newDevOwner });
+          }
+          if (projectTasks.filter((t: any) => t.status !== 'done').length > 0) {
+            console.log(`[DevOwner] Reassigned ${projectTasks.filter((t: any) => t.status !== 'done').length} active task(s) from ${oldProject.devOwner} to ${newDevOwner} (skipped ${projectTasks.filter((t: any) => t.status === 'done').length} done)`);
+          }
+        }
 
         return NextResponse.json({ ok: true });
       }

@@ -170,6 +170,7 @@ export default function ProjectDetailPage() {
   const [roadmapLoading, setRoadmapLoading] = useState(true);
   const [justSavedProject, setJustSavedProject] = useState(false);
   const [launching, setLaunching] = useState(false);
+  const [launchWarning, setLaunchWarning] = useState<string | null>(null);
   const [editingGuardrails, setEditingGuardrails] = useState(false);
   const [guardrailsEditContent, setGuardrailsEditContent] = useState('');
   const [guardrailsSaving, setGuardrailsSaving] = useState(false);
@@ -540,14 +541,42 @@ export default function ProjectDetailPage() {
         }),
       });
 
-      // 2. Create tasks from roadmap items (title-level dedup)
-      const existingTitles = new Set(
-        projectTasks.map(t => t.title?.toLowerCase().trim()).filter(Boolean)
-      );
+      // 2. Move planning tickets to backlog (or create new if no linked ticket)
+      let bareTicketCount = 0;
       if (nextVersion.items?.length > 0) {
         for (const item of nextVersion.items) {
+          if (item.taskId) {
+            // Found a linked ticket — move it to backlog
+            const existingTask = projectTasks.find(t => t.id === item.taskId);
+            if (existingTask && ['planning', 'backlog'].includes(existingTask.status)) {
+              // Move to backlog and assign to current devOwner
+              await fetch('/api/store', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  action: 'updateTask',
+                  id: item.taskId,
+                  updates: {
+                    status: 'backlog',
+                    assignee: project.devOwner || '',
+                    version: nextVersion.version,
+                  },
+                }),
+              });
+              // Check if ticket is bare (no description or doneWhen)
+              if (!existingTask.description && !existingTask.doneWhen) {
+                bareTicketCount++;
+              }
+              continue;
+            }
+          }
+
+          // Fallback: no linked ticket or ticket not found — create new (same as before)
           const normalizedTitle = item.title?.toLowerCase().trim();
-          if (normalizedTitle && existingTitles.has(normalizedTitle)) continue; // skip duplicates
+          const existingTitles = new Set(
+            projectTasks.map(t => t.title?.toLowerCase().trim()).filter(Boolean)
+          );
+          if (normalizedTitle && existingTitles.has(normalizedTitle)) continue;
           await fetch('/api/store', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -562,8 +591,14 @@ export default function ProjectDetailPage() {
               },
             }),
           });
-          existingTitles.add(normalizedTitle);
         }
+      }
+
+      // Warn about bare tickets (no description/doneWhen)
+      if (bareTicketCount > 0) {
+        console.warn(`[Launch] ${bareTicketCount} task(s) have no description or acceptance criteria`);
+        setLaunchWarning(`${bareTicketCount} task(s) launched without description or acceptance criteria`);
+        setTimeout(() => setLaunchWarning(null), 8000);
       }
 
       // 3. Update project — set currentVersion + approvedThrough
@@ -698,6 +733,12 @@ export default function ProjectDetailPage() {
               )}
             </div>
           </div>
+
+          {launchWarning && (
+            <div className="mt-2 px-3 py-2 bg-amber-500/10 border border-amber-500/20 rounded-[var(--radius-sm)] text-[var(--text-xs)] text-amber-400">
+              ⚠️ {launchWarning}
+            </div>
+          )}
 
           {/* Line 2: Team info */}
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-[var(--text-muted)] ml-6">

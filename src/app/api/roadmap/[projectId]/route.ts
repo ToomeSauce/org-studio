@@ -147,6 +147,63 @@ export async function POST(
             }
           }
 
+          // Auto-create planning tickets for new items without taskId
+          if (items && items.length > 0) {
+            const storeApiUrl = `http://localhost:${process.env.PORT || 4501}/api/store`;
+            const apiKey = process.env.ORG_STUDIO_API_KEY || '';
+            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+            if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+            // Read store to get project devOwner
+            let devOwner = '';
+            try {
+              const storeRes = await fetch(storeApiUrl);
+              if (storeRes.ok) {
+                const storeData = await storeRes.json();
+                const project = storeData.projects?.find((p: any) => p.id === projectId);
+                devOwner = project?.devOwner || '';
+              }
+            } catch {}
+
+            let updated = false;
+            const updatedItems = [...items];
+
+            for (let i = 0; i < updatedItems.length; i++) {
+              const item = updatedItems[i];
+              if (item.taskId) continue; // Already linked
+
+              try {
+                const taskRes = await fetch(storeApiUrl, {
+                  method: 'POST',
+                  headers,
+                  body: JSON.stringify({
+                    action: 'addTask',
+                    task: {
+                      title: item.title,
+                      projectId,
+                      status: 'planning',
+                      assignee: devOwner,
+                      version: version,
+                    },
+                  }),
+                });
+                if (taskRes.ok) {
+                  const taskData = await taskRes.json();
+                  updatedItems[i] = { ...item, taskId: taskData.task?.id || null };
+                  updated = true;
+                }
+              } catch {}
+            }
+
+            // If any items got taskIds, update the roadmap version with the linked items
+            if (updated) {
+              await client.query(
+                'UPDATE org_studio_roadmap_versions SET items = $1 WHERE project_id = $2 AND version = $3',
+                [JSON.stringify(updatedItems), projectId, version]
+              );
+            }
+          }
+
           return NextResponse.json({
             action: 'upserted',
             version,
