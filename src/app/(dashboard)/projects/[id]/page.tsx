@@ -413,6 +413,13 @@ export default function ProjectDetailPage() {
       const nextVersion = roadmapVersions.find((v) => v.status !== 'shipped');
       if (!nextVersion) return;
 
+      // Gate: block launch if any items are missing planning tickets
+      const draftItems = nextVersion.items?.filter((item: any) => !item.taskId) || [];
+      if (draftItems.length > 0) {
+        alert(`Cannot launch v${nextVersion.version}: ${draftItems.length} item(s) need planning tickets before launch.`);
+        return;
+      }
+
       // 1. Set it as current
       await fetch(`/api/roadmap/${projectId}`, {
         method: 'POST',

@@ -593,20 +593,46 @@ export async function POST(req: NextRequest) {
 
                 // Auto-launch next version if within approval boundary
                 if (shouldAutoLaunchNext(versionCompletionTriggered.project, versionCompletionTriggered.project.currentVersion || '?')) {
+                  // Check if next version has all planning tickets before auto-launching
+                  let nextVersionReady = true;
                   try {
-                    const port = process.env.GATEWAY_PORT || '4501';
-                    await fetch(`http://localhost:${port}/api/vision/${versionCompletionTriggered.projectId}/launch`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
+                    const rmRes = await fetch(`http://127.0.0.1:${process.env.PORT || 4501}/api/roadmap/${versionCompletionTriggered.projectId}`);
+                    if (rmRes.ok) {
+                      const rmData = await rmRes.json();
+                      const shippedVersions = new Set((rmData.versions || []).filter((v: any) => v.status === 'shipped').map((v: any) => v.version));
+                      const nextVersion = (rmData.versions || []).find((v: any) => !shippedVersions.has(v.version));
+                      if (nextVersion) {
+                        const hasDraftItems = nextVersion.items?.some((item: any) => !item.taskId);
+                        if (hasDraftItems) {
+                          console.log(`[Vision Autonomy] Next version v${nextVersion.version} has items without planning tickets — blocking auto-launch`);
+                          nextVersionReady = false;
+                        }
+                      }
+                    }
+                  } catch {}
+
+                  if (nextVersionReady) {
+                    try {
+                      const port = process.env.GATEWAY_PORT || '4501';
+                      await fetch(`http://localhost:${port}/api/vision/${versionCompletionTriggered.projectId}/launch`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                      });
+                      console.log(`[Vision Autonomy] Auto-launched next version for ${versionCompletionTriggered.projectId}`);
+                    } catch (e: any) {
+                      console.error(`[Vision Autonomy] Auto-launch failed:`, e?.message);
+                    }
+                  } else {
+                    // Next version has draft items — auto-pause instead of launching
+                    console.log(`[Vision Autonomy] Next version not ready (draft items) for ${versionCompletionTriggered.projectId} — auto-pausing`);
+                    versionCompletionTriggered.project.autonomy.autoAdvance = false;
+                    await getStoreProvider().updateProject(versionCompletionTriggered.projectId, {
+                      currentVersion: null,
+                      autonomy: versionCompletionTriggered.project.autonomy,
                     });
-                    console.log(`[Vision Autonomy] Auto-launched next version for ${versionCompletionTriggered.projectId}`);
-                  } catch (e: any) {
-                    console.error(`[Vision Autonomy] Auto-launch failed:`, e?.message);
                   }
                 } else {
                   // No next version to auto-launch — auto-pause the project
-                  // This ensures the UI shows "Launch" instead of "Pause",
-                  // accurately reflecting that no work is flowing.
                   console.log(`[Vision Autonomy] No next version to auto-launch for ${versionCompletionTriggered.projectId} — auto-pausing project`);
                   versionCompletionTriggered.project.autonomy.autoAdvance = false;
                   await getStoreProvider().updateProject(versionCompletionTriggered.projectId, {
