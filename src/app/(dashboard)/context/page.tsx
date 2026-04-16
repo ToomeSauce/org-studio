@@ -749,7 +749,10 @@ function TasksPageInner() {
               const colTasks = filteredTasks
                 .filter(t => t.status === col.key)
                 .sort((a, b) => {
-                  return (a.sortOrder ?? a.createdAt) - (b.sortOrder ?? b.createdAt);
+                  // Most recent activity on top
+                  const aTime = a.lastActivityAt || (a.statusHistory?.length ? a.statusHistory[a.statusHistory.length - 1]?.timestamp : 0) || a.createdAt || 0;
+                  const bTime = b.lastActivityAt || (b.statusHistory?.length ? b.statusHistory[b.statusHistory.length - 1]?.timestamp : 0) || b.createdAt || 0;
+                  return bTime - aTime;
                 });
               return (
                 <div key={col.key} className="w-[280px] sm:w-[320px] shrink-0 flex flex-col"

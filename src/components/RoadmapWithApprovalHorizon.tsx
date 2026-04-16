@@ -783,15 +783,15 @@ export function RoadmapWithApprovalHorizon({
                 {currentVersionObj.items.map((item, idx) => {
                   // Find matching task for this roadmap item
                   const matchedTask = versionTasks.find((t: any) => 
-                    t.title?.toLowerCase().trim() === item.title?.toLowerCase().trim()
+                    (item.taskId && t.id === item.taskId) || t.title?.toLowerCase().trim() === item.title?.toLowerCase().trim()
                   );
                   const taskStatus = matchedTask?.status;
                   const statusIndicator = taskStatus === 'review' ? '👀'
-                    : taskStatus === 'blocked' ? '🚫'
-                    : taskStatus === 'in-progress' ? '⚙️'
+                    : taskStatus === 'blocked' ? '🔴'
+                    : taskStatus === 'in-progress' ? '🔄'
                     : taskStatus === 'qa' ? '🧪'
                     : item.done ? '✅' : '⬜';
-                  const isClickable = matchedTask && (taskStatus === 'review' || taskStatus === 'blocked');
+                  const isClickable = !!matchedTask;
 
                   return (
                     <div key={idx} className={clsx(
@@ -803,12 +803,19 @@ export function RoadmapWithApprovalHorizon({
                         <a
                           href={`/context?task=${matchedTask.id}`}
                           className={clsx(
-                            'font-medium underline decoration-amber-400/50 hover:decoration-amber-400',
-                            taskStatus === 'review' ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400'
+                            'font-medium hover:underline',
+                            taskStatus === 'blocked' ? 'text-red-600 dark:text-red-400'
+                            : taskStatus === 'review' ? 'text-amber-600 dark:text-amber-400'
+                            : taskStatus === 'in-progress' ? 'text-blue-600 dark:text-blue-400'
+                            : taskStatus === 'qa' ? 'text-teal-600 dark:text-teal-400'
+                            : item.done ? 'text-[var(--text-muted)]'
+                            : 'text-[var(--text-primary)]'
                           )}
                         >
                           {item.title}
-                          <span className="ml-1.5 text-xs opacity-70">({taskStatus})</span>
+                          {taskStatus && taskStatus !== 'done' && taskStatus !== 'backlog' && (
+                            <span className="ml-1.5 text-xs opacity-70">({taskStatus})</span>
+                          )}
                         </a>
                       ) : (
                         <span className={item.done ? 'text-[var(--text-muted)]' : 'text-[var(--text-primary)] font-medium'}>
