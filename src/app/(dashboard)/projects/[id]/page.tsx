@@ -409,9 +409,14 @@ export default function ProjectDetailPage() {
   const handleLaunch = async () => {
     setLaunching(true);
     try {
-      // Find the first unshipped version
-      const nextVersion = roadmapVersions.find((v) => v.status !== 'shipped');
-      if (!nextVersion) return;
+      const approvedThrough = project.autonomy?.approvedThrough;
+      // Find the first unshipped version that's within the approval horizon
+      const nextVersion = roadmapVersions.find((v) => {
+        if (v.status === 'shipped') return false;
+        if (!approvedThrough) return false; // Nothing approved
+        return parseFloat(v.version) <= parseFloat(approvedThrough);
+      });
+      if (!nextVersion) return; // No approved unshipped versions
 
       // Gate: block launch if any items are missing planning tickets
       const draftItems = nextVersion.items?.filter((item: any) => !item.taskId) || [];
@@ -537,12 +542,24 @@ export default function ProjectDetailPage() {
             {/* Action buttons — inline with title on desktop, wrap on mobile */}
             <div className="flex items-center gap-2 ml-auto flex-shrink-0">
               {/* Launch button */}
-              {roadmapVersions.length > 0 && !currentVersion && (
-                <button
-                  onClick={handleLaunch}
-                  disabled={launching}
-                  className="px-4 py-2 bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)] text-white rounded-lg font-medium text-sm transition-all disabled:opacity-50 flex items-center gap-2"
-                >
+              {roadmapVersions.length > 0 && !currentVersion && (() => {
+                const approvedThrough = project.autonomy?.approvedThrough;
+                const hasApprovedUnshipped = approvedThrough && roadmapVersions.some(v =>
+                  v.status !== 'shipped' && parseFloat(v.version) <= parseFloat(approvedThrough)
+                );
+                if (!hasApprovedUnshipped) {
+                  return (
+                    <span className="px-4 py-2 text-[var(--text-muted)] text-sm" title="Move the approval horizon down to approve more versions">
+                      ✅ All approved versions shipped
+                    </span>
+                  );
+                }
+                return (
+                  <button
+                    onClick={handleLaunch}
+                    disabled={launching}
+                    className="px-4 py-2 bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)] text-white rounded-lg font-medium text-sm transition-all disabled:opacity-50 flex items-center gap-2"
+                  >
                   {launching ? (
                     <>
                       <Loader className="w-4 h-4 animate-spin" />
@@ -555,7 +572,8 @@ export default function ProjectDetailPage() {
                     </>
                   )}
                 </button>
-              )}
+                );
+              })()}
               {/* Pause button */}
               {currentVersion && (
                 <button
