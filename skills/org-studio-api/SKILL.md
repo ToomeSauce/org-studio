@@ -162,7 +162,7 @@ There is NO separate outcomes list. Outcomes are derived entirely from the roadm
 1. Human + agent discuss the roadmap (e.g. in Telegram)
 2. Agent proposes version titles in the roadmap via `POST /api/roadmap/{projectId}` (just titles, no tickets yet)
 3. Human + agent flesh out specific items → agent creates planning tickets via `POST /api/store {action:"addTask", task:{status:"planning", ...}}`
-4. Agent links each planning ticket to its roadmap item by including `taskId` in the roadmap item
+4. Agent links each planning ticket to its roadmap item: set `taskId` on the item AND append `(#NNN)` to the item title using the task's `ticketNumber` field (e.g. "Child can complete a challenge (#573)"). This makes tickets human-readable and deep-linkable in the UI.
 5. When all items in a version have linked planning tickets → the approval horizon can move past it
 6. Human approves → launch moves planning tickets to backlog → dev agent starts work
 
