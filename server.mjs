@@ -327,9 +327,19 @@ function resolveWorkspaceDir(agentId) {
     const bare = join(WORKSPACE_BASE, 'workspace');
     if (existsSync(bare)) return bare;
   }
-  // Standard path: workspace-{agentId}
+  // Standard OpenClaw path: workspace-{agentId}
   const suffixed = join(WORKSPACE_BASE, `workspace-${agentId}`);
   if (existsSync(suffixed)) return suffixed;
+  // Hermes agents: ~/.hermes/profiles/{profileName}/workspace/
+  if (agentId.startsWith('hermes-')) {
+    const profileName = agentId.replace('hermes-', '');
+    const hermesWorkspace = join(process.env.HOME || '/tmp', '.hermes', 'profiles', profileName, 'workspace');
+    // Create workspace dir if it doesn't exist (Hermes profiles don't always have one)
+    if (!existsSync(hermesWorkspace)) {
+      try { mkdirSync(hermesWorkspace, { recursive: true }); } catch {}
+    }
+    if (existsSync(hermesWorkspace)) return hermesWorkspace;
+  }
   return null;
 }
 
