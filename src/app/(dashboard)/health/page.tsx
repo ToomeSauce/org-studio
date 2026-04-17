@@ -75,6 +75,7 @@ const TYPE_COLORS: Record<string, string> = {
   outbox_dead_letter: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400',
   gateway_disconnect: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400',
   listen_stale: 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400',
+  dead_letter_backlog: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-400',
   stuck_task: 'bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-400',
 };
 

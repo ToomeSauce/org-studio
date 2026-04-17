@@ -7,6 +7,7 @@ import next from 'next';
 import { getRuntimeRegistry } from './lib/runtimes.mjs';
 import { ensureHeartbeatSchema, startLoopWatchdog, logIncident } from './lib/heartbeats.mjs';
 import { ensureOutboxSchema, startOutboxWorker } from './lib/outbox.mjs';
+import { initHealthAlerts, sendHealthAlert, isHealthAlertsEnabled } from './lib/health-alerts.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const port = parseInt(process.env.PORT || '4501');
@@ -1738,6 +1739,178 @@ async function computeDailyMetrics(targetDate) {
 // Expose for API route (backfill endpoint)
 globalThis.__computeDailyMetrics = computeDailyMetrics;
 
+// --- Health Alert Monitors ---
+// Gateway disconnect >2min, Dead-letter backlog >10, LISTEN stale >5min
+
+let _gatewayDownSinceMs = 0; // 0 = not down
+let _gatewayAlertFired = false;
+
+async function checkGatewayDisconnect() {
+  try {
+    const resp = await fetch(`http://127.0.0.1:${port}/api/gateway`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ method: 'status' }),
+    });
+    const data = await resp.json();
+    if (data.result) {
+      // Gateway is responding — reset
+      if (_gatewayDownSinceMs) {
+        console.log('[HealthMonitor] Gateway recovered');
+      }
+      _gatewayDownSinceMs = 0;
+      _gatewayAlertFired = false;
+      return;
+    }
+  } catch {
+    // Gateway is down
+  }
+
+  const now = Date.now();
+  if (!_gatewayDownSinceMs) {
+    _gatewayDownSinceMs = now;
+  }
+
+  const downMs = now - _gatewayDownSinceMs;
+  const TWO_MIN = 2 * 60 * 1000;
+
+  if (downMs >= TWO_MIN && !_gatewayAlertFired) {
+    _gatewayAlertFired = true;
+    const downMin = Math.round(downMs / 60000);
+    try {
+      await logIncident({
+        type: 'gateway_disconnect',
+        agentId: null,
+        message: `Gateway disconnected for ${downMin}m`,
+        context: { downSince: new Date(_gatewayDownSinceMs).toISOString(), downMinutes: downMin },
+      });
+    } catch (e) {
+      console.error('[HealthMonitor] logIncident gateway_disconnect failed:', e.message);
+    }
+    try {
+      await sendHealthAlert({
+        type: 'gateway_disconnect',
+        emoji: '🔌',
+        title: 'Gateway disconnected',
+        context: `Gateway unreachable for ${downMin}m`,
+      });
+    } catch (e) {
+      console.error('[HealthMonitor] sendHealthAlert gateway_disconnect failed:', e.message);
+    }
+  }
+}
+
+async function checkDeadLetterBacklog() {
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl) return;
+
+  try {
+    const { default: pg } = await import('pg');
+    const client = new pg.Client({ connectionString: dbUrl });
+    await client.connect();
+    try {
+      const { rows } = await client.query(
+        `SELECT count(*)::int AS cnt FROM org_studio_outbox WHERE status = 'dead_letter'`
+      );
+      const count = rows[0]?.cnt || 0;
+      if (count > 10) {
+        try {
+          await logIncident({
+            type: 'dead_letter_backlog',
+            agentId: null,
+            message: `Dead-letter backlog: ${count} messages`,
+            context: { count },
+          });
+        } catch (e) {
+          console.error('[HealthMonitor] logIncident dead_letter_backlog failed:', e.message);
+        }
+        try {
+          await sendHealthAlert({
+            type: 'dead_letter_backlog',
+            emoji: '📬',
+            title: 'Dead-letter backlog',
+            context: `${count} messages stuck in dead-letter queue`,
+          });
+        } catch (e) {
+          console.error('[HealthMonitor] sendHealthAlert dead_letter_backlog failed:', e.message);
+        }
+      }
+    } finally {
+      await client.end();
+    }
+  } catch (e) {
+    console.error('[HealthMonitor] Dead-letter check error (non-fatal):', e.message);
+  }
+}
+
+let _listenDownSinceMs = 0; // 0 = healthy
+let _listenAlertFired = false;
+
+async function checkListenStale() {
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl) return;
+
+  let healthy = false;
+  try {
+    const { default: pg } = await import('pg');
+    const client = new pg.Client({ connectionString: dbUrl });
+    await client.connect();
+    try {
+      await client.query('SELECT 1');
+      // Also verify LISTEN is possible
+      await client.query('LISTEN _health_probe');
+      await client.query('UNLISTEN _health_probe');
+      healthy = true;
+    } finally {
+      await client.end();
+    }
+  } catch {
+    // Connection failed — LISTEN is stale
+  }
+
+  if (healthy) {
+    if (_listenDownSinceMs) {
+      console.log('[HealthMonitor] LISTEN connection recovered');
+    }
+    _listenDownSinceMs = 0;
+    _listenAlertFired = false;
+    return;
+  }
+
+  const now = Date.now();
+  if (!_listenDownSinceMs) {
+    _listenDownSinceMs = now;
+  }
+
+  const downMs = now - _listenDownSinceMs;
+  const FIVE_MIN = 5 * 60 * 1000;
+
+  if (downMs >= FIVE_MIN && !_listenAlertFired) {
+    _listenAlertFired = true;
+    const downMin = Math.round(downMs / 60000);
+    try {
+      await logIncident({
+        type: 'listen_stale',
+        agentId: null,
+        message: `LISTEN connection stale for ${downMin}m`,
+        context: { downSince: new Date(_listenDownSinceMs).toISOString(), downMinutes: downMin },
+      });
+    } catch (e) {
+      console.error('[HealthMonitor] logIncident listen_stale failed:', e.message);
+    }
+    try {
+      await sendHealthAlert({
+        type: 'listen_stale',
+        emoji: '🔇',
+        title: 'LISTEN connection stale',
+        context: `Postgres LISTEN unhealthy for ${downMin}m — notifications may be delayed`,
+      });
+    } catch (e) {
+      console.error('[HealthMonitor] sendHealthAlert listen_stale failed:', e.message);
+    }
+  }
+}
+
 // --- Start ---
 server.listen(port, async () => {
   console.log(`▲ Org Studio ready on http://localhost:${port}`);
@@ -1763,6 +1936,9 @@ server.listen(port, async () => {
 
   // Start outbox worker (drains outbox → /api/outbox/drain)
   startOutboxWorker();
+
+  // Initialize health alerts (startup log)
+  initHealthAlerts();
 
   // Initialize PostgreSQL LISTEN for bidirectional sync
   await initializePostgresListener();
@@ -1802,6 +1978,37 @@ server.listen(port, async () => {
 
     // Start heartbeat loop watchdog (faster — every 60s)
     startLoopWatchdog();
+
+    // --- Health alert monitors ---
+    // Gateway disconnect check (every 30s)
+    const safeCheckGateway = async () => {
+      try { await checkGatewayDisconnect(); } catch (e) {
+        console.error('[HealthMonitor] Gateway check error (non-fatal):', e.message);
+      }
+    };
+    setInterval(safeCheckGateway, 30_000);
+    console.log('[HealthMonitor] Gateway disconnect monitor started (30s tick)');
+
+    // Dead-letter backlog check (every 5min)
+    const safeCheckDeadLetter = async () => {
+      try { await checkDeadLetterBacklog(); } catch (e) {
+        console.error('[HealthMonitor] Dead-letter check error (non-fatal):', e.message);
+      }
+    };
+    setTimeout(() => {
+      safeCheckDeadLetter();
+      setInterval(safeCheckDeadLetter, 5 * 60_000);
+      console.log('[HealthMonitor] Dead-letter backlog monitor started (5min tick)');
+    }, 15_000);
+
+    // LISTEN stale check (every 60s)
+    const safeCheckListen = async () => {
+      try { await checkListenStale(); } catch (e) {
+        console.error('[HealthMonitor] LISTEN check error (non-fatal):', e.message);
+      }
+    };
+    setInterval(safeCheckListen, 60_000);
+    console.log('[HealthMonitor] LISTEN stale monitor started (60s tick)');
 
     // Start stuck-task detector (incident logging, no auto-recovery)
     const safeStuckTaskDetector = async () => {
