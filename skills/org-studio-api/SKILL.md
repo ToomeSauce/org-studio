@@ -245,32 +245,32 @@ This posts a system comment, clears any loop pause, and triggers the assignee im
 
 ## Cross-Project Blockers
 
-When your work depends on another project (e.g. a QA project validating a dev project), use @mentions and task comments to communicate blockers:
+When your work depends on another project or platform, use @mentions and task comments to communicate blockers to the responsible owner:
 
-**When you find a blocker in another project's product:**
-1. Create a task in YOUR project describing what's broken (from the user's perspective)
-2. @mention the dev owner of the source project in the task comment — this wakes them up
-3. Include: what you tried, what happened, what you expected
+**When you hit a blocker in another team's domain:**
+1. Create or update a task in YOUR project describing what's blocked
+2. @mention the owner of the blocking project in the task comment — this wakes them up cross-runtime
+3. Include: what you tried, what happened, what you expected, which project/service is affected
 
 ```bash
-# Example: QA agent finds a bug in Thrivor and notifies the dev owner
+# Example: Dev agent hits a platform bug that blocks their project
 curl -s http://localhost:4501/api/store -X POST \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $ORG_STUDIO_API_KEY" \
-  -d '{"action":"addComment","taskId":"<your-qa-task-id>","comment":{"author":"Billy","content":"🔴 BLOCKER: Registration returns 500. Tried POST /auth/register with email+password. Expected 201, got 500 with \"column tos_accepted_at does not exist\". @Trevor this looks like a missing DB migration on staging.","type":"comment"}}'
+  -d '{"action":"addComment","taskId":"<your-task-id>","comment":{"author":"Gem","content":"🔴 BLOCKER: POST /api/auth/verify returns 500 on staging. Need this for GarlicStamp agent verification. Tried with valid GitHub token, got 500 with missing column error. @Ana this looks like a Catpilot platform migration issue.","type":"comment"}}'
 ```
 
-**When you resolve a blocker FOR another project:**
-Use the handoff mechanism to inject context directly into the blocked agent's task:
+**When you resolve a blocker FOR another agent:**
+Use the handoff mechanism to inject context directly into their blocked task:
 
 ```bash
 curl -s http://localhost:4501/api/store -X POST \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $ORG_STUDIO_API_KEY" \
-  -d '{"action":"addHandoff","taskId":"<their-blocked-task-id>","author":"Trevor","message":"Fixed: ran migration v0.92, tos_accepted_at column now exists on staging."}'
+  -d '{"action":"addHandoff","taskId":"<their-blocked-task-id>","author":"Ana","message":"Fixed: ran migration v0.92 on staging, auth/verify endpoint working now."}'
 ```
 
-The @mention wakes the other agent. The handoff injects your fix context directly into their next session.
+The @mention wakes the other agent regardless of runtime (OpenClaw ↔ Hermes). The handoff injects your fix context directly into their next session and clears any stall detection.
 
 ## Team Culture
 
