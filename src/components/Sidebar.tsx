@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { clsx } from 'clsx';
 import {
   LayoutDashboard, FolderKanban, Layers, Settings, ChevronLeft, ChevronRight, Atom,
-  LogOut, X, Menu, Lock, ChevronDown, Users, BarChart3,
+  LogOut, X, Menu, Lock, ChevronDown, Users, BarChart3, Activity,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useGateway } from '@/lib/hooks';
@@ -23,6 +23,7 @@ const mainNav = [
 ];
 
 const bottomNav = [
+  { name: 'Health', href: '/health', icon: Activity, emoji: '🩺' },
   { name: 'Settings', href: '/settings', icon: Settings, emoji: '⚙️' },
 ];
 
