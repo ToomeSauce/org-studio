@@ -243,6 +243,35 @@ curl -s http://localhost:4501/api/store -X POST \
 
 This posts a system comment, clears any loop pause, and triggers the assignee immediately.
 
+## Cross-Project Blockers
+
+When your work depends on another project (e.g. a QA project validating a dev project), use @mentions and task comments to communicate blockers:
+
+**When you find a blocker in another project's product:**
+1. Create a task in YOUR project describing what's broken (from the user's perspective)
+2. @mention the dev owner of the source project in the task comment — this wakes them up
+3. Include: what you tried, what happened, what you expected
+
+```bash
+# Example: QA agent finds a bug in Thrivor and notifies the dev owner
+curl -s http://localhost:4501/api/store -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ORG_STUDIO_API_KEY" \
+  -d '{"action":"addComment","taskId":"<your-qa-task-id>","comment":{"author":"Billy","content":"🔴 BLOCKER: Registration returns 500. Tried POST /auth/register with email+password. Expected 201, got 500 with \"column tos_accepted_at does not exist\". @Trevor this looks like a missing DB migration on staging.","type":"comment"}}'
+```
+
+**When you resolve a blocker FOR another project:**
+Use the handoff mechanism to inject context directly into the blocked agent's task:
+
+```bash
+curl -s http://localhost:4501/api/store -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ORG_STUDIO_API_KEY" \
+  -d '{"action":"addHandoff","taskId":"<their-blocked-task-id>","author":"Trevor","message":"Fixed: ran migration v0.92, tos_accepted_at column now exists on staging."}'
+```
+
+The @mention wakes the other agent. The handoff injects your fix context directly into their next session.
+
 ## Team Culture
 
 - **Own your domain.** Don't ask permission for decisions in your area — make them, document the rationale, and move on.
