@@ -13,6 +13,8 @@ import { NextResponse } from 'next/server';
 import { getRuntimeRegistry } from '@/lib/runtimes/registry';
 import { getStoreProvider } from '@/lib/store-provider';
 
+const STUCK_TASK_THRESHOLD_MS = parseInt(process.env.STUCK_TASK_THRESHOLD_MIN || '30', 10) * 60 * 1000;
+
 // ---------- helpers ----------
 
 let _pool: any = undefined; // undefined = not init, null = no DB
@@ -77,9 +79,8 @@ async function queryListenHealth(pool: any): Promise<{ healthy: boolean; detail?
   }
 }
 
-function computeStuckTasks(tasks: any[]): any[] {
+function computeStuckTasks(tasks: any[], projects: any[]): any[] {
   const now = Date.now();
-  const thirtyMin = 30 * 60 * 1000;
   const stuck: any[] = [];
 
   for (const task of tasks) {
@@ -97,7 +98,8 @@ function computeStuckTasks(tasks: any[]): any[] {
     }
 
     const elapsed = now - new Date(inProgressSince).getTime();
-    if (elapsed > thirtyMin) {
+    if (elapsed > STUCK_TASK_THRESHOLD_MS) {
+      const proj = projects.find((p: any) => p.id === task.projectId);
       stuck.push({
         id: task.id,
         title: task.title || '(untitled)',
@@ -105,6 +107,7 @@ function computeStuckTasks(tasks: any[]): any[] {
         status: task.status,
         minutesInStatus: Math.round(elapsed / 60000),
         projectId: task.projectId || null,
+        projectName: proj?.name || null,
       });
     }
   }
@@ -157,7 +160,7 @@ export async function GET() {
     let stuckTasks: any[] = [];
     try {
       const store = await getStoreProvider().read();
-      stuckTasks = computeStuckTasks(store.tasks || []);
+      stuckTasks = computeStuckTasks(store.tasks || [], store.projects || []);
     } catch {
       // Swallow
     }

@@ -327,6 +327,7 @@ function TasksPageInner() {
   }, [storeData]);
   const searchParams = useSearchParams();
   const urlProject = searchParams.get('project');
+  const urlTask = searchParams.get('task');
   const [filterProject, setFilterProject] = useState('all');
 
   useEffect(() => {
@@ -350,6 +351,11 @@ function TasksPageInner() {
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [dragSourceCol, setDragSourceCol] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+
+  // Deep-link: open task detail panel when ?task= is in the URL
+  useEffect(() => {
+    if (urlTask) setSelectedTaskId(urlTask);
+  }, [urlTask]);
   const [searchQuery, setSearchQuery] = useState('');
 
 

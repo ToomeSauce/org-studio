@@ -5,7 +5,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import next from 'next';
 import { getRuntimeRegistry } from './lib/runtimes.mjs';
-import { ensureHeartbeatSchema, startLoopWatchdog } from './lib/heartbeats.mjs';
+import { ensureHeartbeatSchema, startLoopWatchdog, logIncident } from './lib/heartbeats.mjs';
 import { ensureOutboxSchema, startOutboxWorker } from './lib/outbox.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -1162,6 +1162,73 @@ const WATCHDOG_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const WATCHDOG_STUCK_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes idle
 const VISION_CYCLE_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes — vision cycles should complete within this
 
+// --- Stuck Task Detector (incident logging, separate from re-trigger watchdog) ---
+const STUCK_TASK_DETECT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const STUCK_TASK_THRESHOLD_MIN = parseInt(process.env.STUCK_TASK_THRESHOLD_MIN || '30', 10);
+const STUCK_TASK_THRESHOLD_MS_DETECT = STUCK_TASK_THRESHOLD_MIN * 60 * 1000;
+const _stuckTaskLoggedSet = new Set(); // task ids already emitted this uptime
+
+async function stuckTaskDetector() {
+  const store = cachedStore || safeRead(STORE_PATH);
+  if (!store?.tasks?.length) return;
+
+  const now = Date.now();
+  const projects = store.projects || [];
+  const currentStuckIds = new Set();
+
+  for (const task of store.tasks) {
+    if (task.isArchived || task.status !== 'in-progress') continue;
+
+    // Compute time in-progress from statusHistory or fallback
+    let inProgressSince = task.updatedAt || task.createdAt || now;
+    const history = task.statusHistory || [];
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (history[i].status === 'in-progress') {
+        inProgressSince = history[i].timestamp;
+        break;
+      }
+    }
+
+    const elapsed = now - new Date(inProgressSince).getTime();
+    const minutesInStatus = Math.round(elapsed / 60000);
+
+    if (elapsed > STUCK_TASK_THRESHOLD_MS_DETECT) {
+      currentStuckIds.add(task.id);
+
+      if (!_stuckTaskLoggedSet.has(task.id)) {
+        const proj = projects.find(p => p.id === task.projectId);
+        const projectName = proj?.name || '(unknown)';
+        try {
+          await logIncident({
+            type: 'stuck_task',
+            agentId: task.assigneeId || null,
+            message: `Task "${task.title}" stuck in-progress for ${minutesInStatus}m (assignee: ${task.assignee || 'none'}, project: ${projectName})`,
+            context: {
+              taskId: task.id,
+              title: task.title,
+              assignee: task.assignee || null,
+              projectId: task.projectId || null,
+              projectName,
+              minutesInStatus,
+              lastStatusTimestamp: inProgressSince,
+            },
+          });
+        } catch (e) {
+          console.error('[StuckTaskDetector] logIncident failed (non-fatal):', e.message);
+        }
+        _stuckTaskLoggedSet.add(task.id);
+      }
+    }
+  }
+
+  // Remove recovered tasks from the logged set so future stalls re-fire
+  for (const id of _stuckTaskLoggedSet) {
+    if (!currentStuckIds.has(id)) {
+      _stuckTaskLoggedSet.delete(id);
+    }
+  }
+}
+
 async function stuckTaskWatchdog() {
   // Use cachedStore (Postgres-backed) if available, fall back to file
   const store = cachedStore || safeRead(STORE_PATH);
@@ -1735,5 +1802,20 @@ server.listen(port, async () => {
 
     // Start heartbeat loop watchdog (faster — every 60s)
     startLoopWatchdog();
+
+    // Start stuck-task detector (incident logging, no auto-recovery)
+    const safeStuckTaskDetector = async () => {
+      try {
+        await stuckTaskDetector();
+      } catch (e) {
+        console.error('[StuckTaskDetector] Unhandled error (non-fatal):', e.message);
+      }
+    };
+    // First tick after 30s delay (let heartbeats / store warm up)
+    setTimeout(() => {
+      safeStuckTaskDetector();
+      setInterval(safeStuckTaskDetector, STUCK_TASK_DETECT_INTERVAL_MS);
+      console.log(`[StuckTaskDetector] Started (interval: 5min, threshold: ${STUCK_TASK_THRESHOLD_MIN}min)`);
+    }, 30_000);
   }, 60_000);
 });

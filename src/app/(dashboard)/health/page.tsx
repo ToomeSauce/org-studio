@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useWSConnected } from '@/lib/ws';
 import { clsx } from 'clsx';
+import Link from 'next/link';
 
 // ---------- types ----------
 
@@ -27,6 +28,7 @@ interface StuckTask {
   status: string;
   minutesInStatus: number;
   projectId: string | null;
+  projectName: string | null;
 }
 
 interface Incident {
@@ -284,7 +286,7 @@ export default function HealthPage() {
         <Panel title="Stuck Tasks" className="min-h-[120px]">
           {!data?.stuckTasks?.length ? (
             <p className="text-sm text-[var(--text-muted)]">
-              No stuck tasks ✅
+              No stuck tasks — all work flowing ✅
             </p>
           ) : (
             <div className="overflow-x-auto">
@@ -292,6 +294,7 @@ export default function HealthPage() {
                 <thead>
                   <tr className="border-b border-[var(--border-subtle)]">
                     <th className="text-left py-2 pr-4 text-xs font-semibold text-[var(--text-muted)]">Task</th>
+                    <th className="text-left py-2 pr-4 text-xs font-semibold text-[var(--text-muted)]">Project</th>
                     <th className="text-left py-2 pr-4 text-xs font-semibold text-[var(--text-muted)]">Assignee</th>
                     <th className="text-right py-2 text-xs font-semibold text-[var(--text-muted)]">In Progress</th>
                   </tr>
@@ -300,8 +303,14 @@ export default function HealthPage() {
                   {data.stuckTasks.map((t) => (
                     <tr key={t.id} className="border-b border-[var(--border-subtle)] last:border-0">
                       <td className="py-2 pr-4 text-[var(--text-primary)]">
-                        <span className="font-medium">{t.title}</span>
+                        <Link
+                          href={`/context?task=${t.id}`}
+                          className="font-medium hover:text-[var(--accent-primary)] hover:underline transition-colors"
+                        >
+                          {t.title}
+                        </Link>
                       </td>
+                      <td className="py-2 pr-4 text-[var(--text-secondary)]">{t.projectName || '—'}</td>
                       <td className="py-2 pr-4 text-[var(--text-secondary)]">{t.assignee || '—'}</td>
                       <td className="py-2 text-right">
                         <StaleLabel minutes={t.minutesInStatus} />
