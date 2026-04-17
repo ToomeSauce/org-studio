@@ -31,7 +31,7 @@ Org Studio uses **push-based triggers** — not polling. When work lands in an a
 - Task bounces from QA → dev agent wakes
 - Task reassigned while in-progress → new assignee wakes
 - Version approved/launched → creates backlog tasks + triggers dev agent
-- All version tasks complete → auto-advance checks for next version
+- All version tasks complete → project pauses, human launches next version
 
 **Mechanism:** Store API detects events → calls `/api/scheduler { action: 'trigger', agentId }` → scheduler sends dispatch via Gateway RPC → agent gets task details.
 
@@ -169,7 +169,7 @@ There is NO separate outcomes list. Outcomes are derived entirely from the roadm
 ### Approval Horizon
 
 The approval horizon card on the roadmap controls which versions are approved for execution:
-- Versions above the card are approved — will auto-launch when the previous version ships
+- Versions above the card are approved for launch — human clicks Launch to start the next one
 - Versions below the card need explicit approval
 - **A version cannot be approved if any of its items are missing planning tickets** (shown as 📝 draft)
 - Items with tickets show as ⬜ (ready) or task-status emojis (👀 🔴 🟡 🧪 ✅)

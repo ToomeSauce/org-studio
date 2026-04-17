@@ -490,46 +490,6 @@ export async function POST(req: NextRequest) {
           // PERF: Use targeted provider.updateTask() instead of full store write
           await getStoreProvider().updateTask(payload.id, updates);
 
-          // Roadmap auto-sync: when task moves to done, mark matching roadmap item as done
-          if (updates.status === 'done' && updated.version && updated.projectId) {
-            (async () => {
-              try {
-                const rmRes = await fetch(`http://127.0.0.1:${process.env.PORT || 4501}/api/roadmap/${updated.projectId}`);
-                if (!rmRes.ok) return;
-                const rmData = await rmRes.json();
-                const version = (rmData.versions || []).find((v: any) => v.version === updated.version);
-                if (!version) return;
-                const taskId = updated.id;
-                const titleLower = updated.title?.toLowerCase().trim();
-                let changed = false;
-                for (const item of (version.items || [])) {
-                  if (item.done) continue;
-                  // Match by taskId only — no title fallback (title matching caused false positives with duplicate tickets)
-                  if (item.taskId && item.taskId === taskId) {
-                    item.done = true;
-                    changed = true;
-                    break;
-                  }
-                }
-                if (changed) {
-                  const apiKey = process.env.ORG_STUDIO_API_KEY || '';
-                  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-                  if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
-                  await fetch(`http://127.0.0.1:${process.env.PORT || 4501}/api/roadmap/${updated.projectId}`, {
-                    method: 'POST',
-                    headers,
-                    body: JSON.stringify({
-                      action: 'upsert',
-                      version: version.version,
-                      title: version.title,
-                      status: version.status,
-                      items: version.items,
-                    }),
-                  });
-                }
-              } catch { /* non-blocking */ }
-            })();
-          }
         }
         if (triggeredAssignee) {
           triggerAgentLoop(triggeredAssignee, store);
@@ -568,7 +528,7 @@ export async function POST(req: NextRequest) {
         if (versionCompletionTriggered) {
           (async () => {
             try {
-              const { checkVersionCompletion, shouldAutoLaunchNext } = await import('@/lib/vision-completion');
+              const { checkVersionCompletion } = await import('@/lib/vision-completion');
               const summary = checkVersionCompletion(
                 versionCompletionTriggered.project,
                 store.tasks
@@ -933,60 +893,6 @@ export async function POST(req: NextRequest) {
         }
 
         return NextResponse.json({ ok: true });
-      }
-
-      case 'addOutcome': {
-        const project = store.projects.find((p: any) => p.id === payload.projectId);
-        if (!project) return NextResponse.json({ error: 'Project not found' }, { status: 404 });
-        if (!payload.outcome?.text) return NextResponse.json({ error: 'Missing outcome text' }, { status: 400 });
-
-        const outcomeId = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-        const newOutcome = {
-          id: outcomeId,
-          text: payload.outcome.text,
-          done: false,
-          createdAt: Date.now(),
-        };
-
-        const outcomes = project.outcomes || [];
-        outcomes.push(newOutcome);
-
-        await getStoreProvider().updateProject(payload.projectId, { outcomes });
-        const updatedProject = { ...project, outcomes };
-        return NextResponse.json({ ok: true, project: updatedProject, outcome: newOutcome });
-      }
-
-      case 'toggleOutcome': {
-        const project = store.projects.find((p: any) => p.id === payload.projectId);
-        if (!project) return NextResponse.json({ error: 'Project not found' }, { status: 404 });
-        if (!payload.outcomeId) return NextResponse.json({ error: 'Missing outcomeId' }, { status: 400 });
-
-        const outcomes = project.outcomes || [];
-        const outcomeIndex = outcomes.findIndex((o: any) => o.id === payload.outcomeId);
-        if (outcomeIndex === -1) return NextResponse.json({ error: 'Outcome not found' }, { status: 404 });
-
-        const outcome = outcomes[outcomeIndex];
-        const newDone = !outcome.done;
-        outcomes[outcomeIndex] = {
-          ...outcome,
-          done: newDone,
-          completedAt: newDone ? Date.now() : undefined,
-        };
-
-        await getStoreProvider().updateProject(payload.projectId, { outcomes });
-        const updatedProject = { ...project, outcomes };
-        return NextResponse.json({ ok: true, project: updatedProject });
-      }
-
-      case 'removeOutcome': {
-        const project = store.projects.find((p: any) => p.id === payload.projectId);
-        if (!project) return NextResponse.json({ error: 'Project not found' }, { status: 404 });
-        if (!payload.outcomeId) return NextResponse.json({ error: 'Missing outcomeId' }, { status: 400 });
-
-        const outcomes = (project.outcomes || []).filter((o: any) => o.id !== payload.outcomeId);
-        await getStoreProvider().updateProject(payload.projectId, { outcomes });
-        const updatedProject = { ...project, outcomes };
-        return NextResponse.json({ ok: true, project: updatedProject });
       }
 
       case 'updateGuardrails': {

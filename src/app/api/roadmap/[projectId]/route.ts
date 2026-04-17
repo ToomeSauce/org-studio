@@ -59,6 +59,29 @@ export async function GET(
           progress: calculateProgress(row.items || []),
         }));
 
+        // Derive item.done from linked task status (don't trust stored done flag)
+        let allTasks: any[] = [];
+        try {
+          const storeRes = await fetch(`http://127.0.0.1:${process.env.PORT || 4501}/api/store`);
+          if (storeRes.ok) {
+            const storeData = await storeRes.json();
+            allTasks = storeData.tasks || [];
+          }
+        } catch {}
+        const taskStatusById = new Map(allTasks.map((t: any) => [t.id, t.status]));
+
+        // Now override done on each item based on linked task
+        for (const ver of versions) {
+          for (const item of ver.items || []) {
+            if (item.taskId) {
+              const taskStatus = taskStatusById.get(item.taskId);
+              item.done = taskStatus === 'done';
+            }
+            // If no taskId, keep whatever done value was stored (backward compat)
+          }
+          ver.progress = calculateProgress(ver.items || []);
+        }
+
         return NextResponse.json({ versions });
       } finally {
         client.release();
