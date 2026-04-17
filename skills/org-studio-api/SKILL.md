@@ -279,3 +279,4 @@ The @mention wakes the other agent regardless of runtime (OpenClaw ↔ Hermes). 
 - **Flag blockers early.** Don't go silent on stuck tasks — post a comment saying what's blocked.
 - **Test your work.** Every task gets tested before leaving in-progress. Self-test is the default.
 - **Respect the board.** Task status must reflect reality — don't move to in-progress just to claim a task.
+- **Only the assignee can move a task to done.** If you didn't do the work, you can't close it. Reassign to yourself first if you're taking over.

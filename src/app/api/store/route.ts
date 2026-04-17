@@ -411,6 +411,19 @@ export async function POST(req: NextRequest) {
           const t = store.tasks[i];
           if (t.id !== payload.id) continue;
           const updates = { ...payload.updates };
+
+          // Guard: only the assignee can move a task to done
+          if (updates.status === 'done' && payload.by) {
+            const moverLower = (payload.by || '').toLowerCase();
+            const assigneeLower = (t.assignee || '').toLowerCase();
+            if (moverLower && assigneeLower && moverLower !== assigneeLower) {
+              return NextResponse.json(
+                { error: `Only the assignee (${t.assignee}) can move this task to done. Current mover: ${payload.by}` },
+                { status: 403 }
+              );
+            }
+          }
+
           if (updates.status && updates.status !== t.status) {
             const history = t.statusHistory || [];
             const model = await resolveAgentModel(t.assignee, store);
