@@ -11,6 +11,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { rpc } from '@/lib/gateway-rpc';
 import { sendToAgent } from '@/lib/runtimes/registry';
+import { enqueueOutbox } from '@/lib/outbox';
 import { buildLoopPrompt, buildDispatchMessage, clearConsumedHandoffs } from '@/lib/scheduler';
 import type { AgentLoop } from '@/lib/store';
 import { authenticateRequest } from '@/lib/auth';
@@ -279,29 +280,19 @@ async function fireOneShot(store: StoreData, loop: AgentLoop): Promise<string | 
   setInFlightAgent(loop.agentId);
 
   try {
-    const result = await sendToAgent(loop.agentId, message, {
+    // Enqueue to outbox — the outbox worker will call sendToAgent via /api/outbox/drain.
+    // The onComplete 'redispatch' marker tells the drain endpoint to re-trigger
+    // the scheduler when the agent completes (preserving the chain-dispatch behaviour).
+    const idempotencyKey = `dispatch-${loop.agentId}-${Date.now()}`;
+    await enqueueOutbox({
+      agentId: loop.agentId,
+      message,
       sessionKey,
-      idempotencyKey: `dispatch-${loop.agentId}-${Date.now()}`,
-      onComplete: async (completedAgentId: string) => {
-        bridgeClearInFlight(completedAgentId);
-        console.log(`fireOneShot: ${agentName} task completed, cleared in-flight (onComplete callback)`);
-        // Auto-dispatch next task if there's NEW work (backlog/QA), not in-progress
-        try {
-          const freshStore = await readStore();
-          const work = getActionableWork(freshStore, loop.agentId);
-          if (work.hasNewWork) {
-            console.log(`fireOneShot: ${agentName} has new backlog/QA work, dispatching`);
-            await fireOneShot(freshStore, loop);
-          } else if (work.hasInProgress) {
-            console.log(`fireOneShot: ${agentName} has in-progress work, skipping re-dispatch (agent is working)`);
-          }
-        } catch (e: any) {
-          console.warn(`fireOneShot: auto-redispatch failed for ${agentName}:`, e.message);
-        }
-      },
+      idempotencyKey,
+      onCompleteKind: 'redispatch',
     });
 
-    // Write heartbeat after successful dispatch
+    // Write heartbeat after successful enqueue
     try {
       await writeHeartbeat({ agentId: loop.agentId, loopId: loop.id, status: 'firing' });
     } catch (_hbErr) {
@@ -310,11 +301,13 @@ async function fireOneShot(store: StoreData, loop: AgentLoop): Promise<string | 
 
     return sessionKey;
   } catch (e: any) {
-    console.error(`fireOneShot: sendToAgent failed for ${agentName}:`, e?.message || e);
+    console.error(`fireOneShot: enqueueOutbox failed for ${agentName}:`, e?.message || e);
     // Clear in-flight on failure so agent can be retried
     bridgeClearInFlight(loop.agentId);
 
-    // Retry after delay — agent runtime may be restarting
+    // Inline retry — kept as a safety net in case enqueue itself fails
+    // (e.g. Postgres is temporarily unreachable). The outbox worker handles
+    // retry for send failures; this handles enqueue failures.
     const RETRY_DELAYS = [15000, 30000, 60000]; // 15s, 30s, 60s
     const retryCount = (loop as any)._retryCount || 0;
     if (retryCount < RETRY_DELAYS.length) {

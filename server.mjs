@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import next from 'next';
 import { getRuntimeRegistry } from './lib/runtimes.mjs';
 import { ensureHeartbeatSchema, startLoopWatchdog } from './lib/heartbeats.mjs';
+import { ensureOutboxSchema, startOutboxWorker } from './lib/outbox.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const port = parseInt(process.env.PORT || '4501');
@@ -1681,6 +1682,21 @@ server.listen(port, async () => {
   // Clean up stale one-shot crons on startup
   await cleanupStaleCrons();
 
+  // --- Ensure schemas EARLY (before any scheduler trigger can fire) ---
+  try {
+    await ensureHeartbeatSchema();
+  } catch (e) {
+    console.error(`[HeartbeatWatchdog] Schema creation failed (non-fatal):`, e.message);
+  }
+  try {
+    await ensureOutboxSchema();
+  } catch (e) {
+    console.error(`[Outbox] Schema creation failed (non-fatal):`, e.message);
+  }
+
+  // Start outbox worker (drains outbox → /api/outbox/drain)
+  startOutboxWorker();
+
   // Initialize PostgreSQL LISTEN for bidirectional sync
   await initializePostgresListener();
 
@@ -1704,12 +1720,7 @@ server.listen(port, async () => {
 
   // Start watchdog after 60s, then every 30 minutes
   setTimeout(async () => {
-    // Ensure heartbeat schema before watchdog starts
-    try {
-      await ensureHeartbeatSchema();
-    } catch (e) {
-      console.error(`[HeartbeatWatchdog] Schema creation failed (non-fatal):`, e.message);
-    }
+    // Heartbeat schema already ensured above — no need to redo
 
     const safeWatchdog = async () => {
       try {
