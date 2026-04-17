@@ -3,6 +3,7 @@ import { authenticateRequest } from '@/lib/auth';
 import { rpc } from '@/lib/gateway-rpc';
 import { getStoreProvider, type StoreData } from '@/lib/store-provider';
 import { parseMentions, notifyMentionedAgents } from '@/lib/mention-notifier';
+import { syncRoadmapItemForTask } from '@/lib/roadmap-sync';
 
 const SCHEDULER_URL = 'http://localhost:4501/api/scheduler';
 
@@ -502,6 +503,13 @@ export async function POST(req: NextRequest) {
           
           // PERF: Use targeted provider.updateTask() instead of full store write
           await getStoreProvider().updateTask(payload.id, updates);
+
+          // Sync roadmap item done flag when task status changes
+          if (updates.status && updated.projectId) {
+            const isDone = updates.status === 'done';
+            // Fire async — never block the response
+            syncRoadmapItemForTask(updated.projectId, payload.id, isDone).catch(() => {});
+          }
 
         }
         if (triggeredAssignee) {
