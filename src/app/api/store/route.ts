@@ -686,6 +686,37 @@ export async function POST(req: NextRequest) {
           mentionResult = { detected: mentions.map(m => m.teammate.name || m.teammate.agentId) };
         }
 
+        // Auto-notify project owners (devOwner + qaOwner) on every comment they didn't write
+        const project = store.projects?.find((p: any) => p.id === task.projectId);
+        if (project) {
+          const authorLower = (comment.author || '').toLowerCase();
+          const alreadyMentioned = new Set(mentions.map(m => (m.teammate.name || '').toLowerCase()));
+          const ownersToNotify: string[] = [];
+
+          for (const ownerName of [project.devOwner, project.qaOwner].filter(Boolean)) {
+            const ownerLower = ownerName.toLowerCase();
+            if (ownerLower === authorLower) continue; // Don't notify yourself
+            if (alreadyMentioned.has(ownerLower)) continue; // Already notified via explicit @mention
+            ownersToNotify.push(ownerName);
+          }
+
+          if (ownersToNotify.length > 0) {
+            const ownerMentions = ownersToNotify
+              .map(name => teammates.find((t: any) => t.name?.toLowerCase() === name.toLowerCase()))
+              .filter(Boolean)
+              .map(t => ({ teammate: t, raw: t.name }));
+            if (ownerMentions.length > 0) {
+              notifyMentionedAgents(task, comment, ownerMentions, teammates)
+                .then(result => {
+                  if (result.sent.length) {
+                    console.log(`[auto-notify] Notified owners ${result.sent.join(', ')} about comment on ${task.id}`);
+                  }
+                })
+                .catch(() => {});
+            }
+          }
+        }
+
         // Telegram notification when an agent posts a comment (so humans see replies)
         const commentAuthor = (comment.author || '').toLowerCase();
         const isAgentComment = teammates.some((t: any) => 
