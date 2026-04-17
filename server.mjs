@@ -907,8 +907,8 @@ async function initializePostgresListener() {
             if (freshStore) {
               broadcast('store', freshStore);
               
-              // Also sync ORG.md if store changed
-              if (changeEvent.type === 'store_update' && WORKSPACE_BASE) {
+              // Also sync ORG.md on any store change
+              if (WORKSPACE_BASE) {
                 syncOrgFiles(freshStore);
               }
             }
