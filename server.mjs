@@ -322,15 +322,7 @@ function generateOrgMd(store, forAgentId) {
 }
 
 function resolveWorkspaceDir(agentId) {
-  // Default agent id is 'main' but workspace is the bare 'workspace' dir
-  if (agentId === 'main') {
-    const bare = join(WORKSPACE_BASE, 'workspace');
-    if (existsSync(bare)) return bare;
-  }
-  // Standard OpenClaw path: workspace-{agentId}
-  const suffixed = join(WORKSPACE_BASE, `workspace-${agentId}`);
-  if (existsSync(suffixed)) return suffixed;
-  // Hermes agents: ~/.hermes/profiles/{profileName}/workspace/
+  // Hermes agents: check ~/.hermes/profiles/{profileName}/workspace/ first
   if (agentId.startsWith('hermes-')) {
     const profileName = agentId.replace('hermes-', '');
     const hermesWorkspace = join(process.env.HOME || '/tmp', '.hermes', 'profiles', profileName, 'workspace');
@@ -340,6 +332,14 @@ function resolveWorkspaceDir(agentId) {
     }
     if (existsSync(hermesWorkspace)) return hermesWorkspace;
   }
+  // Default agent id is 'main' but workspace is the bare 'workspace' dir
+  if (agentId === 'main') {
+    const bare = join(WORKSPACE_BASE, 'workspace');
+    if (existsSync(bare)) return bare;
+  }
+  // Standard OpenClaw path: workspace-{agentId}
+  const suffixed = join(WORKSPACE_BASE, `workspace-${agentId}`);
+  if (existsSync(suffixed)) return suffixed;
   return null;
 }
 
