@@ -14,9 +14,9 @@ export function ArchiveModal({ onClose, projects }: { onClose: () => void; proje
     if (!searchQuery.trim()) return archivedTasks;
     const q = searchQuery.toLowerCase();
     return archivedTasks.filter(t =>
-      t.title.toLowerCase().includes(q) ||
+      t.title?.toLowerCase().includes(q) ||
       t.ticketNumber?.toString().includes(q) ||
-      t.assignee.toLowerCase().includes(q)
+      t.assignee?.toLowerCase().includes(q)
     );
   }, [archivedTasks, searchQuery]);
 

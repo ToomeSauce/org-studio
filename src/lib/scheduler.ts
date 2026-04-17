@@ -27,7 +27,7 @@ export const DEFAULT_SECTIONS: PromptSection[] = [
     id: 'column-workflow',
     label: 'Column Workflow',
     content: `COLUMN WORKFLOW — understand what each column means:
-  planning    → Humans are scoping/speccing this task. DO NOT touch. Not ready for agents.
+  planning    → Tasks being scoped/specced. Both humans AND agents can add/refine tasks here. Do NOT pull tasks from this column to work. Once a planning task has clear acceptance criteria and is ready for execution, move it to backlog (whether you scoped it or a human did).
   backlog     → Ready for an agent to pick up. This is YOUR intake queue.
   in-progress → Actively being worked. Resume these first.
   qa          → QA validation in progress. Test assignee is running the test plan. If you're the test assignee, follow the test plan.
@@ -118,7 +118,7 @@ TEST PLAN — every task has a testPlan field:
   - For QA tasks: describe end-user verification steps for the QA reviewer.
   - Leave the testPlan intact — don't delete or modify it after writing.
 
-NEVER pull from "planning" — humans own that column. Those tasks are not ready.`,
+PLANNING COLUMN — you may add tasks to planning when you discover work that needs scoping (acceptance criteria, constraints, context not yet defined). Refine planning tasks with comments or edits. When a planning task is fully scoped and ready for execution, move it to backlog. Do NOT pull tasks FROM planning to work on — they're not ready until they're in backlog.`,
     enabled: true,
     order: 40,
     builtIn: true,
@@ -167,7 +167,7 @@ NEVER pull from "planning" — humans own that column. Those tasks are not ready
 - Only work tasks in YOUR domain. Read ORG.md for scope.
 - If blocked on a task, note the blocker, skip it, and move to the next.
 - NEVER touch main/master branches on shared repos. Staging only.
-- NEVER pull tasks from "planning" — humans own that column.
+- Do NOT pull tasks from "planning" to work on — those are still being scoped. You CAN add tasks to planning, refine them, and move them to backlog when ready.
 - When you see opportunities to improve your domain, create new tasks and work them.
 - Clear your activity status when all work is done.
 - Every task must be tested. Check testType: "self" = self-test and document; "qa" = self-test then move to qa column.
@@ -229,7 +229,7 @@ export const QA_SECTIONS: PromptSection[] = [
     id: 'column-workflow',
     label: 'Column Workflow',
     content: `COLUMN WORKFLOW — understand what each column means:
-  planning    → Humans are scoping/speccing this task. DO NOT touch. Not ready for agents.
+  planning    → Tasks being scoped. Humans AND agents can add/refine tasks here. Do NOT pull from this column to work. Tasks move to backlog when fully scoped and ready.
   backlog     → Ready for an agent to pick up.
   in-progress → Actively being worked by a dev.
   qa          → ** YOUR PRIMARY COLUMN ** — Tasks here need QA validation. This is where you do your main work.
@@ -295,7 +295,7 @@ REVIEW NOTES — when moving a task to "review" or "done", ALWAYS write a review
   6. When all work is done, clear your activity status and end.
   7. If you run out of time mid-task, leave it in whatever column it's actually in.
 
-NEVER pull from "planning" — humans own that column. Those tasks are not ready.`,
+PLANNING COLUMN — you may add QA-related tasks (test plan gaps, missing coverage) to planning. Refine them with comments or edits. Move them to backlog when ready for an agent to execute. Do NOT pull tasks FROM planning to work on.`,
     enabled: true,
     order: 40,
     builtIn: true,
@@ -348,7 +348,7 @@ NEVER pull from "planning" — humans own that column. Those tasks are not ready
 - Only work tasks in YOUR domain (testing/QA). Read ORG.md for scope.
 - If blocked on a task, note the blocker as a comment, skip it, and move to the next.
 - Clear your activity status when all work is done.
-- NEVER pull tasks from "planning" — humans own that column.`,
+- Do NOT pull tasks from "planning" to work on — those are still being scoped. You CAN add tasks to planning, refine them, and move them to backlog when ready.`,
     enabled: true,
     order: 60,
     builtIn: true,

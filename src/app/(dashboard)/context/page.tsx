@@ -22,7 +22,7 @@ const BASE_COLUMNS: { key: Task['status']; label: string; color: string }[] = [
 const QA_COLUMN = { key: 'qa' as Task['status'], label: 'QA', color: 'bg-teal-500' };
 
 const COLUMN_TOOLTIPS: Record<Task['status'], string> = {
-  'planning': 'Human-owned — scope and define acceptance criteria before moving to Backlog.',
+  'planning': 'Scoping column. Humans and agents can add/refine tasks here. Move to Backlog when ready for execution.',
   'backlog': 'Agent intake queue — ready to be picked up. Top = highest priority.',
   'in-progress': 'Actively being worked by agents or humans.',
   'qa': 'QA validation — end-user testing before human review.',
@@ -31,7 +31,7 @@ const COLUMN_TOOLTIPS: Record<Task['status'], string> = {
 };
 
 const COLUMN_EMPTY: Record<Task['status'], { emoji: string; heading: string; text: string }> = {
-  'planning': { emoji: '🔒', heading: 'Human territory', text: 'Scope and spec tasks here before they\'re ready. Move to Backlog when an agent can pick them up.' },
+  'planning': { emoji: '📝', heading: 'Scoping zone', text: 'Add and refine tasks here. Move to Backlog when fully scoped and ready for an agent to pick up.' },
   'backlog': { emoji: '📥', heading: 'Agent intake', text: 'Ready tasks land here. Agents pull from the top — highest priority first.' },
   'in-progress': { emoji: '⚡', heading: 'Where the work happens', text: 'Agents pull from Backlog and work here. Tasks show up automatically.' },
   'qa': { emoji: '🧪', heading: 'QA queue', text: 'Tasks requiring end-user testing land here. Test assignee validates against the test plan.' },
@@ -368,9 +368,9 @@ function TasksPageInner() {
       const q = searchQuery.toLowerCase();
       result = result.filter(t => {
         if (t.ticketNumber && t.ticketNumber.toString().includes(q)) return true;
-        if (t.title.toLowerCase().includes(q)) return true;
+        if (t.title?.toLowerCase().includes(q)) return true;
         if (t.description?.toLowerCase().includes(q)) return true;
-        if (t.assignee.toLowerCase().includes(q)) return true;
+        if (t.assignee?.toLowerCase().includes(q)) return true;
         return false;
       });
     }
@@ -625,7 +625,7 @@ function TasksPageInner() {
         (() => {
           const archivedTasks = getArchivedTasks().filter(t => {
             if (filterAgent !== 'all' && t.assignee !== filterAgent) return false;
-            if (searchQuery && !t.title.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+            if (searchQuery && !t.title?.toLowerCase().includes(searchQuery.toLowerCase())) return false;
             return true;
           });
 
