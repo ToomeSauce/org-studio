@@ -14,6 +14,7 @@ import { sendToAgent } from '@/lib/runtimes/registry';
 import { buildLoopPrompt, buildDispatchMessage, clearConsumedHandoffs } from '@/lib/scheduler';
 import type { AgentLoop } from '@/lib/store';
 import { authenticateRequest } from '@/lib/auth';
+import { writeHeartbeat } from '@/lib/heartbeats';
 import { getStoreProvider, type StoreData } from '@/lib/store-provider';
 const DEFAULT_MODEL = 'foundry-openai-chat/gpt-5.4';
 
@@ -299,6 +300,14 @@ async function fireOneShot(store: StoreData, loop: AgentLoop): Promise<string | 
         }
       },
     });
+
+    // Write heartbeat after successful dispatch
+    try {
+      await writeHeartbeat({ agentId: loop.agentId, loopId: loop.id, status: 'firing' });
+    } catch (_hbErr) {
+      // Heartbeat failures must never break scheduler execution
+    }
+
     return sessionKey;
   } catch (e: any) {
     console.error(`fireOneShot: sendToAgent failed for ${agentName}:`, e?.message || e);

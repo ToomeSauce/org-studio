@@ -5,6 +5,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import next from 'next';
 import { getRuntimeRegistry } from './lib/runtimes.mjs';
+import { ensureHeartbeatSchema, startLoopWatchdog } from './lib/heartbeats.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const port = parseInt(process.env.PORT || '4501');
@@ -1702,7 +1703,14 @@ server.listen(port, async () => {
   console.log(`[Metrics] Scheduled: startup in 15s, then daily at midnight (${Math.round(_msUntilMidnight / 60000)}m from now)`);
 
   // Start watchdog after 60s, then every 30 minutes
-  setTimeout(() => {
+  setTimeout(async () => {
+    // Ensure heartbeat schema before watchdog starts
+    try {
+      await ensureHeartbeatSchema();
+    } catch (e) {
+      console.error(`[HeartbeatWatchdog] Schema creation failed (non-fatal):`, e.message);
+    }
+
     const safeWatchdog = async () => {
       try {
         await stuckTaskWatchdog();
@@ -1713,5 +1721,8 @@ server.listen(port, async () => {
     safeWatchdog();
     setInterval(safeWatchdog, WATCHDOG_INTERVAL_MS);
     console.log(`[Watchdog] Started (interval: 30m, task threshold: 30m, vision cycle timeout: 15m)`);
+
+    // Start heartbeat loop watchdog (faster — every 60s)
+    startLoopWatchdog();
   }, 60_000);
 });
