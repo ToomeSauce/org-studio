@@ -385,27 +385,6 @@ export default function PerformancePage() {
                   color="var(--accent-primary)"
                 />
 
-                {/* Roadmap vs Adhoc split — #698 */}
-                {agentMetrics.some(m => m.roadmapThroughput || m.adhocThroughput) && (
-                  <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-lg p-4">
-                    <h4 className="text-xs font-semibold text-[var(--text-muted)] mb-2">Roadmap vs Adhoc</h4>
-                    <div className="flex items-center gap-6 text-sm">
-                      <div>
-                        <span className="text-[var(--accent-primary)] font-bold text-lg">
-                          {agentMetrics.reduce((s, m) => s + (m.roadmapThroughput || 0), 0)}
-                        </span>
-                        <span className="text-[var(--text-muted)] ml-1">🗺️ roadmap</span>
-                      </div>
-                      <div>
-                        <span className="text-[var(--text-primary)] font-bold text-lg">
-                          {agentMetrics.reduce((s, m) => s + (m.adhocThroughput || 0), 0)}
-                        </span>
-                        <span className="text-[var(--text-muted)] ml-1">⚡ adhoc</span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
                 {/* Throughput per Day */}
                 <TrendChart
                   title="Throughput (tasks/hr)"

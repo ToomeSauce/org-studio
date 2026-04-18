@@ -463,8 +463,6 @@ export async function POST(req: NextRequest) {
               );
             }
 
-            // Enforce roadmap task kind/type
-            payload.task.taskKind = 'roadmap';
             if (!payload.task.taskType) payload.task.taskType = 'feature';
           } else {
             // Adhoc task flow: no version
@@ -485,8 +483,6 @@ export async function POST(req: NextRequest) {
                 { status: 400 }
               );
             }
-
-            payload.task.taskKind = 'adhoc';
           }
         }
         // --- End #698 guardrails ---
@@ -507,7 +503,7 @@ export async function POST(req: NextRequest) {
         await getStoreProvider().createTask(task);
 
         // Write back taskId to roadmap item if this is a roadmap task
-        if (task.taskKind === 'roadmap' && task.roadmapItemId && task.version && task.projectId) {
+        if (task.roadmapItemId && task.version && task.projectId) {
           (async () => {
             try {
               if (process.env.DATABASE_URL) {

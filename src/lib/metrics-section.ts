@@ -34,8 +34,6 @@ export interface SectionMetricsOutput {
   active_minutes: number;
   review_notes_rate: number | null;
   test_plan_rate: number | null;
-  roadmap_throughput: number;  // #698: count of done transitions for taskKind='roadmap'
-  adhoc_throughput: number;    // #698: count of done transitions for taskKind='adhoc'
 }
 
 /**
@@ -60,8 +58,6 @@ export function computeSectionMetrics(input: SectionMetricsInput): SectionMetric
   let doneCount = 0;
   let reviewNotesCount = 0;
   let testPlanCount = 0;
-  let roadmapThroughput = 0;
-  let adhocThroughput = 0;
 
   for (const task of tasks) {
     const history = task.statusHistory || [];
@@ -72,9 +68,6 @@ export function computeSectionMetrics(input: SectionMetricsInput): SectionMetric
         doneCount++;
         if (task.reviewNotes) reviewNotesCount++;
         if (task.testPlan) testPlanCount++;
-        // #698: bucket by taskKind
-        if (task.taskKind === 'roadmap') roadmapThroughput++;
-        else adhocThroughput++;
       }
       if (h.status === 'in-progress') {
         tasksStarted++;
@@ -155,7 +148,5 @@ export function computeSectionMetrics(input: SectionMetricsInput): SectionMetric
     active_minutes: Math.round(activeMinutes),
     review_notes_rate: reviewNotesRate != null ? Math.round(reviewNotesRate * 1000) / 1000 : null,
     test_plan_rate: testPlanRate != null ? Math.round(testPlanRate * 1000) / 1000 : null,
-    roadmap_throughput: roadmapThroughput,
-    adhoc_throughput: adhocThroughput,
   };
 }

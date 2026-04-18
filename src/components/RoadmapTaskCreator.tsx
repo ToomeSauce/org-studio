@@ -142,6 +142,7 @@ export default function RoadmapTaskCreator({
   const [versions, setVersions] = useState<RoadmapVersion[]>([]);
   const [loading, setLoading] = useState(true);
   const [creatingFor, setCreatingFor] = useState<{ item: RoadmapItem; version: string } | null>(null);
+  const [mintingItemKey, setMintingItemKey] = useState<string | null>(null);
 
   const fetchRoadmap = useCallback(async () => {
     try {
@@ -161,11 +162,44 @@ export default function RoadmapTaskCreator({
     fetchRoadmap();
   }, [fetchRoadmap]);
 
-  // Filter to non-shipped versions with at least one unlinked item
+  // Filter to non-shipped versions with at least one open item
   const actionableVersions = versions.filter(v =>
     v.status !== 'shipped' &&
-    v.items.some(item => !item.taskId && item.id)
+    v.items.some(item => !item.taskId && !item.done)
   );
+
+  // Lazy id mint: items without an id get one assigned + persisted on first Create-task click.
+  const mintIdAndOpen = useCallback(async (item: RoadmapItem, ver: RoadmapVersion, idx: number) => {
+    const key = `${ver.id}:${idx}`;
+    setMintingItemKey(key);
+    try {
+      const newId = `item-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`;
+      const updatedItems = ver.items.map((it, i) => (i === idx ? { ...it, id: newId } : it));
+      const res = await fetch(`/api/roadmap/${projectId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'upsert',
+          version: ver.version,
+          title: ver.title,
+          status: ver.status,
+          items: updatedItems,
+          versionType: ver.version_type,
+        }),
+      });
+      if (!res.ok) {
+        console.error('Failed to mint roadmap item id');
+        setMintingItemKey(null);
+        return;
+      }
+      setVersions(prev => prev.map(v => v.id === ver.id ? { ...v, items: updatedItems } : v));
+      setCreatingFor({ item: { ...item, id: newId }, version: ver.version });
+    } catch (e) {
+      console.error('mintIdAndOpen failed', e);
+    } finally {
+      setMintingItemKey(null);
+    }
+  }, [projectId]);
 
   if (loading) return null;
   if (actionableVersions.length === 0) return null;
@@ -182,12 +216,13 @@ export default function RoadmapTaskCreator({
           <p className="text-xs font-semibold text-[var(--text-muted)] mb-2">v{ver.version}</p>
           <div className="space-y-1.5">
             {ver.items.map((item, idx) => {
-              if (!item.id) return null;
               const hasTask = !!item.taskId;
               const isShipped = item.done;
+              const itemKey = `${ver.id}:${idx}`;
+              const isMinting = mintingItemKey === itemKey;
 
               return (
-                <div key={item.id || idx} className="flex items-center gap-2 text-sm">
+                <div key={item.id || itemKey} className="flex items-center gap-2 text-sm">
                   <input type="checkbox" checked={item.done} readOnly className="mt-0" />
                   <span className={clsx('flex-1', item.done && 'line-through text-[var(--text-muted)]')}>
                     {item.title}
@@ -198,10 +233,15 @@ export default function RoadmapTaskCreator({
                     </span>
                   ) : !isShipped ? (
                     <button
-                      onClick={() => setCreatingFor({ item, version: ver.version })}
-                      className="text-[10px] px-2 py-1 rounded bg-[var(--accent)] text-white hover:opacity-90 transition-opacity flex items-center gap-1"
+                      onClick={() => item.id
+                        ? setCreatingFor({ item, version: ver.version })
+                        : mintIdAndOpen(item, ver, idx)
+                      }
+                      disabled={isMinting}
+                      className="text-[10px] px-2 py-1 rounded bg-[var(--accent)] text-white hover:opacity-90 transition-opacity flex items-center gap-1 disabled:opacity-50"
                     >
-                      <Plus size={10} /> Create task
+                      {isMinting ? <Loader size={10} className="animate-spin" /> : <Plus size={10} />}
+                      {isMinting ? 'Preparing…' : 'Create task'}
                     </button>
                   ) : null}
                 </div>

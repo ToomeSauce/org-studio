@@ -92,22 +92,15 @@ function TaskCard({ task, projects, onDelete, onSelect, agents, nameColors }: {
           <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-[var(--accent-primary)]">
             {proj.name}
           </span>
-          {task.taskKind === 'roadmap' && task.version && (
+          {task.version ? (
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--accent-primary)]/15 text-[var(--accent-primary)] font-semibold">
               v{task.version}
             </span>
-          )}
-          {task.taskKind === 'adhoc' && task.taskType && (
+          ) : task.taskType ? (
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--bg-tertiary)] text-[var(--text-muted)]">
               {task.taskType === 'bug' ? '\ud83d\udc1b bug' : task.taskType === 'chore' ? '\ud83d\udd27 chore' : task.taskType === 'followup' ? '\ud83d\udd01 followup' : task.taskType === 'spike' ? '\ud83d\udd2c spike' : task.taskType}
             </span>
-          )}
-          {/* Fallback: show version pill for legacy tasks without taskKind */}
-          {!task.taskKind && task.version && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--bg-tertiary)] text-[var(--text-muted)]">
-              v{task.version}
-            </span>
-          )}
+          ) : null}
         </div>
       )}
       <div className="flex items-start gap-1.5 mb-2">
@@ -397,7 +390,11 @@ function TasksPageInner() {
       if (filterAgent !== 'all' && t.assignee !== filterAgent) return false;
       if (filterVersion !== 'all' && t.version !== filterVersion) return false;
       // Task kind filter (#698)
-      if (filterKind !== 'all' && t.taskKind !== filterKind) return false;
+      if (filterKind !== 'all') {
+        const isRoadmap = !!t.roadmapItemId;
+        if (filterKind === 'roadmap' && !isRoadmap) return false;
+        if (filterKind === 'adhoc' && isRoadmap) return false;
+      }
       // Section filter (only meaningful when a project is selected)
       if (filterSection !== 'all' && filterProject !== 'all') {
         if (filterSection === 'main') {
