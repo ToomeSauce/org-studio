@@ -113,6 +113,9 @@ export interface Task {
     author: string;           // Who wrote it
     createdAt: number;        // When it was written
   };
+  taskKind?: 'roadmap' | 'adhoc';
+  taskType?: 'feature' | 'bug' | 'chore' | 'spike' | 'followup';
+  roadmapItemId?: string;  // links roadmap tasks back to their RoadmapItem (items[].id)
   comments?: TaskComment[];
   statusHistory?: { status: string; timestamp: number; by?: string; model?: string }[];
 }

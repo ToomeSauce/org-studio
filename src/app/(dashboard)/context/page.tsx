@@ -92,7 +92,18 @@ function TaskCard({ task, projects, onDelete, onSelect, agents, nameColors }: {
           <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-[var(--accent-primary)]">
             {proj.name}
           </span>
-          {task.version && (
+          {task.taskKind === 'roadmap' && task.version && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--accent-primary)]/15 text-[var(--accent-primary)] font-semibold">
+              v{task.version}
+            </span>
+          )}
+          {task.taskKind === 'adhoc' && task.taskType && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--bg-tertiary)] text-[var(--text-muted)]">
+              {task.taskType === 'bug' ? '\ud83d\udc1b bug' : task.taskType === 'chore' ? '\ud83d\udd27 chore' : task.taskType === 'followup' ? '\ud83d\udd01 followup' : task.taskType === 'spike' ? '\ud83d\udd2c spike' : task.taskType}
+            </span>
+          )}
+          {/* Fallback: show version pill for legacy tasks without taskKind */}
+          {!task.taskKind && task.version && (
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--bg-tertiary)] text-[var(--text-muted)]">
               v{task.version}
             </span>
@@ -336,6 +347,7 @@ function TasksPageInner() {
   const [filterAgent, setFilterAgent] = useState('all');
   const [filterVersion, setFilterVersion] = useState('all');
   const [filterSection, setFilterSection] = useState('all');
+  const [filterKind, setFilterKind] = useState<'all' | 'roadmap' | 'adhoc'>('all');
   const [addingTo, setAddingTo] = useState<Task['status'] | null>(null);
   const [newTitle, setNewTitle] = useState('');
   const [newProject, setNewProject] = useState('');
@@ -349,6 +361,7 @@ function TasksPageInner() {
   const [newContext, setNewContext] = useState('');
   const [newTestType, setNewTestType] = useState<'self' | 'qa'>('self');
   const [newTestAssignee, setNewTestAssignee] = useState('');
+  const [newTaskType, setNewTaskType] = useState<'bug' | 'chore' | 'followup' | 'spike'>('followup');
   const [criteriaOpen, setCriteriaOpen] = useState(false);
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
@@ -383,6 +396,8 @@ function TasksPageInner() {
       if (filterProject !== 'all' && t.projectId !== filterProject) return false;
       if (filterAgent !== 'all' && t.assignee !== filterAgent) return false;
       if (filterVersion !== 'all' && t.version !== filterVersion) return false;
+      // Task kind filter (#698)
+      if (filterKind !== 'all' && t.taskKind !== filterKind) return false;
       // Section filter (only meaningful when a project is selected)
       if (filterSection !== 'all' && filterProject !== 'all') {
         if (filterSection === 'main') {
@@ -408,7 +423,7 @@ function TasksPageInner() {
     }
 
     return result;
-  }, [tasks, filterProject, filterAgent, filterVersion, filterSection, searchQuery]);
+  }, [tasks, filterProject, filterAgent, filterVersion, filterSection, filterKind, searchQuery]);
 
   const selectedTask = useMemo(() => {
     if (!selectedTaskId) return null;
@@ -520,6 +535,7 @@ function TasksPageInner() {
     setNewContext('');
     setNewTestType('self');
     setNewTestAssignee('');
+    setNewTaskType('followup');
     setCriteriaOpen(false);
     setAddingTo(null);
   }, []);
@@ -551,6 +567,7 @@ function TasksPageInner() {
       assignee: newAssignee || teammates[0]?.name || '',
       description: desc,
       priority: 'medium',
+      taskType: newTaskType,  // #698: adhoc task type
       testType: newTestType,
       testAssignee: newTestType === 'qa' ? (newTestAssignee || undefined) : undefined,
       ...(newSectionId ? { sectionId: newSectionId } : {}),
@@ -638,6 +655,17 @@ function TasksPageInner() {
             {uniqueVersions.map(v => <option key={v} value={v}>v{v}</option>)}
           </select>
         )}
+
+        {/* Task Kind Filter — #698 */}
+        <select
+          value={filterKind}
+          onChange={e => setFilterKind(e.target.value as any)}
+          className="text-[var(--text-sm)] px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-md)] text-[var(--text-secondary)] outline-none focus:border-[var(--accent-primary)] transition-colors"
+        >
+          <option value="all">All Kinds</option>
+          <option value="roadmap">🗺️ Roadmap</option>
+          <option value="adhoc">⚡ Adhoc</option>
+        </select>
 
         {/* Section Filter — only when a specific project is selected */}
         {filterProject !== 'all' && filterProject !== 'archived' && (() => {
@@ -1011,6 +1039,21 @@ function TasksPageInner() {
                             </div>
                           );
                         })()}
+
+                        {/* Task type selector — #698 adhoc task flow */}
+                        <div className="flex items-center gap-3 mb-2">
+                          <label className="text-[var(--text-xs)] text-[var(--text-muted)]">Type</label>
+                          <select
+                            value={newTaskType}
+                            onChange={e => setNewTaskType(e.target.value as any)}
+                            className="text-[var(--text-xs)] bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-sm)] px-2 py-1 text-[var(--text-secondary)] outline-none"
+                          >
+                            <option value="followup">🔁 Followup</option>
+                            <option value="bug">🐛 Bug</option>
+                            <option value="chore">🔧 Chore</option>
+                            <option value="spike">🔬 Spike</option>
+                          </select>
+                        </div>
 
                         {/* Test type options — only show when QA lead is set */}
                         {qaLead && (

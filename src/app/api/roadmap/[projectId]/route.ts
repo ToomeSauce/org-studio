@@ -6,6 +6,7 @@ import { checkArchivedProject } from '@/lib/archived-project-compat';
 export const dynamic = 'force-dynamic';
 
 interface RoadmapItem {
+  id?: string;       // stable item identifier for roadmap-task linking
   title: string;
   done: boolean;
   taskId?: string | null;

@@ -8,6 +8,7 @@ import { Rocket, Settings, Pencil, Loader, ChevronDown, ChevronRight, CheckCircl
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import RoadmapTaskCreator from '@/components/RoadmapTaskCreator';
 
 // --- Section Parsing Helpers ---
 
@@ -233,6 +234,7 @@ function VisionCard({
   onEditToggle,
   isEditing,
   onSaveDoc,
+  teammates,
 }: {
   project: ProjectWithVision;
   docContent: string | null;
@@ -244,6 +246,7 @@ function VisionCard({
   onEditToggle: () => void;
   isEditing: boolean;
   onSaveDoc: (content: string) => Promise<void>;
+  teammates: string[];
 }) {
   const [expandedVersions, setExpandedVersions] = useState<Set<string>>(new Set());
   const [approvalMenuOpen, setApprovalMenuOpen] = useState(false);
@@ -825,6 +828,9 @@ function VisionCard({
             )}
 
             {/* Boundaries Section */}
+            {/* Roadmap Task Creator — shows "Create task" buttons for unlinked items */}
+            <RoadmapTaskCreator projectId={project.id} teammates={teammates} />
+
             {boundaries && (
               <div>
                 <button
@@ -1409,6 +1415,7 @@ export default function VisionPage() {
           onEditToggle={() => setIsEditing(!isEditing)}
           isEditing={isEditing}
           onSaveDoc={handleSaveDoc}
+          teammates={teammates}
         />
       )}
 

@@ -131,9 +131,12 @@ PLANNING COLUMN — you can both add tasks to planning AND pull tasks from it. W
   Fetch tasks:
     curl -s http://localhost:4501/api/store | parse JSON → .tasks[]
 
-  Create new task (always to "backlog"):
+  Create new follow-up/adhoc task (always to "backlog"):
     curl -s http://localhost:4501/api/store -X POST -H "Content-Type: application/json" \\
-      -d '{"action":"addTask","task":{"title":"<title>","projectId":"<project-id>","status":"backlog","assignee":"\${agentName}"}}'
+      -d '{"action":"addTask","task":{"title":"<title>","projectId":"<project-id>","status":"backlog","assignee":"\${agentName}","taskType":"followup"}}'
+    IMPORTANT: When creating follow-up tasks, always set taskType='followup' (or 'bug', 'chore', 'spike'). Never set version.
+    When creating roadmap tasks, use the vision page flow — do not call addTask directly with version set. The API will reject it.
+    Never use force: true — it is reserved for human administrators.
 
   Update task status:
     curl -s http://localhost:4501/api/store -X POST -H "Content-Type: application/json" \\
@@ -321,9 +324,12 @@ PLANNING COLUMN — you can both add QA-related tasks to planning AND pull tasks
   Fetch tasks:
     curl -s http://localhost:4501/api/store | parse JSON → .tasks[]
 
-  Create new task (always to "backlog"):
+  Create new follow-up/adhoc task (always to "backlog"):
     curl -s http://localhost:4501/api/store -X POST -H "Content-Type: application/json" \\
-      -d '{"action":"addTask","task":{"title":"<title>","projectId":"<project-id>","status":"backlog","assignee":"\${agentName}"}}'
+      -d '{"action":"addTask","task":{"title":"<title>","projectId":"<project-id>","status":"backlog","assignee":"\${agentName}","taskType":"followup"}}'
+    IMPORTANT: When creating follow-up tasks, always set taskType='followup' (or 'bug', 'chore', 'spike'). Never set version.
+    When creating roadmap tasks, use the vision page flow — do not call addTask directly with version set. The API will reject it.
+    Never use force: true — it is reserved for human administrators.
 
   Update task status:
     curl -s http://localhost:4501/api/store -X POST -H "Content-Type: application/json" \\

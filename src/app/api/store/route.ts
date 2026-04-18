@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticateRequest } from '@/lib/auth';
+import { authenticateRequest, getSession, getSessionTokenFromCookie } from '@/lib/auth';
 import { rpc } from '@/lib/gateway-rpc';
 import { getStoreProvider, type StoreData } from '@/lib/store-provider';
 import { parseMentions, notifyMentionedAgents } from '@/lib/mention-notifier';
@@ -7,6 +7,22 @@ import { syncRoadmapItemForTask } from '@/lib/roadmap-sync';
 import { checkArchivedProject } from '@/lib/archived-project-compat';
 
 const SCHEDULER_URL = 'http://localhost:4501/api/scheduler';
+
+/** Determine if the request is from a human (session cookie) or an API-key agent.
+ *  Returns { isHuman: true, userId } for cookie sessions, { isHuman: false } for API key.
+ */
+async function resolveCallerRole(req: NextRequest): Promise<{ isHuman: boolean; userId?: string }> {
+  const cookieHeader = req.headers.get('cookie');
+  const sessionToken = getSessionTokenFromCookie(cookieHeader);
+  if (sessionToken) {
+    const session = await getSession(sessionToken);
+    if (session) {
+      return { isHuman: true, userId: session.userId };
+    }
+  }
+  // Bearer token = programmatic/agent access
+  return { isHuman: false };
+}
 
 const DEFAULT_LOOP_STEPS = [
   {
@@ -385,6 +401,127 @@ export async function POST(req: NextRequest) {
             );
           }
         }
+
+        // --- #698 Task-creation guardrails ---
+        const taskVersion = (payload.task?.version || '').trim();
+        const taskForce = payload.task?.force === true;
+
+        // Force escape hatch — gated on human session only
+        if (taskForce) {
+          const caller = await resolveCallerRole(req);
+          if (!caller.isHuman) {
+            return NextResponse.json(
+              { error: 'force: true is restricted to human sessions. Agents cannot bypass task-creation guardrails.' },
+              { status: 403 }
+            );
+          }
+          console.warn(`[force] addTask bypass by user ${caller.userId} for task "${payload.task?.title}"`);
+        }
+
+        if (!taskForce) {
+          if (taskVersion) {
+            // Roadmap task flow: version set → require roadmapItemId + validate
+            const roadmapItemId = payload.task?.roadmapItemId;
+            if (!roadmapItemId) {
+              return NextResponse.json(
+                { error: 'Tasks with a version must include roadmapItemId. Use the roadmap flow to create versioned tasks.' },
+                { status: 400 }
+              );
+            }
+
+            // Look up the roadmap version for this project+version
+            const roadmapProjectId = payload.task?.projectId;
+            let roadmapVersionRow: any = null;
+            let roadmapItems: any[] = [];
+            if (process.env.DATABASE_URL) {
+              try {
+                const { Pool } = await import('pg');
+                const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+                const result = await pool.query(
+                  `SELECT id, items FROM org_studio_roadmap_versions WHERE project_id = $1 AND version = $2 LIMIT 1`,
+                  [roadmapProjectId, taskVersion]
+                );
+                await pool.end();
+                if (result.rows.length > 0) {
+                  roadmapVersionRow = result.rows[0];
+                  roadmapItems = roadmapVersionRow.items || [];
+                }
+              } catch (e: any) {
+                console.error('[addTask guardrail] Postgres lookup failed:', e?.message);
+              }
+            } else {
+              // File-based fallback
+              try {
+                const fs = require('fs');
+                const path = require('path');
+                const roadmapPath = path.join(process.cwd(), 'data', 'roadmaps', `${roadmapProjectId}.json`);
+                if (fs.existsSync(roadmapPath)) {
+                  const data = JSON.parse(fs.readFileSync(roadmapPath, 'utf-8'));
+                  const ver = (data.versions || []).find((v: any) => v.version === taskVersion);
+                  if (ver) {
+                    roadmapVersionRow = ver;
+                    roadmapItems = ver.items || [];
+                  }
+                }
+              } catch (e: any) {
+                console.error('[addTask guardrail] File lookup failed:', e?.message);
+              }
+            }
+
+            if (!roadmapVersionRow) {
+              return NextResponse.json(
+                { error: `Roadmap version ${taskVersion} not found for project ${roadmapProjectId}.` },
+                { status: 400 }
+              );
+            }
+
+            // Find the item by id
+            const matchedItem = roadmapItems.find((item: any) => item.id === roadmapItemId);
+            if (!matchedItem) {
+              return NextResponse.json(
+                { error: `Roadmap item '${roadmapItemId}' not found in version ${taskVersion}.` },
+                { status: 400 }
+              );
+            }
+
+            if (matchedItem.taskId) {
+              return NextResponse.json(
+                { error: 'Roadmap item already has a linked task. Each item can only be linked to one task.' },
+                { status: 400 }
+              );
+            }
+
+            // Enforce roadmap task kind/type
+            payload.task.taskKind = 'roadmap';
+            if (!payload.task.taskType) payload.task.taskType = 'feature';
+          } else {
+            // Adhoc task flow: no version
+            const allowedAdhocTypes = ['bug', 'chore', 'followup', 'spike'];
+            const taskType = payload.task?.taskType;
+            if (!taskType || !allowedAdhocTypes.includes(taskType)) {
+              return NextResponse.json(
+                { error: `Adhoc tasks require taskType to be one of: ${allowedAdhocTypes.join(', ')}. Got: '${taskType || '(empty)'}'. For roadmap tasks, use the roadmap flow with a version and roadmapItemId.` },
+                { status: 400 }
+              );
+            }
+
+            // Title regex check: reject titles that look like roadmap version prefixes
+            const title = (payload.task?.title || '').trim();
+            if (/^v\d+\.\d+:/i.test(title)) {
+              return NextResponse.json(
+                { error: 'Task title looks like a roadmap version prefix; use the roadmap flow or remove the version prefix.' },
+                { status: 400 }
+              );
+            }
+
+            payload.task.taskKind = 'adhoc';
+          }
+        }
+        // --- End #698 guardrails ---
+
+        // Strip force from the persisted task data
+        delete payload.task?.force;
+
         const id = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
         const now = Date.now();
         const initialStatus = payload.task?.status || 'backlog';
@@ -399,6 +536,54 @@ export async function POST(req: NextRequest) {
         };
         // PERF: Use targeted provider.createTask() instead of full store write
         await getStoreProvider().createTask(task);
+
+        // Write back taskId to roadmap item if this is a roadmap task
+        if (task.taskKind === 'roadmap' && task.roadmapItemId && task.version && task.projectId) {
+          (async () => {
+            try {
+              if (process.env.DATABASE_URL) {
+                const { Pool } = await import('pg');
+                const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+                const result = await pool.query(
+                  `SELECT id, items FROM org_studio_roadmap_versions WHERE project_id = $1 AND version = $2 LIMIT 1`,
+                  [task.projectId, task.version]
+                );
+                if (result.rows.length > 0) {
+                  const items = result.rows[0].items || [];
+                  const item = items.find((i: any) => i.id === task.roadmapItemId);
+                  if (item) {
+                    item.taskId = task.id;
+                    await pool.query(
+                      `UPDATE org_studio_roadmap_versions SET items = $1 WHERE id = $2`,
+                      [JSON.stringify(items), result.rows[0].id]
+                    );
+                    console.log(`[addTask] Linked roadmap item ${task.roadmapItemId} → task ${task.id}`);
+                  }
+                }
+                await pool.end();
+              } else {
+                // File-based fallback
+                const fs = require('fs');
+                const path = require('path');
+                const roadmapPath = path.join(process.cwd(), 'data', 'roadmaps', `${task.projectId}.json`);
+                if (fs.existsSync(roadmapPath)) {
+                  const data = JSON.parse(fs.readFileSync(roadmapPath, 'utf-8'));
+                  const ver = (data.versions || []).find((v: any) => v.version === task.version);
+                  if (ver) {
+                    const item = (ver.items || []).find((i: any) => i.id === task.roadmapItemId);
+                    if (item) {
+                      item.taskId = task.id;
+                      fs.writeFileSync(roadmapPath, JSON.stringify(data, null, 2));
+                      console.log(`[addTask] Linked roadmap item ${task.roadmapItemId} → task ${task.id}`);
+                    }
+                  }
+                }
+              }
+            } catch (e: any) {
+              console.error('[addTask] Failed to write back taskId to roadmap item:', e?.message);
+            }
+          })();
+        }
 
         // Event-driven: if task lands in backlog, trigger the assignee's loop
         if (initialStatus === 'backlog' && task.assignee) {
