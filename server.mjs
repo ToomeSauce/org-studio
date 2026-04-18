@@ -224,6 +224,43 @@ function generateOrgMd(store, forAgentId) {
   }
   lines.push('');
 
+  // Team-level shared protocols — same for every agent
+  lines.push('## How the Team Works');
+  lines.push('- **Own your domain.** You don\'t report status to a manager — the Org Studio board is your status. Update it, don\'t narrate it.');
+  lines.push('- **Humans task you directly.** Their word is final. When a human and another agent conflict, the human wins.');
+  lines.push('- **Coordinators don\'t manage you.** Agents tagged as cross-cutting coordinators handle work that spans domains (email, calendar, onboarding). They don\'t approve your domain work.');
+  lines.push('- **Go direct when it makes sense.** Need to sync with another agent on shared code or a blocker? Ping them directly. Don\'t route through a coordinator.');
+  lines.push('- **Ask for help when you\'re stuck.** Missing context that spans domains? Need something from email or calendar? That\'s when you ping a coordinator.');
+  lines.push('');
+  lines.push('### What NOT to do');
+  lines.push('- ❌ Send teammates status updates about your work (update the board instead)');
+  lines.push('- ❌ Ask permission to do things in your own domain (just do them)');
+  lines.push('- ❌ Route messages through coordinators when you can talk to the other agent directly');
+  lines.push('');
+
+  lines.push('## Inter-Agent Communication');
+  lines.push('You can reach other agents directly. Use the `wake-agent` command to send a message that will wake the target even if they\'re idle:');
+  lines.push('```bash');
+  lines.push('wake-agent <agentId> "<message>"');
+  lines.push('```');
+  lines.push('Valid agent IDs are listed in the Team roster above (use the lowercase name, e.g. `henry`, `ana`, `mikey`).');
+  lines.push('');
+  lines.push('**Cross-runtime mentions.** @mention another agent in a task comment (e.g. `@Ana please check this`) and the notification routes cross-runtime (OpenClaw ↔ Hermes) automatically. Preferred for task-specific coordination.');
+  lines.push('');
+
+  lines.push('## Cross-Agent Delivery Rule (MANDATORY)');
+  lines.push('When another agent routes work to you (via wake event, cross-session message, or cron) and the result needs to reach a human:');
+  lines.push('1. **ALWAYS** deliver the result via the messaging tool (e.g. `message(action=send, channel=telegram, target=<humanId>)`) — do NOT rely on normal reply routing.');
+  lines.push('2. After sending, reply `NO_REPLY` to avoid duplicates.');
+  lines.push('3. **Why:** Wake events and cross-agent sessions have `channel: "unknown"` — normal replies go nowhere.');
+  lines.push('');
+
+  lines.push('## Sub-Agent Model Selection');
+  lines.push('For code sub-agents use **Codex** (`foundry-openai-responses/gpt-5.3-codex`) — zero cost on Foundry, purpose-built for code. For research/analysis sub-agents use `foundry-openai/gpt-5.4`. Keep your main session on your primary model for orchestration.');
+  lines.push('');
+  lines.push('**Rule of thumb:** task ends with a code commit → Codex. Task ends with a report or decision → 5.4.');
+  lines.push('');
+
   // Vision docs summary — fetch from API (Postgres) with local file fallback
   const projects = store?.projects || [];
   const activeProjects = projects.filter(p => p.phase === 'active' || p.lifecycle === 'building' || p.lifecycle === 'mature');
@@ -269,7 +306,7 @@ function generateOrgMd(store, forAgentId) {
   lines.push('```');
   lines.push('');
 
-  // Work loop — so agents know the standard workflow
+  // Work loop — canonical workflow. Full work contract is in the org-studio-api skill.
   lines.push('## Work Loop');
   lines.push('1. Scan **in-progress** for tasks assigned to you. Resume the highest priority one.');
   lines.push('2. If nothing in-progress, scan **backlog**. Pick the highest priority task.');
@@ -282,9 +319,13 @@ function generateOrgMd(store, forAgentId) {
   lines.push('5. If more backlog tasks remain, continue with the next one.');
   lines.push('6. If you run out of time mid-task, leave it where it is.');
   lines.push('');
-  lines.push('**Task lifecycle:** backlog → in-progress → QA → review → done');
+  lines.push('**Planning column:** You ARE encouraged to pull from planning — scope the task (acceptance criteria, constraints, context), then move to backlog when ready for execution. If the task lacks context to scope, post a comment asking instead of guessing.');
+  lines.push('');
+  lines.push('**Task lifecycle:** planning → backlog → in-progress → [qa] → review → done');
   lines.push('Always include `reviewNotes` when moving to review/done.');
   lines.push('Always include `version` when creating tasks for a sprint.');
+  lines.push('');
+  lines.push('**Full work contract** (columns, testing details, handoffs, examples) lives in the `org-studio-api` skill at `skills/org-studio-api/SKILL.md`. Read it when in doubt.');
   lines.push('');
 
   lines.push('## Cross-Project Blockers');
