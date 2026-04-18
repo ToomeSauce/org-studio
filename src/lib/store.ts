@@ -21,6 +21,7 @@ export interface Project {
   sortOrder?: number;
   createdAt: number;
   createdBy: string;
+  workspace_id?: string;  // v0.16: multi-workspace support (default: 'default-workspace')
 
   // --- Vision Board fields (Phase 1+) ---
   visionDocPath?: string;       // Path to VISION.md (repo-relative or absolute)
@@ -70,7 +71,7 @@ export interface Project {
 }
 
 export interface CommentScope {
-  kind: 'task' | 'section' | 'board' | 'dm';
+  kind: 'task' | 'section' | 'board' | 'dm' | 'channel';
   taskId?: string;
   sectionId?: string;
   boardProjectId?: string;
@@ -96,6 +97,7 @@ export interface Task {
   ticketNumber?: number;  // Sequential ticket number (#1, #2, etc.) for easy reference
   title: string;
   description?: string;
+  workspace_id?: string;  // v0.16: multi-workspace support (default: 'default-workspace')
   // Seed task structured fields
   // @deprecated — use description for goals/vision. Kept for backward compat.
   outcome?: string;

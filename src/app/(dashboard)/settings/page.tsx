@@ -4,8 +4,9 @@ import { PageHeader } from '@/components/PageHeader';
 import { useWSData } from '@/lib/ws';
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import Link from 'next/link';
-import { Save, RefreshCw, ChevronDown, ChevronUp, WifiOff, RotateCcw, History, Eye, AlertTriangle, X, Database, Cloud, HardDrive, CheckCircle2 } from 'lucide-react';
+import { Save, RefreshCw, ChevronDown, ChevronUp, WifiOff, RotateCcw, History, Eye, AlertTriangle, X, Database, Cloud, HardDrive, CheckCircle2, Building2 } from 'lucide-react';
 import { clsx } from 'clsx';
+import { WorkspaceInfoCard, WorkspaceSwitcher } from '@/components/WorkspaceSwitcher';
 
 function ResetOnboardingSection() {
   const [resetting, setResetting] = useState(false);
@@ -539,6 +540,19 @@ export default function SettingsPage() {
   return (
     <div className="space-y-6 max-w-2xl">
       <PageHeader title="Settings" description="Storage, runtime, and system configuration" />
+
+      {/* Current Workspace */}
+      <section className="bg-[var(--card)] border border-[var(--border-default)] rounded-[var(--radius-lg)] p-5 space-y-4 shadow-[var(--shadow-sm),inset_0_1px_0_var(--card-highlight)]">
+        <div className="flex items-center gap-2">
+          <Building2 size={15} className="text-[var(--text-secondary)]" />
+          <h2 className="text-[var(--text-sm)] font-semibold text-[var(--text-primary)]">Workspace</h2>
+        </div>
+        <p className="text-[var(--text-xs)] text-[var(--text-tertiary)]">
+          Your active workspace determines which projects, tasks, and teammates you see.
+          All data is scoped to the current workspace.
+        </p>
+        <WorkspaceInfoCard />
+      </section>
 
       {/* Agent Runtimes */}
       <RuntimeStatusSection />

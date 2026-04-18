@@ -1,11 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticateRequest } from '@/lib/auth';
+import { authenticateRequest, getSession, getSessionTokenFromCookie } from '@/lib/auth';
 import { rpc } from '@/lib/gateway-rpc';
 import { getStoreProvider, type StoreData } from '@/lib/store-provider';
 import { parseMentions } from '@/lib/mention-notifier';
 import { routeCommentNotifications } from '@/lib/notification-router';
 import { syncRoadmapItemForTask } from '@/lib/roadmap-sync';
 import { checkArchivedProject } from '@/lib/archived-project-compat';
+import {
+  resolveWorkspaceContext,
+  filterByWorkspace,
+  stampWorkspace,
+  belongsToWorkspace,
+  DEFAULT_WORKSPACE_ID,
+  type WorkspaceContext,
+} from '@/lib/workspace-auth';
 
 const SCHEDULER_URL = 'http://localhost:4501/api/scheduler';
 
@@ -353,11 +361,39 @@ function piggybackStuckCheck(store: any) {
   }
 }
 
-export async function GET() {
+/**
+ * Helper: resolve workspace from request, returning DEFAULT_WORKSPACE_ID
+ * for unauthenticated / internal callers (backward-compat).
+ */
+async function resolveRequestWorkspace(req: NextRequest): Promise<WorkspaceContext> {
+  try {
+    const cookieHeader = req.headers.get('cookie');
+    const sessionToken = getSessionTokenFromCookie(cookieHeader);
+    let userId: string | undefined;
+    if (sessionToken) {
+      const session = await getSession(sessionToken);
+      if (session) userId = session.userId;
+    }
+    const wsResult = await resolveWorkspaceContext(req, userId);
+    if (wsResult.context) return wsResult.context;
+  } catch {}
+  return { id: DEFAULT_WORKSPACE_ID, name: 'Default Workspace' };
+}
+
+export async function GET(req: NextRequest) {
   try {
     const data = await readStore();
     piggybackStuckCheck(data);
-    return NextResponse.json(data);
+
+    // Workspace filtering — transparent: single-workspace users see everything
+    const workspace = await resolveRequestWorkspace(req);
+    const filteredData = {
+      ...data,
+      projects: filterByWorkspace(data.projects, workspace.id),
+      tasks: filterByWorkspace(data.tasks, workspace.id),
+    };
+
+    return NextResponse.json(filteredData);
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
@@ -367,6 +403,9 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const authError = await authenticateRequest(req);
   if (authError) return authError;
+
+  // Resolve workspace context for this request
+  const workspace = await resolveRequestWorkspace(req);
 
   try {
     const body = await req.json();
@@ -496,6 +535,7 @@ export async function POST(req: NextRequest) {
           ticketNumber,
           createdAt: now,
           ...payload.task,
+          workspace_id: payload.task?.workspace_id || workspace.id,
           statusHistory: [{ status: initialStatus, timestamp: now }],
           initiatedBy: payload.task?.initiatedBy || 'unknown',
         };
@@ -568,11 +608,17 @@ export async function POST(req: NextRequest) {
 
       case 'updateTask': {
         let triggeredAssignee: string | null = null;
-        let versionCompletionTriggered: { projectId: string; project: any } | null = null;
+        let versionCompletionTriggered: { projectId: string; project: any; version?: string } | null = null;
 
         for (let i = 0; i < store.tasks.length; i++) {
           const t = store.tasks[i];
           if (t.id !== payload.id) continue;
+
+          // Workspace guard: reject cross-workspace mutations
+          if (!belongsToWorkspace(t, workspace.id)) {
+            return NextResponse.json({ error: 'Forbidden — task belongs to another workspace' }, { status: 403 });
+          }
+
           const updates = { ...payload.updates };
 
           // Guard: only the assignee can move a task to done
@@ -626,10 +672,19 @@ export async function POST(req: NextRequest) {
             }
 
             // **NEW: Check for version completion when task moves to done**
-            if (updates.status === 'done' && t.projectId) {
+            if (updates.status === 'done' && t.projectId && t.version) {
               const project = store.projects.find((p: any) => p.id === t.projectId);
-              if (project?.autonomy?.enabled && project.autonomy.pendingVersion) {
-                versionCompletionTriggered = { projectId: t.projectId, project };
+              if (project) {
+                // Check if ALL tasks for this version are now done
+                const versionTasks = store.tasks.filter((task: any) => 
+                  task.projectId === t.projectId && task.version === t.version && !task.isArchived
+                );
+                const allDone = versionTasks.every((task: any) => 
+                  task.id === t.id ? true : task.status === 'done'
+                );
+                if (allDone && versionTasks.length > 0) {
+                  versionCompletionTriggered = { projectId: t.projectId, project, version: t.version };
+                }
               }
             }
           }
@@ -711,34 +766,46 @@ export async function POST(req: NextRequest) {
         if (versionCompletionTriggered) {
           (async () => {
             try {
-              const { checkVersionCompletion } = await import('@/lib/vision-completion');
-              const summary = checkVersionCompletion(
-                versionCompletionTriggered.project,
-                store.tasks
-              );
-              if (summary.isComplete) {
+              const completedVersion = (versionCompletionTriggered as any).version;
+              
+              if (completedVersion) {
                 console.log(
-                  `[Vision Autonomy] Version complete for project ${versionCompletionTriggered.projectId}`
+                  `[Version Dispatch] All tasks for v${completedVersion} in project ${versionCompletionTriggered.projectId} are done`
                 );
-                // Clear pendingVersion
-                versionCompletionTriggered.project.autonomy.pendingVersion = undefined;
-                // PERF: Use targeted provider.updateProject() instead of full store write
-                await getStoreProvider().updateProject(versionCompletionTriggered.projectId, {
-                  autonomy: versionCompletionTriggered.project.autonomy,
-                });
-
-                // Version complete — auto-pause. Human must explicitly launch next version.
-                console.log(`[Vision Autonomy] Version complete for ${versionCompletionTriggered.projectId} — pausing. Launch next version manually.`);
-                await getStoreProvider().updateProject(versionCompletionTriggered.projectId, {
-                  currentVersion: null,
-                  autonomy: {
-                    ...versionCompletionTriggered.project.autonomy,
-                    autoAdvance: false,
-                  },
-                });
+                
+                // **FIX #2: Update project state after version completion**
+                const updates: any = {
+                  currentVersion: completedVersion,
+                  approvedThrough: completedVersion,
+                };
+                
+                // Update the version record: status = 'shipped', set approvedAt
+                const versions = versionCompletionTriggered.project.versions || [];
+                const completedVersionRecord = versions.find((v: any) => v.label === completedVersion);
+                if (completedVersionRecord) {
+                  completedVersionRecord.status = 'shipped';
+                  completedVersionRecord.approvedAt = new Date().toISOString();
+                  updates.versions = versions;
+                }
+                
+                // **FIX #3: Auto-advance to next version if enabled**
+                if (versionCompletionTriggered.project.autonomy?.autoAdvance) {
+                  const currentIdx = versions.findIndex((v: any) => v.label === completedVersion);
+                  if (currentIdx !== -1 && currentIdx < versions.length - 1) {
+                    const nextVersion = versions[currentIdx + 1];
+                    if (nextVersion) {
+                      nextVersion.status = 'current';
+                      updates.approvedThrough = nextVersion.label;
+                      console.log(`[Version Dispatch] Auto-advanced project ${versionCompletionTriggered.projectId} to v${nextVersion.label}`);
+                    }
+                  }
+                }
+                
+                // Persist all updates
+                await getStoreProvider().updateProject(versionCompletionTriggered.projectId, updates);
               }
             } catch (e) {
-              console.error('[Vision Autonomy] Completion check error:', e);
+              console.error('[Version Dispatch] Completion error:', e);
             }
           })();
         }
@@ -747,6 +814,11 @@ export async function POST(req: NextRequest) {
       }
 
       case 'deleteTask': {
+        // Workspace guard
+        const delTask = store.tasks.find((t: any) => t.id === payload.id);
+        if (delTask && !belongsToWorkspace(delTask, workspace.id)) {
+          return NextResponse.json({ error: 'Forbidden — task belongs to another workspace' }, { status: 403 });
+        }
         // Changed to archive instead of delete
         // PERF: Use targeted provider.updateTask() instead of full store write
         await getStoreProvider().updateTask(payload.id, {
@@ -775,7 +847,7 @@ export async function POST(req: NextRequest) {
 
       case 'addProject': {
         const id = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-        const project = { id, createdAt: Date.now(), ...payload.project };
+        const project = { id, createdAt: Date.now(), ...payload.project, workspace_id: payload.project?.workspace_id || workspace.id };
 
         // --- Integrity guard: auto-scaffold missing defaults (#697) ---
         if (!project.versions || !Array.isArray(project.versions) || project.versions.length === 0) {
@@ -808,6 +880,12 @@ export async function POST(req: NextRequest) {
         
         // Check if devOwner is changing
         const oldProject = store.projects.find((p: any) => p.id === payload.id);
+
+        // Workspace guard
+        if (oldProject && !belongsToWorkspace(oldProject, workspace.id)) {
+          return NextResponse.json({ error: 'Forbidden — project belongs to another workspace' }, { status: 403 });
+        }
+
         const newDevOwner = payload.updates?.devOwner;
         const devOwnerChanged = newDevOwner && oldProject?.devOwner && newDevOwner !== oldProject.devOwner;
 
@@ -838,6 +916,11 @@ export async function POST(req: NextRequest) {
       }
 
       case 'deleteProject': {
+        // Workspace guard
+        const delProj = store.projects.find((p: any) => p.id === payload.id);
+        if (delProj && !belongsToWorkspace(delProj, workspace.id)) {
+          return NextResponse.json({ error: 'Forbidden — project belongs to another workspace' }, { status: 403 });
+        }
         // PERF: Use targeted provider.deleteProject() instead of full store write
         await getStoreProvider().deleteProject(payload.id);
         return NextResponse.json({ ok: true });
@@ -857,6 +940,10 @@ export async function POST(req: NextRequest) {
         if (commentScope.kind === 'task' && commentScope.taskId) {
           task = store.tasks.find((t: any) => t.id === commentScope.taskId);
           if (!task) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+          // Workspace guard
+          if (!belongsToWorkspace(task, workspace.id)) {
+            return NextResponse.json({ error: 'Forbidden — task belongs to another workspace' }, { status: 403 });
+          }
         }
 
         const commentId = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
