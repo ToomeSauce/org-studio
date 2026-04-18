@@ -63,11 +63,46 @@ Org Studio uses **push-based triggers** — not polling. When work lands in an a
 
 For detailed API schemas and examples, read `references/api-reference.md` in this skill directory.
 
-## Task Workflow
+## Columns
 
-```
-backlog → in-progress → [qa] → review → done
-```
+Org Studio's context board has six columns. Each has a specific contract.
+
+| Column | Who owns it | What it means |
+|---|---|---|
+| **Planning** | Humans + agents | Scoping column. Tasks here are being refined. **Agents ARE encouraged to pull from planning**, flesh out acceptance criteria / constraints / context, and move to backlog when ready for execution. If a task lacks enough context to scope, post a comment asking instead of guessing. |
+| **Backlog** | Agents | Ready-for-work queue. Pull from the top (highest priority first). |
+| **In Progress** | Agents | Actively being worked. Move here only AFTER work starts — do not claim speculatively. |
+| **QA** | QA agent (e.g. Billy) | Tasks with `requiresTestPlan: true` land here after dev finishes. QA agent verifies end-user behavior. |
+| **Review** | Humans | Done but needs human sign-off. Agent writes `reviewNotes`; human approves. |
+| **Done** | — | Complete and verified. Agents should not move tasks back from done. |
+
+## Work Loop
+
+This is the canonical work loop for every agent session. Follow it exactly.
+
+1. **Scan in-progress** for tasks assigned to you. Resume the highest priority one.
+2. **If nothing in-progress, scan backlog.** Pick the highest priority task.
+   - Read the full task description AND all comments FIRST.
+   - Only move to in-progress AFTER actual work starts. Do NOT claim tasks speculatively.
+3. **Check `testType` before moving out of in-progress:**
+   - `self` (default): self-test, write results in `reviewNotes`, move to review/done.
+   - `qa`: self-test first (basic sanity), write a `testPlan`, move to QA column.
+4. **When complete:** update status + always include `reviewNotes` (what was done, what wasn't, blockers). Clear activity status.
+5. **If more backlog tasks remain**, continue with the next one.
+6. **If you run out of time mid-task**, leave it where it is. Status must reflect reality.
+7. **If you discover a follow-up task**, create it as adhoc (no `version`), do NOT expand scope of current task.
+
+**Task lifecycle:** `planning → backlog → in-progress → [qa] → review → done`
+
+## Testing — Every Task Gets Tested
+
+Every task must be tested before leaving in-progress. The variable is *type*, not *whether*.
+
+- **`testType: self`** (default) — You write a test plan, execute it yourself (curl, build check, DB verify), document results in `reviewNotes`, move to review/done.
+- **`testType: qa`** — You still self-test first (basic sanity: build passes, no 500s), write a `testPlan` field for end-user verification, then move to **qa** column (not review). QA agent runs the user-facing tests.
+- **Never skip self-testing.** If QA gets a task with broken basics (500s, build fails), they'll bounce it back.
+
+## Short form summary
 
 1. **Pick from backlog** — highest priority first
 2. **Move to in-progress** when starting actual work (not to "claim")
@@ -272,6 +307,32 @@ curl -s http://localhost:4501/api/store -X POST \
 
 The @mention wakes the other agent regardless of runtime (OpenClaw ↔ Hermes). The handoff injects your fix context directly into their next session and clears any stall detection.
 
+## Sub-Agent Model Selection
+
+When spawning sub-agents for your work, pick the right model:
+
+| Task type | Model | Why |
+|---|---|---|
+| Writing/editing code | `foundry-openai-responses/gpt-5.3-codex` | Optimized for edit→run→check loops, zero cost on Foundry |
+| Running tests, git ops | `foundry-openai-responses/gpt-5.3-codex` | Disciplined at reading errors and making fixes |
+| DB migrations, queries | `foundry-openai-responses/gpt-5.3-codex` | Surgical SQL work |
+| Research, summarization | `foundry-openai/gpt-5.4` | Smarter reasoning, 1M context |
+| Analysis, planning | `foundry-openai/gpt-5.4` | Better reasoning for non-code tasks |
+
+**Rule of thumb:** If the task ends with a code commit → Codex. If it ends with a report or decision → 5.4.
+
+Keep your **main session on your primary model** for orchestration and conversation. Delegate code-heavy subtasks to Codex sub-agents.
+
+## Cross-Agent Delivery Rule (MANDATORY)
+
+When you receive a task from another agent (via wake event, `sessions_send`, or cron) that produces a user-facing result for a human:
+
+1. **ALWAYS** deliver the result via the channel messaging tool (e.g. `message(action=send, channel=telegram, target=<humanId>)`) — do NOT rely on normal reply routing.
+2. After sending, reply `NO_REPLY` to avoid duplicates.
+3. **Why:** Wake events and cross-agent sessions have `channel: "unknown"` — normal replies go nowhere. Humans won't see your work unless you explicitly push it.
+
+This applies to ALL cross-agent task completions. No exceptions.
+
 ## Team Culture
 
 - **Own your domain.** Don't ask permission for decisions in your area — make them, document the rationale, and move on.
@@ -280,3 +341,4 @@ The @mention wakes the other agent regardless of runtime (OpenClaw ↔ Hermes). 
 - **Test your work.** Every task gets tested before leaving in-progress. Self-test is the default.
 - **Respect the board.** Task status must reflect reality — don't move to in-progress just to claim a task.
 - **Only the assignee can move a task to done.** If you didn't do the work, you can't close it. Reassign to yourself first if you're taking over.
+- **Pull from planning.** Scoping your own work end-to-end is encouraged — don't wait for pre-scoped tasks.
