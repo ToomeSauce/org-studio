@@ -173,6 +173,8 @@ export default function ProjectDetailPage() {
   const [editingGuardrails, setEditingGuardrails] = useState(false);
   const [guardrailsEditContent, setGuardrailsEditContent] = useState('');
   const [guardrailsSaving, setGuardrailsSaving] = useState(false);
+  const [proposingRoadmap, setProposingRoadmap] = useState(false);
+  const [proposingError, setProposingError] = useState<string | null>(null);
 
   // Fetch vision doc - MUST be before early returns
   useEffect(() => {
@@ -634,6 +636,57 @@ export default function ProjectDetailPage() {
             )}
           </div>
         </div>
+
+        {/* No Roadmap Banner (#697) */}
+        {!roadmapLoading && roadmapVersions.length === 0 && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700 p-4 flex items-center justify-between gap-4">
+            <div>
+              <p className="text-amber-800 dark:text-amber-300 font-medium">
+                This project has no roadmap. Propose one to start dispatching work.
+              </p>
+              {proposingError && (
+                <p className="text-red-600 dark:text-red-400 text-sm mt-1">{proposingError}</p>
+              )}
+            </div>
+            <button
+              disabled={proposingRoadmap}
+              onClick={async () => {
+                setProposingRoadmap(true);
+                setProposingError(null);
+                try {
+                  const res = await fetch(`/api/roadmap/${projectId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      action: 'upsert',
+                      version: '0.1',
+                      title: '',
+                      status: 'planned',
+                      items: [],
+                    }),
+                  });
+                  if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    throw new Error(data.error || `HTTP ${res.status}`);
+                  }
+                  // Refresh roadmap data
+                  const rmRes = await fetch(`/api/roadmap/${projectId}`);
+                  if (rmRes.ok) {
+                    const rmData = await rmRes.json();
+                    setRoadmap(rmData.versions || []);
+                  }
+                } catch (e: any) {
+                  setProposingError(e.message || 'Failed to propose roadmap');
+                } finally {
+                  setProposingRoadmap(false);
+                }
+              }}
+              className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-medium text-sm whitespace-nowrap disabled:opacity-60 transition-colors"
+            >
+              {proposingRoadmap ? 'Proposing roadmap…' : 'Propose roadmap'}
+            </button>
+          </div>
+        )}
 
 
         {/* Roadmap Section with Approval Horizon */}

@@ -1271,6 +1271,89 @@ async function stuckTaskDetector() {
   }
 }
 
+// --- Project Integrity Audit (#697) ---
+const PROJECT_INTEGRITY_INTERVAL_MS = 60_000; // 60 seconds
+const _projectIntegrityLoggedMap = new Map(); // key: `${projectId}:${violationType}` -> timestamp
+const PROJECT_INTEGRITY_DEDUP_MS = 60 * 60_000; // 60 minutes
+
+async function projectIntegrityAudit() {
+  const store = cachedStore || safeRead(STORE_PATH);
+  if (!store?.projects?.length) return;
+
+  const now = Date.now();
+
+  for (const project of store.projects) {
+    if (project.isArchived) continue;
+
+    const pid = project.id;
+    const pname = project.name || '(unnamed)';
+
+    // Check 1: no roadmap versions
+    if (!project.versions || !Array.isArray(project.versions) || project.versions.length === 0) {
+      const dedupKey = `${pid}:project_no_roadmap`;
+      const lastEmit = _projectIntegrityLoggedMap.get(dedupKey) || 0;
+      if (now - lastEmit > PROJECT_INTEGRITY_DEDUP_MS) {
+        try {
+          await logIncident({
+            type: 'project_no_roadmap',
+            agentId: null,
+            message: `Project "${pname}" has no roadmap versions — dispatch and auto-advance will not work`,
+            context: { projectId: pid, projectName: pname, severity: 'warning' },
+          });
+        } catch (e) {
+          console.error('[ProjectIntegrityAudit] logIncident failed (non-fatal):', e.message);
+        }
+        _projectIntegrityLoggedMap.set(dedupKey, now);
+      }
+    }
+
+    // Check 2: autoAdvance unset
+    if (project.autoAdvance === undefined) {
+      const dedupKey = `${pid}:project_autoadvance_unset`;
+      const lastEmit = _projectIntegrityLoggedMap.get(dedupKey) || 0;
+      if (now - lastEmit > PROJECT_INTEGRITY_DEDUP_MS) {
+        try {
+          await logIncident({
+            type: 'project_autoadvance_unset',
+            agentId: null,
+            message: `Project "${pname}" has autoAdvance undefined — auto-advance disabled by default`,
+            context: { projectId: pid, projectName: pname, severity: 'warning' },
+          });
+        } catch (e) {
+          console.error('[ProjectIntegrityAudit] logIncident failed (non-fatal):', e.message);
+        }
+        _projectIntegrityLoggedMap.set(dedupKey, now);
+      }
+    }
+
+    // Check 3: currentVersion orphan
+    if (project.currentVersion) {
+      const versions = project.versions || [];
+      const found = versions.some(v =>
+        v.id === project.currentVersion ||
+        v.version === project.currentVersion
+      );
+      if (!found) {
+        const dedupKey = `${pid}:project_current_version_orphan`;
+        const lastEmit = _projectIntegrityLoggedMap.get(dedupKey) || 0;
+        if (now - lastEmit > PROJECT_INTEGRITY_DEDUP_MS) {
+          try {
+            await logIncident({
+              type: 'project_current_version_orphan',
+              agentId: null,
+              message: `Project "${pname}" currentVersion "${project.currentVersion}" does not match any roadmap version`,
+              context: { projectId: pid, projectName: pname, currentVersion: project.currentVersion, severity: 'warning' },
+            });
+          } catch (e) {
+            console.error('[ProjectIntegrityAudit] logIncident failed (non-fatal):', e.message);
+          }
+          _projectIntegrityLoggedMap.set(dedupKey, now);
+        }
+      }
+    }
+  }
+}
+
 async function stuckTaskWatchdog() {
   // Use cachedStore (Postgres-backed) if available, fall back to file
   const store = cachedStore || safeRead(STORE_PATH);
@@ -2153,6 +2236,18 @@ server.listen(port, async () => {
       safeStuckTaskDetector();
       setInterval(safeStuckTaskDetector, STUCK_TASK_DETECT_INTERVAL_MS);
       console.log(`[StuckTaskDetector] Started (interval: 5min, threshold: ${STUCK_TASK_THRESHOLD_MIN}min)`);
+
+      // Project integrity audit (#697) — 60s interval
+      const safeProjectIntegrityAudit = async () => {
+        try {
+          await projectIntegrityAudit();
+        } catch (e) {
+          console.error('[ProjectIntegrityAudit] Unhandled error (non-fatal):', e.message);
+        }
+      };
+      safeProjectIntegrityAudit();
+      setInterval(safeProjectIntegrityAudit, PROJECT_INTEGRITY_INTERVAL_MS);
+      console.log('[ProjectIntegrityAudit] Started (interval: 60s, dedup: 60min)');
     }, 30_000);
   }, 60_000);
 });

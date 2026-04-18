@@ -626,6 +626,28 @@ export async function POST(req: NextRequest) {
       case 'addProject': {
         const id = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
         const project = { id, createdAt: Date.now(), ...payload.project };
+
+        // --- Integrity guard: auto-scaffold missing defaults (#697) ---
+        if (!project.versions || !Array.isArray(project.versions) || project.versions.length === 0) {
+          const versionId = 'rv-' + id + '-v0-1';
+          project.versions = [{
+            id: versionId,
+            version: '0.1',
+            title: '',
+            status: 'planned',
+            items: [],
+            sort_order: 0.1,
+            version_type: 'outcome',
+          }];
+        }
+        if (project.autoAdvance === undefined || project.autoAdvance === null) {
+          project.autoAdvance = true;
+        }
+        if (project.approvedThrough === undefined) {
+          project.approvedThrough = null;
+        }
+        // --- End integrity guard ---
+
         // PERF: Use targeted provider.createProject() instead of full store write
         await getStoreProvider().createProject(project);
         return NextResponse.json({ ok: true, project });
