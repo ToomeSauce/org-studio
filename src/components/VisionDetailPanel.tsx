@@ -58,6 +58,7 @@ export function VisionDetailPanel({
   // Collapsible sections
   const [metadataOpen, setMetadataOpen] = useState(false);
   const [autonomyOpen, setAutonomyOpen] = useState(false);
+  const [sectionsOpen, setSectionsOpen] = useState(false);
 
   // Autonomy state
   const [autonomyEnabled, setAutonomyEnabled] = useState(project.autonomy?.enabled || false);
@@ -609,6 +610,43 @@ export function VisionDetailPanel({
                       </div>
                     </div>
                   </>
+                )}
+              </div>
+            )}
+
+            {/* Collapsible: Sections (read-only) */}
+            <button
+              onClick={() => setSectionsOpen(!sectionsOpen)}
+              className="flex items-center gap-2 w-full py-2 text-[var(--text-xs)] font-bold uppercase tracking-wider text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors"
+            >
+              {sectionsOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              📂 Sections ({(project.sections || []).length})
+            </button>
+            {sectionsOpen && (
+              <div className="space-y-2 pb-3 pl-5">
+                {(project.sections || []).length === 0 ? (
+                  <div className="text-[var(--text-xs)] text-[var(--text-muted)] italic">No sections</div>
+                ) : (
+                  (project.sections || []).map((section) => (
+                    <div key={section.id} className="border-l-2 border-[var(--border-strong)] pl-3 py-1">
+                      <div className="text-[var(--text-xs)] font-semibold text-[var(--text-primary)]">{section.name}</div>
+                      {section.owner && (
+                        <div className="text-[10px] text-[var(--text-muted)]">
+                          Owner: <span className="text-[var(--text-tertiary)]">{section.owner}</span>
+                        </div>
+                      )}
+                      {section.outcomes && (
+                        <div className="text-[10px] text-[var(--text-muted)] mt-0.5">
+                          Outcomes: <span className="text-[var(--text-tertiary)]">{section.outcomes}</span>
+                        </div>
+                      )}
+                      {section.contract && (
+                        <div className="text-[10px] text-[var(--text-muted)] mt-0.5">
+                          Contract: <span className="text-[var(--text-tertiary)]">{section.contract}</span>
+                        </div>
+                      )}
+                    </div>
+                  ))
                 )}
               </div>
             )}

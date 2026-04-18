@@ -1,6 +1,14 @@
 // Data store — file-backed via /api/store
 // Projects and tasks persist on disk at data/store.json
 
+export interface Section {
+  id: string;
+  name: string;
+  owner: string;       // assignee name (free text, matches teammate name)
+  outcomes: string;    // free text
+  contract: string;    // free text describing what this section owes to / expects from other sections
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -48,6 +56,15 @@ export interface Project {
     proposedAt: number;
   }>;
   guardrails?: string; // Combined boundaries + contribution criteria
+
+  // --- Sections (per-project organizational units) ---
+  sections?: Section[];
+
+  // --- Archive / migration ---
+  isArchived?: boolean;
+  archivedAt?: number;
+  archivedReason?: string;  // e.g. "qa-fold"
+  migratedTo?: { projectId: string; sectionId: string };
 }
 
 export interface TaskComment {
@@ -83,6 +100,7 @@ export interface Task {
   projectId: string;
   assignee: string;
   priority?: 'high' | 'medium' | 'low';
+  sectionId?: string;     // Section within the project this task belongs to
   version?: string;       // Version field (e.g., "0.902") — set when vision cycle creates the task
   sortOrder?: number;
   createdAt: number;
@@ -218,6 +236,44 @@ export async function addComment(taskId: string, comment: Omit<TaskComment, 'id'
   // Update local cache
   _tasks = _tasks.map(t => t.id === taskId ? { ...t, comments: [...(t.comments || []), result.comment] } : t);
   return result.comment;
+}
+
+// === Section mutators ===
+export async function addSection(projectId: string, section: Omit<Section, 'id'> & { id?: string }): Promise<Section> {
+  const result = await mutateStore('addSection', { projectId, section });
+  // Update local cache
+  _projects = _projects.map(p => {
+    if (p.id !== projectId) return p;
+    return { ...p, sections: [...(p.sections || []), result.section] };
+  });
+  return result.section;
+}
+
+export async function updateSection(projectId: string, sectionId: string, updates: Partial<Section>): Promise<void> {
+  await mutateStore('updateSection', { projectId, sectionId, updates });
+  _projects = _projects.map(p => {
+    if (p.id !== projectId) return p;
+    return { ...p, sections: (p.sections || []).map(s => s.id === sectionId ? { ...s, ...updates } : s) };
+  });
+}
+
+export async function deleteSection(projectId: string, sectionId: string): Promise<void> {
+  await mutateStore('deleteSection', { projectId, sectionId });
+  _projects = _projects.map(p => {
+    if (p.id !== projectId) return p;
+    return { ...p, sections: (p.sections || []).filter(s => s.id !== sectionId) };
+  });
+}
+
+export async function reorderSections(projectId: string, sectionIds: string[]): Promise<void> {
+  await mutateStore('reorderSections', { projectId, sectionIds });
+  _projects = _projects.map(p => {
+    if (p.id !== projectId) return p;
+    const sMap = new Map((p.sections || []).map(s => [s.id, s]));
+    const ordered = sectionIds.filter(id => sMap.has(id)).map(id => sMap.get(id)!);
+    const rest = (p.sections || []).filter(s => !sectionIds.includes(s.id));
+    return { ...p, sections: [...ordered, ...rest] };
+  });
 }
 
 export function saveProjects(p: Project[]) { _projects = p; }

@@ -139,6 +139,7 @@ export async function GET(request: NextRequest) {
     agentPerformance,
     teamPerformance,
     coachingInsights,
+    projects: store.projects || [],
   };
 
   // JSON format — structured data for programmatic consumption

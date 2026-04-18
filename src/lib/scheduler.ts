@@ -4,6 +4,7 @@
 import { AgentLoop } from '@/lib/store';
 import type { PromptSection } from '@/lib/store';
 import { getStoreProvider } from './store-provider';
+import { agentOwnedSections, agentHasTaskAccess, isDefaultMainSection } from './section-access';
 
 // Re-export for convenience
 export type { PromptSection };
@@ -174,6 +175,18 @@ PLANNING COLUMN — you can both add tasks to planning AND pull tasks from it. W
 - When writing a test plan, cover the acceptance criteria: what to verify, what actions to take, expected results.`,
     enabled: true,
     order: 60,
+    builtIn: true,
+  },
+  {
+    id: 'sections-awareness',
+    label: 'Sections Awareness',
+    content: `SECTIONS — projects are split into sections you may own:
+- Tasks assigned to you are ALWAYS visible regardless of section.
+- By default, focus on tasks in sections you own or where you've been @mentioned.
+- You CAN still read all tasks via the API — isolation is a focus aid, not a permission boundary.
+- Cross-section handoffs (devHandoff) stay fully visible.`,
+    enabled: true,
+    order: 65,
     builtIn: true,
   },
   {
@@ -355,6 +368,18 @@ PLANNING COLUMN — you can both add QA-related tasks to planning AND pull tasks
     builtIn: true,
   },
   {
+    id: 'sections-awareness',
+    label: 'Sections Awareness',
+    content: `SECTIONS — projects are split into sections you may own:
+- Tasks assigned to you are ALWAYS visible regardless of section.
+- By default, focus on tasks in sections you own or where you've been @mentioned.
+- You CAN still read all tasks via the API — isolation is a focus aid, not a permission boundary.
+- Cross-section handoffs (devHandoff) stay fully visible.`,
+    enabled: true,
+    order: 65,
+    builtIn: true,
+  },
+  {
     id: 'exit-protocol',
     label: 'Exit Protocol',
     content: `WHEN DONE — before ending, do these two things:
@@ -512,6 +537,14 @@ export async function buildDispatchMessage(
   lines.push(`📋 **Task Dispatch — ${agentName}**`);
   lines.push('');
 
+  // Show owned sections (if any)
+  const owned = agentOwnedSections(projects, agentName);
+  if (owned.length > 0) {
+    const sectionList = owned.map(o => `${o.project.name} → ${o.section.name}`).join(', ');
+    lines.push(`**Your sections:** ${sectionList}`);
+    lines.push('');
+  }
+
   // Priority 1: Resume in-progress work
   if (inProgress.length > 0) {
     lines.push(`**Resume in-progress (${inProgress.length}):**`);
@@ -519,6 +552,10 @@ export async function buildDispatchMessage(
       const proj = projects.find((p: any) => p.id === t.projectId);
       lines.push(`- **${t.title}** ${t.ticketNumber ? `(#${t.ticketNumber})` : ''}`);
       if (proj) lines.push(` Project: ${proj.name}${t.version ? ` v${t.version}` : ''}`);
+      if (t.sectionId && proj && !isDefaultMainSection(t.sectionId, proj.id)) {
+        const sec = (proj.sections || []).find((s: any) => s.id === t.sectionId);
+        if (sec) lines.push(` Section: ${sec.name}`);
+      }
       if (t.description) lines.push(` Description: ${t.description.substring(0, 200)}`);
       if (t.doneWhen) lines.push(` Done when: ${t.doneWhen}`);
       if (t.constraints) lines.push(` Constraints: ${t.constraints}`);
@@ -534,6 +571,10 @@ export async function buildDispatchMessage(
       const proj = projects.find((p: any) => p.id === t.projectId);
       lines.push(`- **${t.title}** ${t.ticketNumber ? `(#${t.ticketNumber})` : ''}`);
       if (proj) lines.push(` Project: ${proj.name}`);
+      if (t.sectionId && proj && !isDefaultMainSection(t.sectionId, proj.id)) {
+        const sec = (proj.sections || []).find((s: any) => s.id === t.sectionId);
+        if (sec) lines.push(` Section: ${sec.name}`);
+      }
       if (t.testPlan) lines.push(` Test plan: ${t.testPlan}`);
     }
     lines.push('');
@@ -547,6 +588,10 @@ export async function buildDispatchMessage(
     lines.push(`**Next from backlog:**`);
     lines.push(`- **${next.title}** ${next.ticketNumber ? `(#${next.ticketNumber})` : ''}`);
     if (proj) lines.push(` Project: ${proj.name}${next.version ? ` v${next.version}` : ''}`);
+    if (next.sectionId && proj && !isDefaultMainSection(next.sectionId, proj.id)) {
+      const sec = (proj.sections || []).find((s: any) => s.id === next.sectionId);
+      if (sec) lines.push(` Section: ${sec.name}`);
+    }
     if (next.description) lines.push(` Description: ${next.description.substring(0, 300)}`);
     if (next.doneWhen) lines.push(` Done when: ${next.doneWhen}`);
     if (next.constraints) lines.push(` Constraints: ${next.constraints}`);

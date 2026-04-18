@@ -4,6 +4,7 @@ import { rpc } from '@/lib/gateway-rpc';
 import { getStoreProvider, type StoreData } from '@/lib/store-provider';
 import { parseMentions, notifyMentionedAgents } from '@/lib/mention-notifier';
 import { syncRoadmapItemForTask } from '@/lib/roadmap-sync';
+import { checkArchivedProject } from '@/lib/archived-project-compat';
 
 const SCHEDULER_URL = 'http://localhost:4501/api/scheduler';
 
@@ -373,6 +374,17 @@ export async function POST(req: NextRequest) {
 
     switch (action) {
       case 'addTask': {
+        // 410 compat: reject tasks targeting archived qa-fold projects
+        const addTaskProjectId = payload.task?.projectId;
+        if (addTaskProjectId) {
+          const archCheck = checkArchivedProject(store.projects, addTaskProjectId);
+          if (archCheck.migrated) {
+            return NextResponse.json(
+              { error: 'Project moved', migratedTo: archCheck.migratedTo },
+              { status: 410 }
+            );
+          }
+        }
         const id = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
         const now = Date.now();
         const initialStatus = payload.task?.status || 'backlog';
@@ -955,6 +967,79 @@ export async function POST(req: NextRequest) {
         await getStoreProvider().updateProject(payload.projectId, { guardrails });
         const updatedProject = { ...project, guardrails };
         return NextResponse.json({ ok: true, project: updatedProject });
+      }
+
+      // --- Section CRUD ---
+
+      case 'addSection': {
+        // Validate owner if non-empty: must match a teammate name
+        const sectionOwner = payload.section?.owner || '';
+        if (sectionOwner) {
+          const teammateNames = (store.settings?.teammates || []).map((t: any) => t.name?.toLowerCase());
+          if (!teammateNames.includes(sectionOwner.toLowerCase())) {
+            return NextResponse.json(
+              { error: `Invalid section owner '${sectionOwner}': must be a team member` },
+              { status: 400 }
+            );
+          }
+        }
+        const section = await getStoreProvider().addSection(payload.projectId, {
+          name: payload.section?.name || 'New Section',
+          owner: sectionOwner,
+          outcomes: payload.section?.outcomes || '',
+          contract: payload.section?.contract || '',
+          ...(payload.section?.id ? { id: payload.section.id } : {}),
+        });
+        return NextResponse.json({ ok: true, section });
+      }
+
+      case 'updateSection': {
+        // Validate owner if being set to non-empty
+        const updOwner = (payload.updates || {}).owner;
+        if (updOwner !== undefined && updOwner !== '') {
+          const teammateNames = (store.settings?.teammates || []).map((t: any) => t.name?.toLowerCase());
+          if (!teammateNames.includes(updOwner.toLowerCase())) {
+            return NextResponse.json(
+              { error: `Invalid section owner '${updOwner}': must be a team member` },
+              { status: 400 }
+            );
+          }
+        }
+        await getStoreProvider().updateSection(payload.projectId, payload.sectionId, payload.updates || {});
+        return NextResponse.json({ ok: true });
+      }
+
+      case 'deleteSection': {
+        try {
+          // Before deleting, reassign tasks in this section to the default Main section
+          const project = store.projects.find((p: any) => p.id === payload.projectId);
+          if (project) {
+            const sections = project.sections || [];
+            const defaultMain = sections.find((s: any) => s.id === `sec-main-${payload.projectId}`);
+            const fallbackSection = defaultMain || sections.find((s: any) => s.id !== payload.sectionId);
+            const reassignToId = fallbackSection?.id || `sec-main-${payload.projectId}`;
+
+            const tasksToReassign = store.tasks.filter(
+              (t: any) => t.projectId === payload.projectId && t.sectionId === payload.sectionId
+            );
+            for (const t of tasksToReassign) {
+              await getStoreProvider().updateTask(t.id, { sectionId: reassignToId });
+            }
+          }
+
+          await getStoreProvider().deleteSection(payload.projectId, payload.sectionId);
+          return NextResponse.json({ ok: true });
+        } catch (e: any) {
+          if (e.message === 'Cannot delete the last section') {
+            return NextResponse.json({ error: e.message }, { status: 400 });
+          }
+          throw e;
+        }
+      }
+
+      case 'reorderSections': {
+        await getStoreProvider().reorderSections(payload.projectId, payload.sectionIds || []);
+        return NextResponse.json({ ok: true });
       }
 
       default:

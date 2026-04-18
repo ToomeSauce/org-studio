@@ -64,9 +64,15 @@ export interface StoreProvider {
    */
   updateSettings(updates: Partial<Record<string, any>>): Promise<any>;
 
-  upsertMetrics?(agentId: string, date: string, metrics: Record<string, any>): Promise<any>;
-  getMetrics?(agentId: string, opts?: { from?: string; to?: string; limit?: number }): Promise<any[]>;
-  getTeamMetrics?(opts?: { from?: string; to?: string }): Promise<any[]>;
+  upsertMetrics?(agentId: string, date: string, metrics: Record<string, any>, sectionId?: string | null): Promise<any>;
+  getMetrics?(agentId: string, opts?: { from?: string; to?: string; limit?: number; sectionId?: string }): Promise<any[]>;
+  getTeamMetrics?(opts?: { from?: string; to?: string; sectionId?: string }): Promise<any[]>;
+
+  // --- Section CRUD ---
+  addSection(projectId: string, section: { id?: string; name: string; owner: string; outcomes: string; contract: string }): Promise<any>;
+  updateSection(projectId: string, sectionId: string, updates: Partial<{ name: string; owner: string; outcomes: string; contract: string }>): Promise<void>;
+  deleteSection(projectId: string, sectionId: string): Promise<void>;
+  reorderSections(projectId: string, sectionIds: string[]): Promise<void>;
 
   /**
    * Health check — verify provider is operational
@@ -104,7 +110,16 @@ export class FileStoreProvider implements StoreProvider {
 
     try {
       const content = readFileSync(this.storePath, 'utf-8');
-      return JSON.parse(content);
+      const data = JSON.parse(content);
+      // Inject default "Main" section for projects missing sections
+      if (data.projects) {
+        for (const p of data.projects) {
+          if (!p.sections || p.sections.length === 0) {
+            p.sections = [{ id: `sec-main-${p.id}`, name: 'Main', owner: p.owner || '', outcomes: '', contract: '' }];
+          }
+        }
+      }
+      return data;
     } catch (e) {
       console.error(`Failed to read store at ${this.storePath}:`, e);
       return { projects: [], tasks: [], settings: {} };
@@ -214,6 +229,52 @@ export class FileStoreProvider implements StoreProvider {
     return store.settings;
   }
 
+  // --- Section CRUD (FileStoreProvider) ---
+
+  async addSection(projectId: string, section: { id?: string; name: string; owner: string; outcomes: string; contract: string }): Promise<any> {
+    const store = await this.read();
+    const project = store.projects.find((p: any) => p.id === projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
+    const id = section.id || `sec-${Math.random().toString(36).slice(2, 10)}`;
+    const newSection = { ...section, id };
+    if (!project.sections) project.sections = [];
+    project.sections.push(newSection);
+    await this.write(store);
+    return newSection;
+  }
+
+  async updateSection(projectId: string, sectionId: string, updates: Partial<{ name: string; owner: string; outcomes: string; contract: string }>): Promise<void> {
+    const store = await this.read();
+    const project = store.projects.find((p: any) => p.id === projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
+    const section = (project.sections || []).find((s: any) => s.id === sectionId);
+    if (!section) throw new Error(`Section not found: ${sectionId}`);
+    Object.assign(section, updates);
+    await this.write(store);
+  }
+
+  async deleteSection(projectId: string, sectionId: string): Promise<void> {
+    const store = await this.read();
+    const project = store.projects.find((p: any) => p.id === projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
+    const sections = project.sections || [];
+    if (sections.length <= 1) throw new Error('Cannot delete the last section');
+    project.sections = sections.filter((s: any) => s.id !== sectionId);
+    await this.write(store);
+  }
+
+  async reorderSections(projectId: string, sectionIds: string[]): Promise<void> {
+    const store = await this.read();
+    const project = store.projects.find((p: any) => p.id === projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
+    const current = project.sections || [];
+    const map = new Map(current.map((s: any) => [s.id, s]));
+    const ordered = sectionIds.filter(id => map.has(id)).map(id => map.get(id)!);
+    const rest = current.filter((s: any) => !sectionIds.includes(s.id));
+    project.sections = [...ordered, ...rest];
+    await this.write(store);
+  }
+
   async health(): Promise<boolean> {
     try {
       await this.read();
@@ -275,7 +336,12 @@ export class PostgresStoreProvider implements StoreProvider {
       ...overflow,
     };
     // Remove keys that are undefined (not null — null is valid)
-    return Object.fromEntries(Object.entries(obj).filter(([_, v]) => v !== undefined));
+    const cleaned = Object.fromEntries(Object.entries(obj).filter(([_, v]) => v !== undefined));
+    // Inject default "Main" section if sections missing or empty
+    if (!cleaned.sections || (Array.isArray(cleaned.sections) && cleaned.sections.length === 0)) {
+      cleaned.sections = [{ id: `sec-main-${row.id}`, name: 'Main', owner: row.owner || '', outcomes: '', contract: '' }];
+    }
+    return cleaned;
   }
 
   /**
@@ -921,9 +987,82 @@ export class PostgresStoreProvider implements StoreProvider {
   }
 
   // --- Agent Metrics ---
-  async upsertMetrics(agentId: string, date: string, metrics: Record<string, any>): Promise<any> {
+
+  // --- Section CRUD (PostgresStoreProvider) ---
+  // Sections live in the jsonb overflow `data` column — no schema change needed.
+
+  async addSection(projectId: string, section: { id?: string; name: string; owner: string; outcomes: string; contract: string }): Promise<any> {
     const pool = await this.getPool();
-    const id = `${agentId}-${date}`;
+    const client = await pool.connect();
+    try {
+      const result = await client.query('SELECT * FROM org_studio_projects WHERE id = $1', [projectId]);
+      if (result.rows.length === 0) throw new Error(`Project not found: ${projectId}`);
+      const current = this.reconstructProject(result.rows[0]);
+      const id = section.id || `sec-${Math.random().toString(36).slice(2, 10)}`;
+      const newSection = { ...section, id };
+      if (!current.sections) current.sections = [];
+      current.sections.push(newSection);
+      await this.updateProject(projectId, { sections: current.sections });
+      return newSection;
+    } finally {
+      client.release();
+    }
+  }
+
+  async updateSection(projectId: string, sectionId: string, updates: Partial<{ name: string; owner: string; outcomes: string; contract: string }>): Promise<void> {
+    const pool = await this.getPool();
+    const client = await pool.connect();
+    try {
+      const result = await client.query('SELECT * FROM org_studio_projects WHERE id = $1', [projectId]);
+      if (result.rows.length === 0) throw new Error(`Project not found: ${projectId}`);
+      const current = this.reconstructProject(result.rows[0]);
+      const section = (current.sections || []).find((s: any) => s.id === sectionId);
+      if (!section) throw new Error(`Section not found: ${sectionId}`);
+      Object.assign(section, updates);
+      await this.updateProject(projectId, { sections: current.sections });
+    } finally {
+      client.release();
+    }
+  }
+
+  async deleteSection(projectId: string, sectionId: string): Promise<void> {
+    const pool = await this.getPool();
+    const client = await pool.connect();
+    try {
+      const result = await client.query('SELECT * FROM org_studio_projects WHERE id = $1', [projectId]);
+      if (result.rows.length === 0) throw new Error(`Project not found: ${projectId}`);
+      const current = this.reconstructProject(result.rows[0]);
+      const sections = current.sections || [];
+      if (sections.length <= 1) throw new Error('Cannot delete the last section');
+      current.sections = sections.filter((s: any) => s.id !== sectionId);
+      await this.updateProject(projectId, { sections: current.sections });
+    } finally {
+      client.release();
+    }
+  }
+
+  async reorderSections(projectId: string, sectionIds: string[]): Promise<void> {
+    const pool = await this.getPool();
+    const client = await pool.connect();
+    try {
+      const result = await client.query('SELECT * FROM org_studio_projects WHERE id = $1', [projectId]);
+      if (result.rows.length === 0) throw new Error(`Project not found: ${projectId}`);
+      const current = this.reconstructProject(result.rows[0]);
+      const currentSections = current.sections || [];
+      const map = new Map(currentSections.map((s: any) => [s.id, s]));
+      const ordered = sectionIds.filter(id => map.has(id)).map(id => map.get(id)!);
+      const rest = currentSections.filter((s: any) => !sectionIds.includes(s.id));
+      current.sections = [...ordered, ...rest];
+      await this.updateProject(projectId, { sections: current.sections });
+    } finally {
+      client.release();
+    }
+  }
+
+  // --- Agent Metrics (continued) ---
+  async upsertMetrics(agentId: string, date: string, metrics: Record<string, any>, sectionId?: string | null): Promise<any> {
+    const pool = await this.getPool();
+    const id = `${agentId}-${date}-${sectionId || 'all'}`;
     const {
       tasks_completed, tasks_started, avg_duration_min, median_duration_min, avg_gap_min,
       chain_rate, throughput, first_pass_rate, bounce_count, stall_count,
@@ -931,16 +1070,17 @@ export class PostgresStoreProvider implements StoreProvider {
       kudos_count, flag_count, review_notes_rate, test_plan_rate, active_minutes,
       versions_completed, ...overflow
     } = metrics;
+    const sectionVal = sectionId || null;
     await pool.query(`
       INSERT INTO org_studio_agent_metrics (
-        id, agent_id, date, tasks_completed, tasks_started, avg_duration_min,
+        id, agent_id, date, section_id, tasks_completed, tasks_started, avg_duration_min,
         median_duration_min, avg_gap_min, chain_rate, throughput, first_pass_rate,
         bounce_count, stall_count, comments_posted, mentions_received, mentions_sent,
         mention_response_min, kudos_count, flag_count, review_notes_rate, test_plan_rate,
         active_minutes, versions_completed, data, updated_at)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
-              $17, $18, $19, $20, $21, $22, $23, $24, NOW())
-      ON CONFLICT (agent_id, date) DO UPDATE SET
+              $17, $18, $19, $20, $21, $22, $23, $24, $25, NOW())
+      ON CONFLICT (agent_id, date, COALESCE(section_id, '')) DO UPDATE SET
         tasks_completed = EXCLUDED.tasks_completed,
         tasks_started = EXCLUDED.tasks_started,
         avg_duration_min = EXCLUDED.avg_duration_min,
@@ -964,7 +1104,7 @@ export class PostgresStoreProvider implements StoreProvider {
         data = EXCLUDED.data,
         updated_at = NOW()
     `, [
-      id, agentId, date,
+      id, agentId, date, sectionVal,
       tasks_completed || 0, tasks_started || 0,
       avg_duration_min || null, median_duration_min || null, avg_gap_min || null,
       chain_rate || null, throughput || null, first_pass_rate || null,
@@ -974,16 +1114,25 @@ export class PostgresStoreProvider implements StoreProvider {
       test_plan_rate || null, active_minutes || 0, versions_completed || 0,
       JSON.stringify(overflow),
     ]);
-    return { id, agentId, date, ...metrics };
+    return { id, agentId, date, sectionId: sectionVal, ...metrics };
   }
 
-  async getMetrics(agentId: string, opts?: { from?: string; to?: string; limit?: number }): Promise<any[]> {
+  async getMetrics(agentId: string, opts?: { from?: string; to?: string; limit?: number; sectionId?: string }): Promise<any[]> {
     const pool = await this.getPool();
     const conditions = ['agent_id = $1'];
     const params: any[] = [agentId];
     let paramIdx = 2;
     if (opts?.from) { conditions.push(`date >= $${paramIdx}`); params.push(opts.from); paramIdx++; }
     if (opts?.to) { conditions.push(`date <= $${paramIdx}`); params.push(opts.to); paramIdx++; }
+    // Section filtering: default (undefined) = agent-wide rows only (section_id IS NULL)
+    // '__all' = all rows; specific value = that section only
+    if (opts?.sectionId === '__all') {
+      // No section filter — return all rows
+    } else if (opts?.sectionId) {
+      conditions.push(`section_id = $${paramIdx}`); params.push(opts.sectionId); paramIdx++;
+    } else {
+      conditions.push('section_id IS NULL');
+    }
     const limit = opts?.limit || 90;
     const result = await pool.query(
       `SELECT * FROM org_studio_agent_metrics WHERE ${conditions.join(' AND ')} ORDER BY date DESC LIMIT ${limit}`,
@@ -993,6 +1142,7 @@ export class PostgresStoreProvider implements StoreProvider {
       id: row.id,
       agentId: row.agent_id,
       date: row.date,
+      sectionId: row.section_id || null,
       tasksCompleted: row.tasks_completed,
       tasksStarted: row.tasks_started,
       avgDurationMin: parseFloat(row.avg_duration_min) || null,
@@ -1017,13 +1167,22 @@ export class PostgresStoreProvider implements StoreProvider {
     }));
   }
 
-  async getTeamMetrics(opts?: { from?: string; to?: string }): Promise<any[]> {
+  async getTeamMetrics(opts?: { from?: string; to?: string; sectionId?: string }): Promise<any[]> {
     const pool = await this.getPool();
     const conditions: string[] = [];
     const params: any[] = [];
     let paramIdx = 1;
     if (opts?.from) { conditions.push(`date >= $${paramIdx}`); params.push(opts.from); paramIdx++; }
     if (opts?.to) { conditions.push(`date <= $${paramIdx}`); params.push(opts.to); paramIdx++; }
+    // Section filtering for team metrics
+    if (opts?.sectionId === '__all') {
+      // No filter
+    } else if (opts?.sectionId) {
+      conditions.push(`section_id = $${paramIdx}`); params.push(opts.sectionId); paramIdx++;
+    } else {
+      // Default: agent-wide aggregates only (exclude per-section rows)
+      conditions.push('section_id IS NULL');
+    }
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     const result = await pool.query(
       `SELECT agent_id,

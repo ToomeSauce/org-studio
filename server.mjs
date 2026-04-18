@@ -1766,6 +1766,95 @@ async function computeDailyMetrics(targetDate) {
         });
         console.log(`[Metrics] ${agent.name}: ${tasksCompleted} completed, ${commentsPosted} comments, throughput ${throughput?.toFixed(1) || '?'}/hr${mentionResponseMin ? `, mention response ${mentionResponseMin}m` : ''}`);
         computedCount++;
+
+        // --- Per-section metrics ---
+        // Collect distinct sectionIds from tasks touched today
+        const sectionIds = new Set();
+        for (const task of agentTasks) {
+          if (task.sectionId) {
+            const history = task.statusHistory || [];
+            for (const h of history) {
+              if (h.timestamp >= dayStart && h.timestamp < dayEnd) {
+                sectionIds.add(task.sectionId);
+                break;
+              }
+            }
+          }
+        }
+
+        for (const secId of sectionIds) {
+          // Recompute metrics for tasks in this section only
+          const secTasks = agentTasks.filter(t => t.sectionId === secId);
+          let secCompleted = 0, secStarted = 0;
+          const secDurations = [], secGaps = [];
+          let secPrev = null, secBounce = 0, secStall = 0, secFirstPass = 0, secDone = 0;
+          let secReviewNotes = 0, secTestPlan = 0;
+
+          for (const task of secTasks) {
+            const h = task.statusHistory || [];
+            for (const entry of h) {
+              if (!entry.timestamp || entry.timestamp < dayStart || entry.timestamp >= dayEnd) continue;
+              if (entry.status === 'done') { secCompleted++; secDone++; if (task.reviewNotes) secReviewNotes++; if (task.testPlan) secTestPlan++; }
+              if (entry.status === 'in-progress') secStarted++;
+            }
+            const sAt = h.find(e => e.status === 'in-progress' && e.timestamp >= dayStart && e.timestamp < dayEnd)?.timestamp;
+            const cAt = [...h].reverse().find(e => e.status === 'done' && e.timestamp >= dayStart && e.timestamp < dayEnd)?.timestamp;
+            if (sAt && cAt && cAt > sAt) {
+              secDurations.push((cAt - sAt) / 60000);
+              if (secPrev) { const g = (sAt - secPrev) / 60000; if (g >= 0) secGaps.push(g); }
+              secPrev = cAt;
+            }
+            for (let i = 1; i < h.length; i++) {
+              if (h[i].timestamp < dayStart || h[i].timestamp >= dayEnd) continue;
+              if (h[i].status === 'in-progress' && (h[i-1]?.status === 'review' || h[i-1]?.status === 'qa')) secBounce++;
+            }
+            const dayH = h.filter(e => e.timestamp >= dayStart && e.timestamp < dayEnd).map(e => e.status);
+            if (dayH.includes('done') && !dayH.includes('blocked')) {
+              let b = false;
+              for (let i = 1; i < dayH.length; i++) { if (dayH[i] === 'in-progress' && (dayH[i-1] === 'review' || dayH[i-1] === 'qa')) { b = true; break; } }
+              if (!b) secFirstPass++;
+            }
+            if (task.loopPausedAt && task.loopPausedAt >= dayStart && task.loopPausedAt < dayEnd) secStall++;
+          }
+
+          if (secCompleted === 0 && secStarted === 0) continue;
+
+          const secAvgDur = secDurations.length > 0 ? secDurations.reduce((a,b) => a+b, 0) / secDurations.length : null;
+          const secMedDur = secDurations.length > 0 ? secDurations.sort((a,b) => a-b)[Math.floor(secDurations.length / 2)] : null;
+          const secAvgGap = secGaps.length > 0 ? secGaps.reduce((a,b) => a+b, 0) / secGaps.length : null;
+          const secChain = secGaps.length > 0 ? secGaps.filter(g => g < 2).length / secGaps.length : null;
+          let secActive = 0;
+          if (secDurations.length > 0) secActive = secDurations.reduce((a,b) => a+b, 0) + secGaps.filter(g => g < 30).reduce((a,b) => a+b, 0);
+          const secThru = secActive > 0 ? secCompleted / (secActive / 60) : null;
+          const secFP = secDone > 0 ? secFirstPass / secDone : null;
+          const secRNR = secDone > 0 ? secReviewNotes / secDone : null;
+          const secTPR = secDone > 0 ? secTestPlan / secDone : null;
+
+          const secMetrics = {
+            tasks_completed: secCompleted, tasks_started: secStarted,
+            avg_duration_min: secAvgDur ? Math.round(secAvgDur * 10) / 10 : null,
+            median_duration_min: secMedDur ? Math.round(secMedDur * 10) / 10 : null,
+            avg_gap_min: secAvgGap ? Math.round(secAvgGap * 10) / 10 : null,
+            chain_rate: secChain ? Math.round(secChain * 1000) / 1000 : null,
+            throughput: secThru ? Math.round(secThru * 10) / 10 : null,
+            first_pass_rate: secFP ? Math.round(secFP * 1000) / 1000 : null,
+            bounce_count: secBounce, stall_count: secStall,
+            comments_posted: 0, mentions_received: 0, mentions_sent: 0, mention_response_min: null,
+            kudos_count: 0, flag_count: 0,
+            review_notes_rate: secRNR ? Math.round(secRNR * 1000) / 1000 : null,
+            test_plan_rate: secTPR ? Math.round(secTPR * 1000) / 1000 : null,
+            active_minutes: Math.round(secActive), versions_completed: 0,
+          };
+
+          try {
+            await fetch(`http://127.0.0.1:${port}/api/metrics/${agentId}`, {
+              method: 'POST', headers,
+              body: JSON.stringify({ date: today, metrics: secMetrics, sectionId: secId }),
+            });
+          } catch (secErr) {
+            console.warn(`[Metrics] Failed section upsert for ${agentId}/${secId}:`, secErr.message);
+          }
+        }
       } catch (e) {
         console.warn(`[Metrics] Failed to upsert for ${agentId}:`, e.message);
       }

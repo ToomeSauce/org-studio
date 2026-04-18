@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getStoreProvider } from '@/lib/store-provider';
 import { authenticateRequest } from '@/lib/auth';
+import { checkArchivedProject } from '@/lib/archived-project-compat';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,6 +29,16 @@ export async function GET(
 ) {
   try {
     const { projectId } = await params;
+
+    // 410 compat: archived qa-fold projects
+    const store = await getStoreProvider().read();
+    const archCheck = checkArchivedProject(store.projects, projectId);
+    if (archCheck.migrated) {
+      return NextResponse.json(
+        { error: 'Project moved', migratedTo: archCheck.migratedTo },
+        { status: 410 }
+      );
+    }
 
     const storeProvider = getStoreProvider();
 
@@ -111,6 +122,16 @@ export async function POST(
     const authError = await authenticateRequest(req);
     if (authError) {
       return authError;
+    }
+
+    // 410 compat: archived qa-fold projects
+    const storeForArchiveCheck = await getStoreProvider().read();
+    const archPostCheck = checkArchivedProject(storeForArchiveCheck.projects, projectId);
+    if (archPostCheck.migrated) {
+      return NextResponse.json(
+        { error: 'Project moved', migratedTo: archPostCheck.migratedTo },
+        { status: 410 }
+      );
     }
 
     if (process.env.DATABASE_URL) {

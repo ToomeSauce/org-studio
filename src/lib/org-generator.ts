@@ -4,6 +4,7 @@
 import { Teammate } from './teammates';
 import { OperatingPrinciple } from './principles-generator';
 import { CoachingInsight } from './coaching-insights';
+import { agentOwnedSections } from './section-access';
 
 export interface AgentPerformance {
   totalCompleted: number;
@@ -32,6 +33,7 @@ interface OrgContext {
   agentPerformance?: AgentPerformance;
   teamPerformance?: TeamPerformance;
   coachingInsights?: CoachingInsight[];
+  projects?: any[];
 }
 
 export function generateOrgMd(ctx: OrgContext, forAgentId?: string): string {
@@ -172,6 +174,26 @@ export function generateOrgMd(ctx: OrgContext, forAgentId?: string): string {
         lines.push(`**Description:** ${me.description}`);
       }
       lines.push('');
+    }
+  }
+
+  // Your Sections (agent-specific, soft isolation)
+  if (forAgentId && ctx.projects) {
+    const me = ctx.teammates.find(t => t.agentId === forAgentId || t.id === forAgentId);
+    if (me) {
+      const owned = agentOwnedSections(ctx.projects, me.name);
+      if (owned.length > 0) {
+        lines.push('## Your Sections');
+        lines.push('Sections you own across projects. Focus on tasks in these sections (soft isolation — you can still access everything via the API).');
+        lines.push('');
+        for (const { project, section } of owned) {
+          const outcomes = section.outcomes
+            ? ` — ${section.outcomes.length > 120 ? section.outcomes.substring(0, 120) + '…' : section.outcomes}`
+            : '';
+          lines.push(`- **${project.name}** → ${section.name}${outcomes}`);
+        }
+        lines.push('');
+      }
     }
   }
 

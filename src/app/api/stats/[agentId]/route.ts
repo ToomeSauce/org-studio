@@ -20,6 +20,7 @@ interface DeliveryStats {
   avgCycleTimeHuman: string;
   firstPassRate: number;
   qaBounces: number;
+  bouncesBySection: Record<string, number>;
   currentStreak: number;
   kudosCount: number;
   flagsCount: number;
@@ -142,6 +143,7 @@ export async function GET(
 
     // QA bounces: count review/qa → in-progress transitions
     let qaBounces = 0;
+    const bouncesBySection: Record<string, number> = {};
     for (const task of agentTasks) {
       const history = task.statusHistory || [];
       for (let i = 0; i < history.length - 1; i++) {
@@ -149,6 +151,8 @@ export async function GET(
         const next = history[i + 1];
         if (['review', 'qa'].includes(curr.status) && next.status === 'in-progress') {
           qaBounces++;
+          const secKey = (task as any).sectionId || '__none';
+          bouncesBySection[secKey] = (bouncesBySection[secKey] || 0) + 1;
         }
       }
     }
@@ -193,6 +197,7 @@ export async function GET(
       avgCycleTimeHuman: humanizeDuration(avgCycleTimeMs),
       firstPassRate: Math.round(firstPassRate * 100) / 100,
       qaBounces,
+      bouncesBySection,
       currentStreak,
       kudosCount,
       flagsCount,

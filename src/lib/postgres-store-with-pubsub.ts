@@ -102,6 +102,37 @@ export class PostgresStoreProviderWithPubSub implements StoreProvider {
     return await this.baseProvider.health();
   }
 
+  // --- Section CRUD (delegate to base provider with pubsub notification) ---
+
+  async addSection(projectId: string, section: { id?: string; name: string; owner: string; outcomes: string; contract: string }): Promise<any> {
+    const result = await this.baseProvider.addSection(projectId, section);
+    if (this.pubsub) {
+      await this.pubsub.notifyChange('projects', 'update', projectId, { sectionAdded: result.id });
+    }
+    return result;
+  }
+
+  async updateSection(projectId: string, sectionId: string, updates: Partial<{ name: string; owner: string; outcomes: string; contract: string }>): Promise<void> {
+    await this.baseProvider.updateSection(projectId, sectionId, updates);
+    if (this.pubsub) {
+      await this.pubsub.notifyChange('projects', 'update', projectId, { sectionUpdated: sectionId });
+    }
+  }
+
+  async deleteSection(projectId: string, sectionId: string): Promise<void> {
+    await this.baseProvider.deleteSection(projectId, sectionId);
+    if (this.pubsub) {
+      await this.pubsub.notifyChange('projects', 'update', projectId, { sectionDeleted: sectionId });
+    }
+  }
+
+  async reorderSections(projectId: string, sectionIds: string[]): Promise<void> {
+    await this.baseProvider.reorderSections(projectId, sectionIds);
+    if (this.pubsub) {
+      await this.pubsub.notifyChange('projects', 'update', projectId, { sectionsReordered: true });
+    }
+  }
+
   async close?(): Promise<void> {
     if (this.pubsub) {
       await this.pubsub.close();

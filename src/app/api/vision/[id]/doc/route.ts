@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { rpc } from '@/lib/gateway-rpc';
 import { getStoreProvider } from '@/lib/store-provider';
+import { checkArchivedProject } from '@/lib/archived-project-compat';
 
 interface VisionDocResponse {
   content: string;
@@ -103,6 +104,17 @@ export async function GET(
 ) {
   try {
     const { id: projectId } = await params;
+
+    // 410 compat: archived qa-fold projects
+    const store = await getStoreProvider().read();
+    const archCheck = checkArchivedProject(store.projects, projectId);
+    if (archCheck.migrated) {
+      return NextResponse.json(
+        { error: 'Project moved', migratedTo: archCheck.migratedTo },
+        { status: 410 }
+      );
+    }
+
     let content: string | null = null;
 
     // Try Postgres first (if DATABASE_URL is set)

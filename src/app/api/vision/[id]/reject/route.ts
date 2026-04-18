@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getStoreProvider } from '@/lib/store-provider';
+import { checkArchivedProject } from '@/lib/archived-project-compat';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,6 +27,15 @@ export async function POST(
     const { reason = 'No reason provided' } = body;
 
     const store = await readStore();
+
+    // 410 compat: archived qa-fold projects
+    const archCheck = checkArchivedProject(store.projects, projectId);
+    if (archCheck.migrated) {
+      return NextResponse.json(
+        { error: 'Project moved', migratedTo: archCheck.migratedTo },
+        { status: 410 }
+      );
+    }
 
     // Find project
     const project = store.projects.find((p: any) => p.id === projectId);

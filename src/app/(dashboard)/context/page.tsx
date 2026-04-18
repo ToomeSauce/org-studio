@@ -335,10 +335,13 @@ function TasksPageInner() {
   }, [urlProject]);
   const [filterAgent, setFilterAgent] = useState('all');
   const [filterVersion, setFilterVersion] = useState('all');
+  const [filterSection, setFilterSection] = useState('all');
   const [addingTo, setAddingTo] = useState<Task['status'] | null>(null);
   const [newTitle, setNewTitle] = useState('');
   const [newProject, setNewProject] = useState('');
   const [newAssignee, setNewAssignee] = useState('');
+  const [newSectionId, setNewSectionId] = useState('');
+  const [newSectionManual, setNewSectionManual] = useState(false);
   const [newDescription, setNewDescription] = useState('');
   // priority removed from UI — tasks use position-based ordering
   const [newDoneWhen, setNewDoneWhen] = useState('');
@@ -358,6 +361,20 @@ function TasksPageInner() {
   }, [urlTask]);
   const [searchQuery, setSearchQuery] = useState('');
 
+  // Reset section filter when project filter changes
+  useEffect(() => {
+    setFilterSection('all');
+  }, [filterProject]);
+
+  // Helper: resolve default section for a project + assignee
+  function defaultSectionId(project: Project | undefined, assigneeName: string) {
+    const sections = project?.sections || [];
+    if (!sections.length) return undefined;
+    if (sections.length === 1) return sections[0].id;
+    const ownerMatch = sections.find(s => s.owner?.toLowerCase() === assigneeName?.toLowerCase());
+    return (ownerMatch || sections[0]).id;
+  }
+
 
   const filteredTasks = useMemo(() => {
     let result = tasks.filter(t => {
@@ -366,6 +383,15 @@ function TasksPageInner() {
       if (filterProject !== 'all' && t.projectId !== filterProject) return false;
       if (filterAgent !== 'all' && t.assignee !== filterAgent) return false;
       if (filterVersion !== 'all' && t.version !== filterVersion) return false;
+      // Section filter (only meaningful when a project is selected)
+      if (filterSection !== 'all' && filterProject !== 'all') {
+        if (filterSection === 'main') {
+          // Match tasks with no sectionId or with the default Main section
+          if (t.sectionId && t.sectionId !== `sec-main-${filterProject}`) return false;
+        } else {
+          if (t.sectionId !== filterSection) return false;
+        }
+      }
       return true;
     });
 
@@ -382,7 +408,7 @@ function TasksPageInner() {
     }
 
     return result;
-  }, [tasks, filterProject, filterAgent, filterVersion, searchQuery]);
+  }, [tasks, filterProject, filterAgent, filterVersion, filterSection, searchQuery]);
 
   const selectedTask = useMemo(() => {
     if (!selectedTaskId) return null;
@@ -478,12 +504,16 @@ function TasksPageInner() {
     if (proj?.owner) {
       setNewAssignee(proj.owner);
     }
-  }, [projects]);
+    setNewSectionId(defaultSectionId(proj, proj?.owner || newAssignee) || '');
+    setNewSectionManual(false);
+  }, [projects, newAssignee]);
 
   const resetAddForm = useCallback(() => {
     setNewTitle('');
     setNewProject('');
     setNewAssignee('');
+    setNewSectionId('');
+    setNewSectionManual(false);
     setNewDescription('');
     setNewDoneWhen('');
     setNewConstraints('');
@@ -497,8 +527,11 @@ function TasksPageInner() {
   const openAddForm = useCallback((status: Task['status']) => {
     const defaultProjectId = filterProject !== 'all' ? filterProject : (projects[0]?.id || '');
     const defaultProject = projects.find(p => p.id === defaultProjectId);
+    const defaultAssignee = defaultProject?.owner || teammates[0]?.name || '';
     setNewProject(defaultProjectId);
-    setNewAssignee(defaultProject?.owner || teammates[0]?.name || '');
+    setNewAssignee(defaultAssignee);
+    setNewSectionId(defaultSectionId(defaultProject, defaultAssignee) || '');
+    setNewSectionManual(false);
     setCriteriaOpen(status === 'planning');
     setAddingTo(status);
   }, [filterProject, projects, teammates]);
@@ -520,6 +553,7 @@ function TasksPageInner() {
       priority: 'medium',
       testType: newTestType,
       testAssignee: newTestType === 'qa' ? (newTestAssignee || undefined) : undefined,
+      ...(newSectionId ? { sectionId: newSectionId } : {}),
       ...seedFields,
     });
     resetAddForm();
@@ -578,7 +612,7 @@ function TasksPageInner() {
           className="text-[var(--text-sm)] px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-md)] text-[var(--text-secondary)] outline-none focus:border-[var(--accent-primary)] transition-colors"
         >
           <option value="all">All Projects</option>
-          {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          {projects.filter((p: any) => !p.isArchived).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
           <option disabled>──────────</option>
           <option value="archived">📦 Archived</option>
         </select>
@@ -604,6 +638,23 @@ function TasksPageInner() {
             {uniqueVersions.map(v => <option key={v} value={v}>v{v}</option>)}
           </select>
         )}
+
+        {/* Section Filter — only when a specific project is selected */}
+        {filterProject !== 'all' && filterProject !== 'archived' && (() => {
+          const proj = projects.find(p => p.id === filterProject);
+          const sections = proj?.sections || [];
+          if (sections.length <= 1) return null;
+          return (
+            <select
+              value={filterSection}
+              onChange={e => setFilterSection(e.target.value)}
+              className="text-[var(--text-sm)] px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-md)] text-[var(--text-secondary)] outline-none focus:border-[var(--accent-primary)] transition-colors"
+            >
+              <option value="all">All Sections</option>
+              {sections.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          );
+        })()}
 
         {/* Search Box (moved to right) */}
         <div className="flex items-center gap-2 px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-md)] focus-within:border-[var(--accent-primary)] transition-colors w-full sm:flex-1 sm:max-w-sm sm:ml-auto">
@@ -922,17 +973,44 @@ function TasksPageInner() {
                             onChange={e => handleProjectChange(e.target.value)}
                             className="w-full text-[var(--text-xs)] bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-sm)] px-2 py-1.5 text-[var(--text-secondary)] outline-none"
                           >
-                            {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                            {projects.filter((p: any) => !p.isArchived).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                           </select>
                           <select
                             value={newAssignee || teammates[0]?.name || ''}
-                            onChange={e => setNewAssignee(e.target.value)}
+                            onChange={e => {
+                              setNewAssignee(e.target.value);
+                              if (!newSectionManual) {
+                                const proj = projects.find(p => p.id === (newProject || (filterProject !== 'all' ? filterProject : (projects[0]?.id || ''))));
+                                setNewSectionId(defaultSectionId(proj, e.target.value) || '');
+                              }
+                            }}
                             className="w-full text-[var(--text-xs)] bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-sm)] px-2 py-1.5 text-[var(--text-secondary)] outline-none"
                           >
                             {agents.map(a => <option key={a} value={a}>{a}</option>)}
                           </select>
 
                         </div>
+
+                        {/* Section dropdown — only show if the selected project has >1 section */}
+                        {(() => {
+                          const projId = newProject || (filterProject !== 'all' ? filterProject : (projects[0]?.id || ''));
+                          const proj = projects.find(p => p.id === projId);
+                          const sections = proj?.sections || [];
+                          if (sections.length <= 1) return null;
+                          return (
+                            <div className="mb-2">
+                              <select
+                                value={newSectionId || `sec-main-${projId}`}
+                                onChange={e => { setNewSectionId(e.target.value); setNewSectionManual(true); }}
+                                className="w-full text-[var(--text-xs)] bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-sm)] px-2 py-1.5 text-[var(--text-secondary)] outline-none"
+                              >
+                                {sections.map(s => (
+                                  <option key={s.id} value={s.id}>{s.name}{s.owner ? ` (${s.owner})` : ''}</option>
+                                ))}
+                              </select>
+                            </div>
+                          );
+                        })()}
 
                         {/* Test type options — only show when QA lead is set */}
                         {qaLead && (

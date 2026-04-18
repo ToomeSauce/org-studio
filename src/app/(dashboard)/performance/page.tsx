@@ -9,6 +9,7 @@ import CulturalAlignmentSection from '@/components/CulturalAlignmentSection';
 import AgentComparisonSection from '@/components/AgentComparisonSection';
 import WeeklyDigestSection from '@/components/WeeklyDigestSection';
 import { CoachingInsight } from '@/lib/coaching-insights';
+import { agentOwnedSections } from '@/lib/section-access';
 
 interface Teammate {
   agentId?: string;
@@ -43,6 +44,7 @@ export default function PerformancePage() {
   const [coachingInsights, setCoachingInsights] = useState<CoachingInsight[] | null>(null);
   const [coachingLoading, setCoachingLoading] = useState(false);
   const [selectedProject, setSelectedProject] = useState<string>('all');
+  const [filterSection, setFilterSection] = useState<string>('');  // '' = All (agent-wide)
   const [versionData, setVersionData] = useState<any[]>([]);
 
   useEffect(() => {
@@ -62,7 +64,8 @@ export default function PerformancePage() {
       return;
     }
     setAgentLoading(true);
-    fetch(`/api/metrics/${selectedAgent}?limit=30`)
+    const sectionParam = filterSection ? `&sectionId=${encodeURIComponent(filterSection)}` : '';
+    fetch(`/api/metrics/${selectedAgent}?limit=30${sectionParam}`)
       .then(res => res.json())
       .then(data => {
         setAgentMetrics((data.metrics || []).reverse()); // oldest first for charts
@@ -80,7 +83,7 @@ export default function PerformancePage() {
         setCoachingLoading(false);
       })
       .catch(() => setCoachingLoading(false));
-  }, [selectedAgent]);
+  }, [selectedAgent, filterSection]);
 
   const teammates: Teammate[] = storeData?.settings?.teammates || [];
 
@@ -92,6 +95,24 @@ export default function PerformancePage() {
     }
     return map;
   }, [teammates]);
+
+  // Compute available sections across all active projects
+  const sectionOptions = useMemo(() => {
+    const projects = (storeData?.projects || []).filter((p: any) => !p.isArchived && p.phase !== 'complete');
+    const options: Array<{ id: string; label: string }> = [];
+    let hasNonDefault = false;
+    for (const project of projects) {
+      const sections = project.sections || [];
+      if (sections.length <= 1) continue; // Only Main — skip
+      for (const section of sections) {
+        // Skip the default Main section from the dropdown (it's included in 'All')
+        const isDefault = section.id === `sec-main-${project.id}` || (sections.length === 1 && section.name === 'Main');
+        if (!isDefault) hasNonDefault = true;
+        options.push({ id: section.id, label: `${project.name} — ${section.name}` });
+      }
+    }
+    return hasNonDefault ? options : [];
+  }, [storeData]);
 
   const versionVelocity = useMemo(() => {
     if (!storeData?.tasks || !storeData?.projects) return [];
@@ -175,9 +196,23 @@ export default function PerformancePage() {
     <div className="flex-1 overflow-auto bg-[var(--bg-primary)]">
       <div className="max-w-6xl mx-auto p-6 space-y-8">
         {/* Header */}
-        <div>
-          <h1 className="text-3xl font-bold text-[var(--text-primary)]">Performance</h1>
-          <p className="text-sm text-[var(--text-muted)] mt-1">Agent delivery metrics</p>
+        <div className="flex items-center justify-between flex-wrap gap-4">
+          <div>
+            <h1 className="text-3xl font-bold text-[var(--text-primary)]">Performance</h1>
+            <p className="text-sm text-[var(--text-muted)] mt-1">Agent delivery metrics</p>
+          </div>
+          {sectionOptions.length > 0 && (
+            <select
+              value={filterSection}
+              onChange={(e) => setFilterSection(e.target.value)}
+              className="px-3 py-1.5 bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-md)] text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+            >
+              <option value="">All sections</option>
+              {sectionOptions.map(opt => (
+                <option key={opt.id} value={opt.id}>{opt.label}</option>
+              ))}
+            </select>
+          )}
         </div>
 
         {/* Weekly Digest */}
@@ -221,6 +256,7 @@ export default function PerformancePage() {
                   key={metrics.agentId}
                   metrics={metrics}
                   teammate={tm}
+                  projects={storeData?.projects || []}
                   selected={selectedAgent === metrics.agentId}
                   onClick={() => setSelectedAgent(selectedAgent === metrics.agentId ? null : metrics.agentId)}
                 />
@@ -409,11 +445,13 @@ function SummaryCard({ label, value }: { label: string; value: string | number }
 function AgentCard({
   metrics,
   teammate,
+  projects,
   selected,
   onClick,
 }: {
   metrics: AgentMetrics;
   teammate?: Teammate;
+  projects?: any[];
   selected?: boolean;
   onClick?: () => void;
 }) {
@@ -429,6 +467,17 @@ function AgentCard({
   const chainPct =
     metrics.avgChainRate != null ? Math.round(metrics.avgChainRate * 100) : null;
 
+  // Section badges
+  const agentName = teammate?.name || metrics.agentId;
+  const owned = projects && projects.length > 0
+    ? agentOwnedSections(projects.filter((p: any) => !p.isArchived), agentName)
+    : [];
+  // Filter out default Main sections — only show non-trivial sections
+  const nonDefaultOwned = owned.filter(o => o.section.id !== `sec-main-${o.project.id}`);
+  const maxBadges = 3;
+  const visibleBadges = nonDefaultOwned.slice(0, maxBadges);
+  const overflowCount = nonDefaultOwned.length - maxBadges;
+
   return (
     <div
       onClick={onClick}
@@ -442,11 +491,29 @@ function AgentCard({
       {/* Agent Header */}
       <div className="flex items-center gap-3">
         <span className="text-2xl">{teammate?.emoji || '🤖'}</span>
-        <div>
+        <div className="flex-1 min-w-0">
           <h3 className="font-semibold text-[var(--text-primary)]">
             {teammate?.name || metrics.agentId}
           </h3>
           <p className="text-xs text-[var(--text-muted)]">{teammate?.domain || ''}</p>
+          {visibleBadges.length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-1">
+              {visibleBadges.map(o => (
+                <span
+                  key={o.section.id}
+                  className="inline-block text-[10px] px-1.5 py-0.5 rounded border border-[var(--border-subtle)] text-[var(--text-muted)] bg-[var(--bg-secondary)] truncate max-w-[120px]"
+                  title={`${o.project.name} — ${o.section.name}`}
+                >
+                  {o.section.name}
+                </span>
+              ))}
+              {overflowCount > 0 && (
+                <span className="inline-block text-[10px] px-1.5 py-0.5 text-[var(--text-muted)]">
+                  +{overflowCount}
+                </span>
+              )}
+            </div>
+          )}
         </div>
       </div>
 

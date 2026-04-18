@@ -102,6 +102,7 @@ export function TaskDetailPanel({
   const [editingTitle, setEditingTitle] = useState(false);
   const [projectId, setProjectId] = useState(task.projectId);
   const [assignee, setAssignee] = useState(task.assignee);
+  const [sectionId, setSectionId] = useState(task.sectionId || '');
 
   const [status, setStatus] = useState<Task['status']>(task.status);
   const [description, setDescription] = useState(task.description || '');
@@ -138,6 +139,7 @@ export function TaskDetailPanel({
     setTitle(task.title);
     setProjectId(task.projectId);
     setAssignee(task.assignee);
+    setSectionId(task.sectionId || '');
     setStatus(task.status);
     setDescription(task.description || '');
     setDoneWhen(task.doneWhen || '');
@@ -294,7 +296,7 @@ export function TaskDetailPanel({
                 onChange={e => { setProjectId(e.target.value); saveField('projectId', e.target.value); }}
                 className="w-full text-[var(--text-sm)] bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-sm)] px-2.5 py-1.5 text-[var(--text-secondary)] outline-none focus:border-[var(--accent-primary)] transition-colors"
               >
-                {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                {projects.filter(p => !p.isArchived).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
             </div>
             <div>
@@ -322,6 +324,27 @@ export function TaskDetailPanel({
                 ))}
               </select>
             </div>
+            {/* Section dropdown — only show if project has >1 section */}
+            {(() => {
+              const currentProj = projects.find(p => p.id === projectId);
+              const sections = currentProj?.sections || [];
+              if (sections.length <= 1) return null;
+              const displaySectionId = sectionId || `sec-main-${projectId}`;
+              return (
+                <div>
+                  <label className="text-[10px] font-semibold text-[var(--text-muted)] uppercase tracking-wider mb-1.5 block">Section</label>
+                  <select
+                    value={displaySectionId}
+                    onChange={e => { setSectionId(e.target.value); saveField('sectionId', e.target.value); }}
+                    className="w-full text-[var(--text-sm)] bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-sm)] px-2.5 py-1.5 text-[var(--text-secondary)] outline-none focus:border-[var(--accent-primary)] transition-colors"
+                  >
+                    {sections.map(s => (
+                      <option key={s.id} value={s.id}>{s.name}{s.owner ? ` (${s.owner})` : ''}</option>
+                    ))}
+                  </select>
+                </div>
+              );
+            })()}
             {/* Test type row — only shown when QA lead is set */}
             {qaLead && (
             <div className="col-span-2 flex items-center gap-4 pt-1">
