@@ -89,12 +89,12 @@ describe('buildLoopPrompt', () => {
     expect(prompt).toContain('done');
   });
 
-  it('contains "NEVER pull from planning" rule', async () => {
+  it('encourages pulling from planning to scope', async () => {
     const loop = makeLoop();
     const prompt = await buildLoopPrompt(loop, 'Alex');
 
-    // Should appear at least once (it's in both COLUMN WORKFLOW and RULES)
-    expect(prompt).toContain('NEVER pull from "planning"');
+    // New guidance (post v0.11): agents are encouraged to pull from planning, scope out, and move to backlog
+    expect(prompt).toContain('encouraged to pull tasks from planning');
   });
 
   it('only includes enabled steps in default mode', async () => {

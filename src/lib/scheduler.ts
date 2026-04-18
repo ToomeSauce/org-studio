@@ -27,7 +27,7 @@ export const DEFAULT_SECTIONS: PromptSection[] = [
     id: 'column-workflow',
     label: 'Column Workflow',
     content: `COLUMN WORKFLOW — understand what each column means:
-  planning    → Tasks being scoped/specced. Both humans AND agents can add/refine tasks here. Do NOT pull tasks from this column to work. Once a planning task has clear acceptance criteria and is ready for execution, move it to backlog (whether you scoped it or a human did).
+  planning    → Tasks being scoped/specced. Both humans AND agents can add/refine tasks here. **You are encouraged to pull tasks from planning, scope them out (acceptance criteria, constraints, context), and move them to backlog when ready for execution.** When in doubt about scope, post a comment asking instead of guessing.
   backlog     → Ready for an agent to pick up. This is YOUR intake queue.
   in-progress → Actively being worked. Resume these first.
   qa          → QA validation in progress. Test assignee is running the test plan. If you're the test assignee, follow the test plan.
@@ -118,7 +118,7 @@ TEST PLAN — every task has a testPlan field:
   - For QA tasks: describe end-user verification steps for the QA reviewer.
   - Leave the testPlan intact — don't delete or modify it after writing.
 
-PLANNING COLUMN — you may add tasks to planning when you discover work that needs scoping (acceptance criteria, constraints, context not yet defined). Refine planning tasks with comments or edits. When a planning task is fully scoped and ready for execution, move it to backlog. Do NOT pull tasks FROM planning to work on — they're not ready until they're in backlog.`,
+PLANNING COLUMN — you can both add tasks to planning AND pull tasks from it. When you discover work that needs scoping, drop it in planning. When you find a planning task in your domain that needs scoping, scope it out (acceptance criteria, constraints, context) and move it to backlog when ready for execution. If a planning task lacks enough context to scope, post a comment asking before moving forward.`,
     enabled: true,
     order: 40,
     builtIn: true,
@@ -167,7 +167,7 @@ PLANNING COLUMN — you may add tasks to planning when you discover work that ne
 - Only work tasks in YOUR domain. Read ORG.md for scope.
 - If blocked on a task, note the blocker, skip it, and move to the next.
 - NEVER touch main/master branches on shared repos. Staging only.
-- Do NOT pull tasks from "planning" to work on — those are still being scoped. You CAN add tasks to planning, refine them, and move them to backlog when ready.
+- You CAN pull tasks from "planning" — scope them out (acceptance criteria, constraints, context), then move them to backlog when ready for execution. Encouraged, not just allowed.
 - When you see opportunities to improve your domain, create new tasks and work them.
 - Clear your activity status when all work is done.
 - Every task must be tested. Check testType: "self" = self-test and document; "qa" = self-test then move to qa column.
@@ -229,7 +229,8 @@ export const QA_SECTIONS: PromptSection[] = [
     id: 'column-workflow',
     label: 'Column Workflow',
     content: `COLUMN WORKFLOW — understand what each column means:
-  planning    → Tasks being scoped. Humans AND agents can add/refine tasks here. Do NOT pull from this column to work. Tasks move to backlog when fully scoped and ready.
+  planning    → Tasks being scoped. Humans AND agents can add/refine tasks here. You can pull planning tasks, scope them out, and move them to backlog when ready for execution.
+  backlog     → Ready for an agent to pick up.
   backlog     → Ready for an agent to pick up.
   in-progress → Actively being worked by a dev.
   qa          → ** YOUR PRIMARY COLUMN ** — Tasks here need QA validation. This is where you do your main work.
@@ -295,7 +296,7 @@ REVIEW NOTES — when moving a task to "review" or "done", ALWAYS write a review
   6. When all work is done, clear your activity status and end.
   7. If you run out of time mid-task, leave it in whatever column it's actually in.
 
-PLANNING COLUMN — you may add QA-related tasks (test plan gaps, missing coverage) to planning. Refine them with comments or edits. Move them to backlog when ready for an agent to execute. Do NOT pull tasks FROM planning to work on.`,
+PLANNING COLUMN — you can both add QA-related tasks to planning AND pull tasks from it. Scope out planning tasks with clear test acceptance criteria, then move them to backlog when ready for an agent to execute. If a planning task lacks enough context to scope, post a comment asking instead of guessing.`,
     enabled: true,
     order: 40,
     builtIn: true,
@@ -348,7 +349,7 @@ PLANNING COLUMN — you may add QA-related tasks (test plan gaps, missing covera
 - Only work tasks in YOUR domain (testing/QA). Read ORG.md for scope.
 - If blocked on a task, note the blocker as a comment, skip it, and move to the next.
 - Clear your activity status when all work is done.
-- Do NOT pull tasks from "planning" to work on — those are still being scoped. You CAN add tasks to planning, refine them, and move them to backlog when ready.`,
+- You CAN pull tasks from "planning" — scope them out (acceptance criteria, constraints, context), then move them to backlog when ready for execution. Encouraged, not just allowed.`,
     enabled: true,
     order: 60,
     builtIn: true,

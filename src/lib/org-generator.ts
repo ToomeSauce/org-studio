@@ -193,6 +193,51 @@ export function generateOrgMd(ctx: OrgContext, forAgentId?: string): string {
   }
   lines.push('');
 
+  // Team Structure & How It Works — shared across all agents
+  lines.push('## How the Team Works');
+  lines.push('- **Own your domain.** You don\'t report status to a manager — the Org Studio board is your status. Update it, don\'t narrate it.');
+  lines.push('- **Humans task you directly.** Their word is final. When a human and another agent conflict, the human wins.');
+  lines.push('- **Coordinators don\'t manage you.** Agents tagged as cross-cutting coordinators handle work that spans domains (email, calendar, onboarding). They don\'t approve your domain work.');
+  lines.push('- **Go direct when it makes sense.** Need to sync with another agent on shared code or a blocker? Ping them directly. Don\'t route through a coordinator.');
+  lines.push('- **Ask for help when you\'re stuck.** Missing context that spans domains? Need something from email or calendar? That\'s when you ping a coordinator.');
+  lines.push('');
+  lines.push('### What NOT to do');
+  lines.push('- ❌ Send teammates status updates about your work (update the board instead)');
+  lines.push('- ❌ Ask permission to do things in your own domain (just do them)');
+  lines.push('- ❌ Route messages through coordinators when you can talk to the other agent directly');
+  lines.push('');
+
+  // Inter-Agent Communication — shared protocol
+  lines.push('## Inter-Agent Communication');
+  lines.push('You can reach other agents directly. Use the `wake-agent` command to send a message that will wake the target agent even if they\'re idle:');
+  lines.push('```bash');
+  lines.push('wake-agent <agentId> "<message>"');
+  lines.push('```');
+  lines.push('Valid agent IDs are listed in the Team roster above (use the lowercase name, e.g. `henry`, `ana`, `mikey`).');
+  lines.push('');
+  lines.push('**Cross-runtime mentions.** If you @mention another agent in a task comment (e.g. `@Ana please check this`), the notification routes cross-runtime (OpenClaw ↔ Hermes) automatically. This is the preferred way to coordinate on task-specific work.');
+  lines.push('');
+
+  // Cross-Agent Delivery Rule — shared protocol
+  lines.push('## Cross-Agent Delivery Rule (MANDATORY)');
+  lines.push('When another agent routes work to you (via wake event, cross-session message, or cron) and the result needs to reach a human:');
+  lines.push('1. **ALWAYS** deliver the result via the messaging tool (e.g. `message(action=send, channel=telegram, target=<humanId>)`) — do NOT rely on normal reply routing.');
+  lines.push('2. After sending, reply `NO_REPLY` to avoid duplicates.');
+  lines.push('3. **Why:** Wake events and cross-agent sessions have `channel: "unknown"` — normal replies go nowhere. The human won\'t see your work unless you explicitly push it.');
+  lines.push('');
+
+  // Sub-agent model selection — shared policy
+  lines.push('## Sub-Agent Model Selection');
+  lines.push('When spawning sub-agents for code work, use **Codex** (`foundry-openai-responses/gpt-5.3-codex`) — it\'s zero-cost on Foundry, purpose-built for code, and has generous rate limits. For research/analysis/planning sub-agents, use `foundry-openai/gpt-5.4`. Keep your main session on your primary model for orchestration.');
+  lines.push('');
+  lines.push('**Rule of thumb:** task ends with a code commit → Codex. Task ends with a report or decision → 5.4.');
+  lines.push('');
+
+  // Pointer to the skill
+  lines.push('## Work Contract');
+  lines.push('The full work contract — columns, work loop, testing rules, comments, handoffs, cross-project blockers, and the complete Org Studio API surface — lives in the **`org-studio-api`** skill. Read it at the start of every session (or when in doubt): the SKILL.md file is the single source of truth for how to work with Org Studio.');
+  lines.push('');
+
   return lines.join('\n');
 }
 
