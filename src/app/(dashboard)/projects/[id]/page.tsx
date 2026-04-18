@@ -9,6 +9,7 @@ import { useWSData } from '@/lib/ws';
 import { getProjectStatusLabel } from '@/lib/vision-status';
 import { TaskDetailPanel } from '@/components/TaskDetailPanel';
 import { RoadmapWithApprovalHorizon } from '@/components/RoadmapWithApprovalHorizon';
+import { ProjectChat } from '@/components/ProjectChat';
 import { updateTask, addComment as addTaskComment, deleteTask } from '@/lib/store';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -947,6 +948,23 @@ What makes a good proposal?
                 )}
               </div>
             )}
+          </div>
+        </details>
+
+        {/* Board Chat Section */}
+        <details className="rounded-2xl border border-[var(--border-color)] overflow-hidden group">
+          <summary className="cursor-pointer py-4 px-6 flex items-center gap-2 text-sm font-semibold text-[var(--text-primary)] bg-[var(--bg-secondary)] hover:bg-[var(--bg-hover)] transition-colors select-none list-none">
+            <ChevronRight size={14} className="text-[var(--text-muted)] group-open:rotate-90 transition-transform" />
+            💬 Project Chat
+          </summary>
+          <div className="border-t border-[var(--border-color)] p-6">
+            <ProjectChat
+              project={project}
+              tasks={allTasks}
+              agents={storeData?.settings?.teammates?.map((t: any) => t.name) || []}
+              nameColors={{}}
+              currentAuthor="You"
+            />
           </div>
         </details>
 

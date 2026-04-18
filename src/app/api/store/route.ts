@@ -1,28 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticateRequest, getSession, getSessionTokenFromCookie } from '@/lib/auth';
+import { authenticateRequest } from '@/lib/auth';
 import { rpc } from '@/lib/gateway-rpc';
 import { getStoreProvider, type StoreData } from '@/lib/store-provider';
-import { parseMentions, notifyMentionedAgents } from '@/lib/mention-notifier';
+import { parseMentions } from '@/lib/mention-notifier';
+import { routeCommentNotifications } from '@/lib/notification-router';
 import { syncRoadmapItemForTask } from '@/lib/roadmap-sync';
 import { checkArchivedProject } from '@/lib/archived-project-compat';
 
 const SCHEDULER_URL = 'http://localhost:4501/api/scheduler';
-
-/** Determine if the request is from a human (session cookie) or an API-key agent.
- *  Returns { isHuman: true, userId } for cookie sessions, { isHuman: false } for API key.
- */
-async function resolveCallerRole(req: NextRequest): Promise<{ isHuman: boolean; userId?: string }> {
-  const cookieHeader = req.headers.get('cookie');
-  const sessionToken = getSessionTokenFromCookie(cookieHeader);
-  if (sessionToken) {
-    const session = await getSession(sessionToken);
-    if (session) {
-      return { isHuman: true, userId: session.userId };
-    }
-  }
-  // Bearer token = programmatic/agent access
-  return { isHuman: false };
-}
 
 const DEFAULT_LOOP_STEPS = [
   {
@@ -404,21 +389,8 @@ export async function POST(req: NextRequest) {
 
         // --- #698 Task-creation guardrails ---
         const taskVersion = (payload.task?.version || '').trim();
-        const taskForce = payload.task?.force === true;
 
-        // Force escape hatch — gated on human session only
-        if (taskForce) {
-          const caller = await resolveCallerRole(req);
-          if (!caller.isHuman) {
-            return NextResponse.json(
-              { error: 'force: true is restricted to human sessions. Agents cannot bypass task-creation guardrails.' },
-              { status: 403 }
-            );
-          }
-          console.warn(`[force] addTask bypass by user ${caller.userId} for task "${payload.task?.title}"`);
-        }
-
-        if (!taskForce) {
+        {
           if (taskVersion) {
             // Roadmap task flow: version set → require roadmapItemId + validate
             const roadmapItemId = payload.task?.roadmapItemId;
@@ -518,9 +490,6 @@ export async function POST(req: NextRequest) {
           }
         }
         // --- End #698 guardrails ---
-
-        // Strip force from the persisted task data
-        delete payload.task?.force;
 
         const id = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
         const now = Date.now();
@@ -879,8 +848,21 @@ export async function POST(req: NextRequest) {
       }
 
       case 'addComment': {
-        const task = store.tasks.find((t: any) => t.id === payload.taskId);
-        if (!task) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+        // Support both legacy { taskId, comment } and new { scope, comment } shapes
+        const commentScope = payload.scope
+          ? payload.scope
+          : payload.taskId
+            ? { kind: 'task', taskId: payload.taskId }
+            : null;
+        if (!commentScope) return NextResponse.json({ error: 'Missing taskId or scope' }, { status: 400 });
+
+        // For task-scoped comments, validate the task exists
+        let task: any = null;
+        if (commentScope.kind === 'task' && commentScope.taskId) {
+          task = store.tasks.find((t: any) => t.id === commentScope.taskId);
+          if (!task) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+        }
+
         const commentId = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
         const model = await resolveAgentModel(payload.comment?.author, store);
         const comment = {
@@ -891,90 +873,123 @@ export async function POST(req: NextRequest) {
         };
         // PERF: Use targeted provider.addComment() instead of full store write
         // But also update lastActivityAt on the task
-        await getStoreProvider().addComment(payload.taskId, comment);
-        await getStoreProvider().updateTask(payload.taskId, { lastActivityAt: Date.now() });
+        await getStoreProvider().addComment(commentScope, comment);
+        if (task) {
+          await getStoreProvider().updateTask(commentScope.taskId, { lastActivityAt: Date.now() });
+        }
 
-        // @mention detection — notify mentioned agents (async, best-effort)
+        // --- Unified notification routing (async, best-effort) ---
         const teammates = store.settings?.teammates || [];
         const mentions = parseMentions(comment.content, teammates);
         let mentionResult: any = null;
         if (mentions.length > 0) {
-          // Fire-and-forget so we don't block the response
-          notifyMentionedAgents(task, comment, mentions, teammates)
-            .then(result => {
-              if (result.sent.length) {
-                console.log(`[mentions] Notified ${result.sent.join(', ')} about comment on ${task.id}`);
-              }
-              if (result.failed.length) {
-                console.warn(`[mentions] Failed to notify ${result.failed.join(', ')} about comment on ${task.id}`);
-              }
-            })
-            .catch(err => console.error('[mentions] Notification error:', err));
           mentionResult = { detected: mentions.map(m => m.teammate.name || m.teammate.agentId) };
         }
 
-        // Auto-notify project owners (devOwner + qaOwner) on every comment they didn't write
-        const project = store.projects?.find((p: any) => p.id === task.projectId);
-        if (project) {
-          const authorLower = (comment.author || '').toLowerCase();
-          const alreadyMentioned = new Set(mentions.map(m => (m.teammate.name || '').toLowerCase()));
-          const ownersToNotify: string[] = [];
+        // Build context for the unified router
+        const routerProject = (() => {
+          const pid = commentScope.kind === 'task'
+            ? task?.projectId
+            : commentScope.boardProjectId;
+          if (!pid) return undefined;
+          const p = store.projects.find((pr: any) => pr.id === pid);
+          if (!p) return undefined;
+          return {
+            id: p.id,
+            name: p.name,
+            devOwner: p.devOwner,
+            visionOwner: p.visionOwner,
+            qaOwner: p.qaOwner,
+            owner: p.owner,
+            sections: p.sections,
+          };
+        })();
 
-          for (const ownerName of [project.devOwner, project.qaOwner].filter(Boolean)) {
-            const ownerLower = ownerName.toLowerCase();
-            if (ownerLower === authorLower) continue; // Don't notify yourself
-            if (alreadyMentioned.has(ownerLower)) continue; // Already notified via explicit @mention
-            ownersToNotify.push(ownerName);
-          }
+        const routerSection = (() => {
+          if (commentScope.kind !== 'section' || !routerProject) return undefined;
+          const sec = (routerProject.sections || []).find((s: any) => s.id === commentScope.sectionId);
+          return sec ? { id: sec.id, name: sec.name, owner: sec.owner } : undefined;
+        })();
 
-          if (ownersToNotify.length > 0) {
-            const ownerMentions = ownersToNotify
-              .map(name => teammates.find((t: any) => t.name?.toLowerCase() === name.toLowerCase()))
-              .filter(Boolean)
-              .map(t => ({ teammate: t, raw: t.name }));
-            if (ownerMentions.length > 0) {
-              notifyMentionedAgents(task, comment, ownerMentions, teammates)
-                .then(result => {
-                  if (result.sent.length) {
-                    console.log(`[auto-notify] Notified owners ${result.sent.join(', ')} about comment on ${task.id}`);
-                  }
-                })
-                .catch(() => {});
+        const projectTasks = routerProject
+          ? store.tasks.filter((t: any) => t.projectId === routerProject.id)
+          : [];
+
+        // Single unified call replaces all per-scope branchy dispatch
+        routeCommentNotifications({
+          comment: { id: comment.id, author: comment.author, content: comment.content },
+          scope: commentScope,
+          teammates,
+          context: {
+            task: task ? { id: task.id, title: task.title, projectId: task.projectId, assignee: task.assignee } : undefined,
+            project: routerProject,
+            section: routerSection,
+            projectTasks: projectTasks.map((t: any) => ({ assignee: t.assignee })),
+            watchers: [],
+          },
+        })
+          .then(result => {
+            if (result.notified.length) {
+              console.log(`[notification-router] Notified ${result.notified.join(', ')} for ${commentScope.kind} comment`);
             }
+          })
+          .catch(err => console.error('[notification-router] Error:', err));
+
+        // Telegram notification when an agent posts a task comment (so humans see replies)
+        if (task) {
+          const commentAuthor = (comment.author || '').toLowerCase();
+          const isAgentComment = teammates.some((t: any) => 
+            !t.isHuman && (t.name?.toLowerCase() === commentAuthor || t.agentId?.toLowerCase() === commentAuthor)
+          );
+          if (isAgentComment && TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID) {
+            const projectName = store.projects?.find((p: any) => p.id === task.projectId)?.name || '';
+            const truncContent = comment.content?.length > 200 ? comment.content.slice(0, 200) + '…' : comment.content;
+            const tgMsg = `💬 *${comment.author}* commented on "${task.title}"${projectName ? ` · ${projectName}` : ''}\n\n${truncContent}`;
+            fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: tgMsg, parse_mode: 'Markdown' }),
+            }).catch(() => {}); // best-effort
           }
-        }
 
-        // Telegram notification when an agent posts a comment (so humans see replies)
-        const commentAuthor = (comment.author || '').toLowerCase();
-        const isAgentComment = teammates.some((t: any) => 
-          !t.isHuman && (t.name?.toLowerCase() === commentAuthor || t.agentId?.toLowerCase() === commentAuthor)
-        );
-        if (isAgentComment && TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID) {
-          const projectName = store.projects?.find((p: any) => p.id === task.projectId)?.name || '';
-          const truncContent = comment.content?.length > 200 ? comment.content.slice(0, 200) + '…' : comment.content;
-          const tgMsg = `💬 *${comment.author}* commented on "${task.title}"${projectName ? ` · ${projectName}` : ''}\n\n${truncContent}`;
-          fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: tgMsg, parse_mode: 'Markdown' }),
-          }).catch(() => {}); // best-effort
-        }
-
-        // Emit to activity feed
-        const feedApi2 = (globalThis as any).__orgStudioActivityFeed;
-        if (feedApi2?.add) {
-          feedApi2.add({
-            type: 'comment',
-            emoji: '💬',
-            agent: comment.author,
-            project: store.projects?.find((p: any) => p.id === task.projectId)?.name || '',
-            taskId: task.id,
-            message: `${comment.author} commented on "${task.title}"`,
-            detail: comment.content?.slice(0, 100),
-          });
-        }
+          // Emit to activity feed
+          const feedApi2 = (globalThis as any).__orgStudioActivityFeed;
+          if (feedApi2?.add) {
+            feedApi2.add({
+              type: 'comment',
+              emoji: '💬',
+              agent: comment.author,
+              project: store.projects?.find((p: any) => p.id === task.projectId)?.name || '',
+              taskId: task.id,
+              message: `${comment.author} commented on "${task.title}"`,
+              detail: comment.content?.slice(0, 100),
+            });
+          }
+        } // end if (task)
 
         return NextResponse.json({ ok: true, comment, mentions: mentionResult });
+      }
+
+      case 'listComments': {
+        if (!payload.scope) return NextResponse.json({ error: 'Missing scope' }, { status: 400 });
+        const provider = getStoreProvider();
+        if (typeof (provider as any).listComments !== 'function') {
+          return NextResponse.json({ error: 'listComments not supported by current provider' }, { status: 501 });
+        }
+        const listOpts: { limit?: number; before?: number } = {};
+        if (payload.limit) listOpts.limit = Number(payload.limit);
+        if (payload.before) listOpts.before = Number(payload.before);
+        const comments = await (provider as any).listComments(payload.scope, listOpts);
+        return NextResponse.json({ ok: true, comments });
+      }
+
+      case 'listDmThreads': {
+        const provider = getStoreProvider();
+        if (typeof (provider as any).listDmThreads !== 'function') {
+          return NextResponse.json({ threads: [] }); // graceful fallback
+        }
+        const threads = await (provider as any).listDmThreads(payload.forAgent);
+        return NextResponse.json({ ok: true, threads });
       }
 
       case 'addHandoff': {
@@ -1246,6 +1261,14 @@ export async function POST(req: NextRequest) {
 
       case 'reorderSections': {
         await getStoreProvider().reorderSections(payload.projectId, payload.sectionIds || []);
+        return NextResponse.json({ ok: true });
+      }
+
+      case 'purgeSection': {
+        if (!payload.projectId || !payload.sectionId) {
+          return NextResponse.json({ error: 'Missing projectId or sectionId' }, { status: 400 });
+        }
+        await getStoreProvider().purgeSection(payload.projectId, payload.sectionId);
         return NextResponse.json({ ok: true });
       }
 

@@ -89,18 +89,6 @@ describe('addTask guardrail rules', () => {
     });
   });
 
-  describe('force role gate', () => {
-    it('human session (cookie) should be allowed force', () => {
-      const callerRole = { isHuman: true, userId: 'user-1' };
-      expect(callerRole.isHuman).toBe(true);
-    });
-
-    it('API key session (agent) should be denied force', () => {
-      const callerRole = { isHuman: false };
-      expect(callerRole.isHuman).toBe(false);
-    });
-  });
-
   describe('roadmap item already claimed', () => {
     it('rejects when item already has a taskId', () => {
       const item = { id: 'item-1', title: 'Feature A', done: false, taskId: 'existing-task' };

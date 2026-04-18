@@ -55,9 +55,17 @@ export interface StoreProvider {
   deleteTask(taskId: string): Promise<void>;
 
   /**
-   * Add a comment to a task
+   * Add a comment to a task (legacy) or to any scope (new).
+   * Legacy: addComment(taskId: string, comment)
+   * New:    addComment(scope: { kind, taskId?, ... }, comment)
    */
-  addComment(taskId: string, comment: any): Promise<any>;
+  addComment(taskIdOrScope: string | { kind: string; taskId?: string; sectionId?: string; boardProjectId?: string; dmThreadId?: string }, comment: any): Promise<any>;
+
+  /**
+   * List comments for a given scope (reads from org_studio_comments table).
+   * Optional — only Postgres provider implements this initially.
+   */
+  listComments?(scope: { kind: string; taskId?: string; sectionId?: string; boardProjectId?: string; dmThreadId?: string }, opts?: { limit?: number; before?: number }): Promise<any[]>;
 
   /**
    * Update settings (mission statement, values, teammates, etc.)
@@ -72,7 +80,15 @@ export interface StoreProvider {
   addSection(projectId: string, section: { id?: string; name: string; owner: string; outcomes: string; contract: string }): Promise<any>;
   updateSection(projectId: string, sectionId: string, updates: Partial<{ name: string; owner: string; outcomes: string; contract: string }>): Promise<void>;
   deleteSection(projectId: string, sectionId: string): Promise<void>;
+  /** Hard-delete a section — truly removes it from the project. Use deleteSection for soft-delete. */
+  purgeSection(projectId: string, sectionId: string): Promise<void>;
   reorderSections(projectId: string, sectionIds: string[]): Promise<void>;
+
+  /**
+   * List DM threads with last-message metadata.
+   * Returns distinct threads sorted by last message timestamp DESC.
+   */
+  listDmThreads?(forAgent?: string): Promise<{ threadId: string; participantIds: string[]; lastCommentAt: number; lastCommentPreview: string; lastCommentAuthor?: string }[]>;
 
   /**
    * Health check — verify provider is operational
@@ -207,17 +223,33 @@ export class FileStoreProvider implements StoreProvider {
     await this.write(store);
   }
 
-  async addComment(taskId: string, comment: any): Promise<any> {
-    const store = await this.read();
-    const task = store.tasks.find((t: any) => t.id === taskId);
-    if (!task) throw new Error(`Task not found: ${taskId}`);
+  async addComment(taskIdOrScope: string | { kind: string; taskId?: string; sectionId?: string; boardProjectId?: string; dmThreadId?: string }, comment: any): Promise<any> {
+    // Normalize: extract taskId from legacy or new-style call
+    const scope = typeof taskIdOrScope === 'string'
+      ? { kind: 'task' as const, taskId: taskIdOrScope }
+      : taskIdOrScope;
 
-    if (!task.comments) task.comments = [];
+    // For task-scoped comments, write inline on the task (FileStore only supports tasks)
+    if (scope.kind === 'task' && scope.taskId) {
+      const store = await this.read();
+      const task = store.tasks.find((t: any) => t.id === scope.taskId);
+      if (!task) throw new Error(`Task not found: ${scope.taskId}`);
+
+      if (!task.comments) task.comments = [];
+      comment.id = comment.id || `comment-${Date.now()}`;
+      comment.createdAt = comment.createdAt || Date.now();
+      if (!comment.scope) comment.scope = scope;
+      task.comments.push(comment);
+
+      await this.write(store);
+      return comment;
+    }
+
+    // Non-task scopes: FileStoreProvider doesn't have a comments table.
+    // Store in a best-effort in-memory way (not persisted — Postgres is needed for non-task scopes).
     comment.id = comment.id || `comment-${Date.now()}`;
     comment.createdAt = comment.createdAt || Date.now();
-    task.comments.push(comment);
-
-    await this.write(store);
+    if (!comment.scope) comment.scope = scope;
     return comment;
   }
 
@@ -258,7 +290,22 @@ export class FileStoreProvider implements StoreProvider {
     const project = store.projects.find((p: any) => p.id === projectId);
     if (!project) throw new Error(`Project not found: ${projectId}`);
     const sections = project.sections || [];
-    if (sections.length <= 1) throw new Error('Cannot delete the last section');
+    const section = sections.find((s: any) => s.id === sectionId);
+    if (!section) throw new Error(`Section not found: ${sectionId}`);
+    // Count non-archived sections
+    const activeCount = sections.filter((s: any) => !s.archivedAt).length;
+    if (activeCount <= 1 && !section.archivedAt) throw new Error('Cannot delete the last section');
+    // Soft-delete: set archivedAt instead of removing
+    section.archivedAt = Date.now();
+    section.archivedBy = 'user';
+    await this.write(store);
+  }
+
+  async purgeSection(projectId: string, sectionId: string): Promise<void> {
+    const store = await this.read();
+    const project = store.projects.find((p: any) => p.id === projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
+    const sections = project.sections || [];
     project.sections = sections.filter((s: any) => s.id !== sectionId);
     await this.write(store);
   }
@@ -273,6 +320,11 @@ export class FileStoreProvider implements StoreProvider {
     const rest = current.filter((s: any) => !sectionIds.includes(s.id));
     project.sections = [...ordered, ...rest];
     await this.write(store);
+  }
+
+  /** File provider: DM threads are not indexed — return empty array. */
+  async listDmThreads(): Promise<{ threadId: string; participantIds: string[]; lastCommentAt: number; lastCommentPreview: string; lastCommentAuthor?: string }[]> {
+    return [];
   }
 
   async health(): Promise<boolean> {
@@ -885,69 +937,190 @@ export class PostgresStoreProvider implements StoreProvider {
     }
   }
 
-  async addComment(taskId: string, comment: any): Promise<any> {
+  async addComment(taskIdOrScope: string | { kind: string; taskId?: string; sectionId?: string; boardProjectId?: string; dmThreadId?: string }, comment: any): Promise<any> {
+    // Normalize scope
+    const scope = typeof taskIdOrScope === 'string'
+      ? { kind: 'task' as const, taskId: taskIdOrScope }
+      : taskIdOrScope;
+
     const pool = await this.getPool();
     const client = await pool.connect();
     try {
-      const result = await client.query(
-        'SELECT * FROM org_studio_tasks WHERE id = $1',
-        [taskId]
-      );
-      if (result.rows.length === 0) throw new Error(`Task not found: ${taskId}`);
-
-      const current = this.reconstructTask(result.rows[0]);
-      if (!current.comments) current.comments = [];
-
       const commentObj = {
         id: comment.id || `comment-${Date.now()}`,
         createdAt: comment.createdAt || Date.now(),
         ...comment,
+        scope,
       };
-      current.comments.push(commentObj);
 
-      const {
-        id,
-        ticketNumber,
-        title,
-        status,
-        projectId,
-        assignee,
-        priority,
-        testType,
-        testAssignee,
-        initiatedBy,
-        description,
-        doneWhen,
-        constraints,
-        testPlan,
-        reviewNotes,
-        loopCount,
-        loopPausedAt,
-        loopPauseReason,
-        lastActivityAt,
-        createdAt,
-        statusHistory,
-        comments,
-        ...overflow
-      } = current;
+      // 1. Insert into org_studio_comments table (best-effort — table may not exist yet)
+      try {
+        await client.query(
+          `INSERT INTO org_studio_comments (id, scope_kind, task_id, section_id, board_project_id, dm_thread_id, author, content, created_at, type, model, mentions, data)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+           ON CONFLICT (id) DO NOTHING`,
+          [
+            commentObj.id,
+            scope.kind,
+            scope.taskId || null,
+            scope.sectionId || null,
+            scope.boardProjectId || null,
+            scope.dmThreadId || null,
+            commentObj.author,
+            commentObj.content,
+            commentObj.createdAt,
+            commentObj.type || null,
+            commentObj.model || null,
+            commentObj.mentions ? JSON.stringify(commentObj.mentions) : null,
+            JSON.stringify({ scope: commentObj.scope }),
+          ]
+        );
+      } catch (e: any) {
+        // Table may not exist yet (migration not run) — log and continue
+        if (e.code !== '42P01') throw e; // 42P01 = undefined_table
+        console.warn('[addComment] org_studio_comments table not found — skipping new-table write');
+      }
 
-      await client.query(
-        `UPDATE org_studio_tasks
-         SET comments = $1, data = $2
-         WHERE id = $3`,
-        [JSON.stringify(comments), JSON.stringify(overflow), id]
-      );
+      // 2. For task-scoped comments, also write inline on the task (dual-write)
+      if (scope.kind === 'task' && scope.taskId) {
+        const result = await client.query(
+          'SELECT * FROM org_studio_tasks WHERE id = $1',
+          [scope.taskId]
+        );
+        if (result.rows.length === 0) throw new Error(`Task not found: ${scope.taskId}`);
+
+        const current = this.reconstructTask(result.rows[0]);
+        if (!current.comments) current.comments = [];
+        current.comments.push(commentObj);
+
+        const {
+          id,
+          ticketNumber,
+          title,
+          status,
+          projectId,
+          assignee,
+          priority,
+          testType,
+          testAssignee,
+          initiatedBy,
+          description,
+          doneWhen,
+          constraints,
+          testPlan,
+          reviewNotes,
+          loopCount,
+          loopPausedAt,
+          loopPauseReason,
+          lastActivityAt,
+          createdAt,
+          statusHistory,
+          comments,
+          ...overflow
+        } = current;
+
+        await client.query(
+          `UPDATE org_studio_tasks
+           SET comments = $1, data = $2
+           WHERE id = $3`,
+          [JSON.stringify(comments), JSON.stringify(overflow), id]
+        );
+      }
 
       // Emit NOTIFY event for bidirectional sync
+      const notifyTaskId = scope.kind === 'task' ? scope.taskId : null;
       const changePayload = JSON.stringify({
         type: 'comment_added',
-        taskId: id,
+        taskId: notifyTaskId,
+        scopeKind: scope.kind,
         timestamp: Date.now(),
         source: 'postgres',
       });
       try { await client.query(`NOTIFY org_studio_change, '${changePayload.replace(/'/g, "''")}'`); } catch {} // best-effort
 
       return commentObj;
+    } finally {
+      client.release();
+    }
+  }
+
+  async listComments(scope: { kind: string; taskId?: string; sectionId?: string; boardProjectId?: string; dmThreadId?: string }, opts?: { limit?: number; before?: number }): Promise<any[]> {
+    const scopeKey = scope.kind + ':' + (scope.taskId || scope.sectionId || scope.boardProjectId || scope.dmThreadId || '');
+    const limit = opts?.limit || 50;
+    const before = opts?.before || Date.now() + 1; // default: everything up to now
+    const pool = await this.getPool();
+    const client = await pool.connect();
+    try {
+      const result = await client.query(
+        `SELECT * FROM org_studio_comments WHERE scope_key = $1 AND created_at < $2 ORDER BY created_at DESC LIMIT $3`,
+        [scopeKey, before, limit]
+      );
+      // Reverse to ASC for rendering
+      return result.rows.reverse().map((row: any) => ({
+        id: row.id,
+        author: row.author,
+        content: row.content,
+        createdAt: typeof row.created_at === 'string' ? parseInt(row.created_at, 10) : row.created_at,
+        type: row.type || undefined,
+        model: row.model || undefined,
+        mentions: row.mentions || undefined,
+        scope: {
+          kind: row.scope_kind,
+          taskId: row.task_id || undefined,
+          sectionId: row.section_id || undefined,
+          boardProjectId: row.board_project_id || undefined,
+          dmThreadId: row.dm_thread_id || undefined,
+        },
+      }));
+    } catch (e: any) {
+      if (e.code === '42P01') return []; // table not yet created
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * List distinct DM threads with last-message metadata.
+   * Uses DISTINCT ON (dm_thread_id) to get one row per thread, ordered by created_at DESC.
+   */
+  async listDmThreads(forAgent?: string): Promise<{ threadId: string; participantIds: string[]; lastCommentAt: number; lastCommentPreview: string; lastCommentAuthor?: string }[]> {
+    const pool = await this.getPool();
+    const client = await pool.connect();
+    try {
+      const result = await client.query(
+        `SELECT DISTINCT ON (dm_thread_id)
+           dm_thread_id, author, content, created_at
+         FROM org_studio_comments
+         WHERE scope_kind = 'dm' AND dm_thread_id IS NOT NULL
+         ORDER BY dm_thread_id, created_at DESC`
+      );
+
+      // Sort threads by last message timestamp DESC
+      const rows = result.rows.sort((a: any, b: any) => {
+        const aTs = typeof a.created_at === 'string' ? parseInt(a.created_at, 10) : a.created_at;
+        const bTs = typeof b.created_at === 'string' ? parseInt(b.created_at, 10) : b.created_at;
+        return bTs - aTs;
+      });
+
+      return rows.map((row: any) => {
+        const threadId = row.dm_thread_id;
+        // Extract participant IDs from thread ID: "dm::<id1>::<id2>"
+        const parts = threadId.split('::');
+        const participantIds = parts.length === 3 ? [parts[1], parts[2]] : [];
+        const createdAt = typeof row.created_at === 'string' ? parseInt(row.created_at, 10) : row.created_at;
+        const preview = (row.content || '').slice(0, 100);
+        return {
+          threadId,
+          participantIds,
+          lastCommentAt: createdAt,
+          lastCommentPreview: preview,
+          lastCommentAuthor: row.author || undefined,
+        };
+      });
+    } catch (e: any) {
+      if (e.code === '42P01') return []; // table not yet created
+      throw e;
     } finally {
       client.release();
     }
@@ -1033,7 +1206,28 @@ export class PostgresStoreProvider implements StoreProvider {
       if (result.rows.length === 0) throw new Error(`Project not found: ${projectId}`);
       const current = this.reconstructProject(result.rows[0]);
       const sections = current.sections || [];
-      if (sections.length <= 1) throw new Error('Cannot delete the last section');
+      const section = sections.find((s: any) => s.id === sectionId);
+      if (!section) throw new Error(`Section not found: ${sectionId}`);
+      // Count non-archived sections
+      const activeCount = sections.filter((s: any) => !s.archivedAt).length;
+      if (activeCount <= 1 && !section.archivedAt) throw new Error('Cannot delete the last section');
+      // Soft-delete: set archivedAt instead of removing
+      section.archivedAt = Date.now();
+      section.archivedBy = 'user';
+      await this.updateProject(projectId, { sections: current.sections });
+    } finally {
+      client.release();
+    }
+  }
+
+  async purgeSection(projectId: string, sectionId: string): Promise<void> {
+    const pool = await this.getPool();
+    const client = await pool.connect();
+    try {
+      const result = await client.query('SELECT * FROM org_studio_projects WHERE id = $1', [projectId]);
+      if (result.rows.length === 0) throw new Error(`Project not found: ${projectId}`);
+      const current = this.reconstructProject(result.rows[0]);
+      const sections = current.sections || [];
       current.sections = sections.filter((s: any) => s.id !== sectionId);
       await this.updateProject(projectId, { sections: current.sections });
     } finally {

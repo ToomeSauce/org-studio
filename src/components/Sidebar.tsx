@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { clsx } from 'clsx';
 import {
   LayoutDashboard, FolderKanban, Layers, Settings, ChevronLeft, ChevronRight, Atom,
-  LogOut, X, Menu, Lock, ChevronDown, Users, BarChart3, Activity,
+  LogOut, X, Menu, Lock, ChevronDown, Users, BarChart3, Activity, MessageCircle,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useGateway } from '@/lib/hooks';
@@ -19,6 +19,7 @@ const mainNav = [
   { name: 'Projects', href: '/projects', icon: FolderKanban, emoji: '📋' },
   { name: 'Context', href: '/context', icon: Layers, emoji: '📊' },
   { name: 'Team', href: '/team', icon: Users, emoji: '👥' },
+  { name: 'Messages', href: '/dms', icon: MessageCircle, emoji: '💬' },
   { name: 'Performance', href: '/performance', icon: BarChart3, emoji: '📊' },
 ];
 

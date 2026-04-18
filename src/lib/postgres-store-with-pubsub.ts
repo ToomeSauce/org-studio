@@ -82,12 +82,30 @@ export class PostgresStoreProviderWithPubSub implements StoreProvider {
     return result;
   }
 
-  async addComment(taskId: string, comment: any): Promise<any> {
-    const result = await this.baseProvider.addComment(taskId, comment);
-    if (this.pubsub) {
-      await this.pubsub.notifyChange('tasks', 'update', taskId, { commentAdded: comment.id });
+  async addComment(taskIdOrScope: string | { kind: string; taskId?: string; sectionId?: string; boardProjectId?: string; dmThreadId?: string }, comment: any): Promise<any> {
+    const result = await this.baseProvider.addComment(taskIdOrScope, comment);
+    // Determine taskId for pubsub notification
+    const scope = typeof taskIdOrScope === 'string'
+      ? { kind: 'task', taskId: taskIdOrScope }
+      : taskIdOrScope;
+    if (this.pubsub && scope.kind === 'task' && scope.taskId) {
+      await this.pubsub.notifyChange('tasks', 'update', scope.taskId, { commentAdded: comment.id || result.id });
     }
     return result;
+  }
+
+  async listComments(scope: { kind: string; taskId?: string; sectionId?: string; boardProjectId?: string; dmThreadId?: string }): Promise<any[]> {
+    if (typeof (this.baseProvider as any).listComments === 'function') {
+      return (this.baseProvider as any).listComments(scope);
+    }
+    return [];
+  }
+
+  async listDmThreads(forAgent?: string): Promise<any[]> {
+    if (typeof (this.baseProvider as any).listDmThreads === 'function') {
+      return (this.baseProvider as any).listDmThreads(forAgent);
+    }
+    return [];
   }
 
   async updateSettings(updates: Partial<Record<string, any>>): Promise<any> {
@@ -123,6 +141,13 @@ export class PostgresStoreProviderWithPubSub implements StoreProvider {
     await this.baseProvider.deleteSection(projectId, sectionId);
     if (this.pubsub) {
       await this.pubsub.notifyChange('projects', 'update', projectId, { sectionDeleted: sectionId });
+    }
+  }
+
+  async purgeSection(projectId: string, sectionId: string): Promise<void> {
+    await this.baseProvider.purgeSection(projectId, sectionId);
+    if (this.pubsub) {
+      await this.pubsub.notifyChange('projects', 'update', projectId, { sectionPurged: sectionId });
     }
   }
 

@@ -7,6 +7,8 @@ export interface Section {
   owner: string;       // assignee name (free text, matches teammate name)
   outcomes: string;    // free text
   contract: string;    // free text describing what this section owes to / expects from other sections
+  archivedAt?: number;   // Soft-delete timestamp — section is hidden but chat history preserved
+  archivedBy?: string;   // Who archived this section
 }
 
 export interface Project {
@@ -67,7 +69,15 @@ export interface Project {
   migratedTo?: { projectId: string; sectionId: string };
 }
 
-export interface TaskComment {
+export interface CommentScope {
+  kind: 'task' | 'section' | 'board' | 'dm';
+  taskId?: string;
+  sectionId?: string;
+  boardProjectId?: string;
+  dmThreadId?: string;
+}
+
+export interface Comment {
   id: string;
   author: string;
   content: string;
@@ -75,7 +85,11 @@ export interface TaskComment {
   type?: 'comment' | 'system'; // system = auto-generated (reopened, reassigned, etc.)
   model?: string;
   mentions?: string[]; // @agent mentions for notification
+  scope?: CommentScope;
 }
+
+/** @deprecated Use Comment instead */
+export type TaskComment = Comment;
 
 export interface Task {
   id: string;

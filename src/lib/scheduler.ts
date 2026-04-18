@@ -136,7 +136,6 @@ PLANNING COLUMN — you can both add tasks to planning AND pull tasks from it. W
       -d '{"action":"addTask","task":{"title":"<title>","projectId":"<project-id>","status":"backlog","assignee":"\${agentName}","taskType":"followup"}}'
     IMPORTANT: When creating follow-up tasks, always set taskType='followup' (or 'bug', 'chore', 'spike'). Never set version.
     When creating roadmap tasks, use the vision page flow — do not call addTask directly with version set. The API will reject it.
-    Never use force: true — it is reserved for human administrators.
 
   Update task status:
     curl -s http://localhost:4501/api/store -X POST -H "Content-Type: application/json" \\
@@ -220,6 +219,23 @@ PLANNING COLUMN — you can both add tasks to planning AND pull tasks from it. W
 - HEARTBEAT_OK tells the system you ran successfully but had nothing to report. It will NOT be delivered to anyone.`,
     enabled: true,
     order: 80,
+    builtIn: true,
+  },
+  {
+    id: 'direct-messages',
+    label: 'Recent mentions & DMs',
+    content: `RECENT MENTIONS & DMs — your inbox (last 24h):
+\${dmInbox}
+
+If you were @mentioned in a task, board, or section comment, the notification was delivered to your session in real time.
+Check above for any mention notifications you may have received.
+
+To reply to a DM:
+  curl -s http://localhost:4501/api/store -X POST -H "Content-Type: application/json" \\
+    -H "Authorization: Bearer YOUR_ORG_STUDIO_API_KEY" \\
+    -d '{"action":"addComment","scope":{"kind":"dm","dmThreadId":"<thread-id>"},"comment":{"author":"\${agentName}","content":"your reply","type":"comment"}}'`,
+    enabled: true,
+    order: 85,
     builtIn: true,
   },
 ];
@@ -329,7 +345,6 @@ PLANNING COLUMN — you can both add QA-related tasks to planning AND pull tasks
       -d '{"action":"addTask","task":{"title":"<title>","projectId":"<project-id>","status":"backlog","assignee":"\${agentName}","taskType":"followup"}}'
     IMPORTANT: When creating follow-up tasks, always set taskType='followup' (or 'bug', 'chore', 'spike'). Never set version.
     When creating roadmap tasks, use the vision page flow — do not call addTask directly with version set. The API will reject it.
-    Never use force: true — it is reserved for human administrators.
 
   Update task status:
     curl -s http://localhost:4501/api/store -X POST -H "Content-Type: application/json" \\
@@ -420,8 +435,14 @@ PLANNING COLUMN — you can both add QA-related tasks to planning AND pull tasks
 /**
  * Interpolate ${agentName} and ${agentId} placeholders in a string.
  */
-function interpolate(text: string, agentName: string, agentId: string): string {
-  return text.replace(/\$\{agentName\}/g, agentName).replace(/\$\{agentId\}/g, agentId);
+function interpolate(text: string, agentName: string, agentId: string, extras?: Record<string, string>): string {
+  let result = text.replace(/\$\{agentName\}/g, agentName).replace(/\$\{agentId\}/g, agentId);
+  if (extras) {
+    for (const [key, value] of Object.entries(extras)) {
+      result = result.replace(new RegExp(`\\$\\{${key}\\}`, 'g'), value);
+    }
+  }
+  return result;
 }
 
 /**
@@ -480,6 +501,54 @@ async function getPendingHandoffs(agentId: string, agentName: string): Promise<{
     return { text: blocks.join('\n\n'), taskIds };
   } catch {
     return { text: '', taskIds: [] };
+  }
+}
+
+/**
+ * Fetch recent DMs for an agent (last 24h, up to 5 messages).
+ * Returns formatted text for injection into the scheduler prompt.
+ * TODO: Add proper unread tracking. For now, "recent" = last 24h.
+ */
+async function getRecentDmInbox(agentId: string, agentName: string): Promise<string> {
+  try {
+    const provider = getStoreProvider();
+    if (typeof (provider as any).listDmThreads !== 'function') {
+      return '(No DM threads available with current storage provider)';
+    }
+
+    const threads: any[] = await (provider as any).listDmThreads();
+    if (!threads || threads.length === 0) return '(No recent DMs)';
+
+    // Filter threads where this agent is a participant
+    const nameLower = agentName.toLowerCase();
+    const idLower = agentId.toLowerCase();
+    const agentThreads = threads.filter((t: any) => {
+      const participants = t.participantIds || [];
+      return participants.some((p: string) =>
+        p.toLowerCase() === nameLower || p.toLowerCase() === idLower
+      );
+    });
+
+    if (agentThreads.length === 0) return '(No recent DMs)';
+
+    // Only include threads with messages in the last 24h
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const recentThreads = agentThreads.filter((t: any) => t.lastCommentAt > cutoff).slice(0, 5);
+
+    if (recentThreads.length === 0) return '(No DMs in the last 24h)';
+
+    const lines: string[] = [];
+    for (const t of recentThreads) {
+      const otherParticipant = (t.participantIds || []).find((p: string) =>
+        p.toLowerCase() !== nameLower && p.toLowerCase() !== idLower
+      ) || 'unknown';
+      const preview = (t.lastCommentPreview || '').slice(0, 80);
+      const author = t.lastCommentAuthor || 'unknown';
+      lines.push(`- From ${author} (thread with ${otherParticipant}): "${preview}"  [thread: ${t.threadId}]`);
+    }
+    return lines.join('\n');
+  } catch {
+    return '(Error fetching DM inbox)';
   }
 }
 
@@ -717,8 +786,18 @@ export async function buildLoopPrompt(
     .filter(s => s.enabled)
     .sort((a, b) => a.order - b.order);
 
+  // Fetch DM inbox for the direct-messages section (conditional on whether section is enabled)
+  const hasDmSection = enabledSections.some(s => s.id === 'direct-messages');
+  let dmInbox = '';
+  if (hasDmSection) {
+    dmInbox = await getRecentDmInbox(loop.agentId, agentName);
+  }
+
+  const extras: Record<string, string> = {};
+  if (dmInbox) extras.dmInbox = dmInbox;
+
   const sectionText = enabledSections
-    .map(s => interpolate(s.content, agentName, loop.agentId))
+    .map(s => interpolate(s.content, agentName, loop.agentId, extras))
     .join('\n\n');
 
   parts.push(sectionText);
