@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { RefreshCw, MessageCircle, Sun, Moon, Menu, User, Settings, LogOut, ChevronDown } from 'lucide-react';
+import { RefreshCw, MessageCircle, Sun, Moon, Menu, User, Settings, LogOut, ChevronDown, CloudOff } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useGateway } from '@/lib/hooks';
 import { useWSConnected, useHttpAvailable } from '@/lib/ws';
@@ -10,6 +10,8 @@ import { useTheme } from '@/components/ThemeProvider';
 import { PingPanel } from '@/components/PingPanel';
 import { SettingsModal } from '@/components/SettingsModal';
 import { useMobileMenu } from '@/lib/mobile-menu-context';
+import { useOfflineQueueCount } from '@/lib/useOfflineQueue';
+import { getOfflineQueue } from '@/lib/offline-queue';
 
 export function TopBar() {
   const router = useRouter();
@@ -22,6 +24,7 @@ export function TopBar() {
   const [showSettings, setShowSettings] = useState(false);
   const { theme, toggle: toggleTheme } = useTheme();
   const { mobileOpen, setMobileOpen } = useMobileMenu();
+  const offlineQueueCount = useOfflineQueueCount();
   const userMenuRef = useRef<HTMLDivElement>(null);
 
   // Close user menu on outside click
@@ -32,12 +35,21 @@ export function TopBar() {
         setShowUserMenu(false);
       }
     };
+    const keyHandler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowUserMenu(false);
+    };
     document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+    document.addEventListener('keydown', keyHandler);
+    return () => {
+      document.removeEventListener('mousedown', handler);
+      document.removeEventListener('keydown', keyHandler);
+    };
   }, [showUserMenu]);
 
   const handleLogout = async () => {
     setShowUserMenu(false);
+    // Clear offline queue on logout
+    try { getOfflineQueue().clear(); } catch {}
     try {
       await fetch('/api/auth/logout', { method: 'POST' });
       router.push('/login');
@@ -64,8 +76,9 @@ export function TopBar() {
         {/* Mobile Hamburger Button */}
         <button
           onClick={() => setMobileOpen(!mobileOpen)}
-          className="md:hidden p-2 rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors"
-          title="Toggle sidebar"
+          aria-label="Toggle sidebar"
+          aria-expanded={mobileOpen}
+          className="md:hidden p-2 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]"
         >
           <Menu size={18} />
         </button>
@@ -75,10 +88,12 @@ export function TopBar() {
         <div className="flex items-center gap-2 shrink-0">
           <button
             onClick={() => setShowChat(true)}
+            aria-label="Open ping chat"
             className={clsx(
-              'flex items-center gap-2 px-3 py-1.5 text-[var(--text-xs)] font-semibold rounded-[var(--radius-md)] transition-all',
+              'flex items-center gap-2 px-3 py-1.5 min-h-[44px] text-[var(--text-xs)] font-semibold rounded-[var(--radius-md)] transition-all',
               'bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)] text-white',
-              'shadow-[0_1px_2px_rgba(0,0,0,0.3)] hover:shadow-[var(--shadow-md),0_0_20px_var(--accent-glow)]'
+              'shadow-[0_1px_2px_rgba(0,0,0,0.3)] hover:shadow-[var(--shadow-md),0_0_20px_var(--accent-glow)]',
+              'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]'
             )}
           >
             <MessageCircle size={13} />
@@ -86,15 +101,15 @@ export function TopBar() {
           </button>
           <button
             onClick={toggleTheme}
-            className="p-2 rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors"
-            title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+            aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+            className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]"
           >
             {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
           </button>
           <button
             onClick={handleRefresh}
-            className="p-2 rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors"
-            title="Refresh"
+            aria-label="Refresh page"
+            className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]"
           >
             <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} />
           </button>
@@ -109,6 +124,19 @@ export function TopBar() {
             <span className="text-[var(--text-xs)] text-[var(--text-muted)]">{statusLabel}</span>
           </div>
 
+          {/* Offline queue indicator */}
+          {offlineQueueCount > 0 && (
+            <div
+              className="flex items-center gap-1.5 ml-1 px-2 py-1 rounded-[var(--radius-md)] bg-amber-500/10 border border-amber-500/20"
+              title={`${offlineQueueCount} message${offlineQueueCount === 1 ? '' : 's'} queued`}
+            >
+              <CloudOff size={12} className="text-amber-500" />
+              <span className="text-[var(--text-xs)] font-medium text-amber-500">
+                {offlineQueueCount}
+              </span>
+            </div>
+          )}
+
           {/* User Menu */}
           <div ref={userMenuRef} className="relative ml-1">
             <button
@@ -117,7 +145,7 @@ export function TopBar() {
               aria-expanded={showUserMenu}
               aria-haspopup="true"
               className={clsx(
-                'flex items-center gap-1.5 p-1.5 rounded-[var(--radius-md)] transition-colors',
+                'flex items-center gap-1.5 p-1.5 min-h-[44px] min-w-[44px] rounded-[var(--radius-md)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]',
                 showUserMenu
                   ? 'bg-[var(--bg-hover)] text-[var(--text-primary)]'
                   : 'hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)]'
@@ -146,7 +174,7 @@ export function TopBar() {
                       setShowSettings(true);
                     }}
                     role="menuitem"
-                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-[var(--radius-md)] text-[var(--text-sm)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors text-left"
+                    className="w-full flex items-center gap-2.5 px-3 py-2 min-h-[44px] rounded-[var(--radius-md)] text-[var(--text-sm)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--accent-primary)]"
                   >
                     <Settings size={14} className="text-[var(--text-secondary)]" />
                     Settings
@@ -154,7 +182,7 @@ export function TopBar() {
                   <button
                     onClick={handleLogout}
                     role="menuitem"
-                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-[var(--radius-md)] text-[var(--text-sm)] text-red-500 hover:bg-red-500/10 transition-colors text-left"
+                    className="w-full flex items-center gap-2.5 px-3 py-2 min-h-[44px] rounded-[var(--radius-md)] text-[var(--text-sm)] text-red-500 hover:bg-red-500/10 transition-colors text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--accent-primary)]"
                   >
                     <LogOut size={14} />
                     Logout

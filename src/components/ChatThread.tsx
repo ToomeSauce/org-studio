@@ -1,9 +1,11 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Send, Loader, ChevronUp } from 'lucide-react';
+import { Send, Loader, ChevronUp, RefreshCw, X } from 'lucide-react';
 import { extractMentions } from '@/lib/store';
 import type { CommentScope } from '@/lib/store';
+import { useOfflineQueue } from '@/lib/useOfflineQueue';
+import type { QueuedMessage } from '@/lib/offline-queue';
 
 interface Comment {
   id: string;
@@ -71,7 +73,6 @@ export function ChatThread({ scope, project, agents, nameColors, currentAuthor, 
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [hasOlder, setHasOlder] = useState(false);
   const [commentText, setCommentText] = useState('');
-  const [sending, setSending] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const commentInputRef = useRef<HTMLTextAreaElement>(null);
   const PAGE_SIZE = 50;
@@ -131,42 +132,37 @@ export function ChatThread({ scope, project, agents, nameColors, currentAuthor, 
     setLoadingOlder(false);
   }, [comments, loadingOlder, fetchComments]);
 
-  const handleSend = useCallback(async () => {
-    if (!commentText.trim() || sending || readOnly) return;
-    setSending(true);
-    try {
-      const mentions = extractMentions(commentText);
-      const res = await fetch('/api/store', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'addComment',
-          scope,
-          comment: {
-            author: currentAuthor,
-            content: commentText.trim(),
-            type: 'comment',
-            mentions: mentions.length > 0 ? mentions : undefined,
-          },
-        }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.comment) {
-          setComments(prev => [...prev, data.comment]);
-          setCommentText('');
-          // Scroll to bottom after sending
-          setTimeout(() => {
-            if (scrollRef.current) {
-              scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-            }
-          }, 50);
-        }
-      }
-    } finally {
-      setSending(false);
+  // Offline queue integration
+  const { items: queuedItems, enqueue, retryOne, remove } = useOfflineQueue();
+  // Filter queued items to ones matching this scope
+  const scopeQueueItems = queuedItems.filter(qi => {
+    if (qi.scope.kind !== scope.kind) return false;
+    switch (scope.kind) {
+      case 'board': return qi.scope.boardProjectId === scope.boardProjectId;
+      case 'section': return qi.scope.sectionId === scope.sectionId && qi.scope.boardProjectId === scope.boardProjectId;
+      case 'task': return qi.scope.taskId === scope.taskId;
+      case 'dm': return qi.scope.dmThreadId === scope.dmThreadId;
+      default: return false;
     }
-  }, [commentText, sending, readOnly, scope, currentAuthor]); // eslint-disable-line react-hooks/exhaustive-deps
+  });
+
+  const handleSend = useCallback(() => {
+    if (!commentText.trim() || readOnly) return;
+    const mentions = extractMentions(commentText);
+    enqueue(scope, {
+      author: currentAuthor,
+      content: commentText.trim(),
+      type: 'comment',
+      mentions: mentions.length > 0 ? mentions : undefined,
+    });
+    setCommentText('');
+    // Scroll to bottom after enqueue
+    setTimeout(() => {
+      if (scrollRef.current) {
+        scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      }
+    }, 50);
+  }, [commentText, readOnly, scope, currentAuthor, enqueue]);
 
   if (loading) {
     return (
@@ -239,35 +235,142 @@ export function ChatThread({ scope, project, agents, nameColors, currentAuthor, 
             </p>
           </div>
         ))}
+
+        {/* Queued / in-flight messages */}
+        {scopeQueueItems.map(qi => (
+          <QueuedMessageBubble
+            key={qi.id}
+            item={qi}
+            onRetry={() => retryOne(qi.id)}
+            onDismiss={() => remove(qi.id)}
+          />
+        ))}
       </div>
 
-      {/* Comment input — hidden when readOnly */}
+      {/* Composer section — hidden when readOnly */}
       {!readOnly && (
-        <div className="flex gap-2 mt-3">
-          <textarea
-            ref={commentInputRef}
-            value={commentText}
-            onChange={e => setCommentText(e.target.value)}
-            placeholder="Add a message... (use @name to mention agents)"
-            rows={2}
-            className="flex-1 text-[var(--text-sm)] bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-md)] px-3 py-2 text-[var(--text-secondary)] placeholder-[var(--text-muted)] outline-none resize-none focus:border-[var(--accent-primary)] transition-colors"
-            onKeyDown={e => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-          />
-          <button
-            onClick={handleSend}
-            disabled={!commentText.trim() || sending}
-            className="self-end px-3 py-2 bg-[var(--accent-primary)] text-white rounded-[var(--radius-md)] hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
-            title="Send message (Cmd+Enter)"
-          >
-            {sending ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Send size={14} />}
-          </button>
+        <div className="mt-3">
+          {/* Queue count subtitle */}
+          {scopeQueueItems.length > 0 && (
+            <div className="mb-1.5 px-1">
+              <span className="text-[11px] font-medium text-[var(--text-muted)]">
+                {scopeQueueItems.length === 1
+                  ? '1 message queued'
+                  : `${scopeQueueItems.length} messages queued`}
+              </span>
+            </div>
+          )}
+          <div className="flex gap-2">
+            <textarea
+              ref={commentInputRef}
+              value={commentText}
+              onChange={e => setCommentText(e.target.value)}
+              placeholder="Add a message... (use @name to mention agents)"
+              rows={2}
+              className="flex-1 text-[var(--text-sm)] bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-md)] px-3 py-2 text-[var(--text-secondary)] placeholder-[var(--text-muted)] outline-none resize-none focus:border-[var(--accent-primary)] transition-colors"
+              onKeyDown={e => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+            />
+            <button
+              onClick={handleSend}
+              disabled={!commentText.trim()}
+              className="self-end px-3 py-2 bg-[var(--accent-primary)] text-white rounded-[var(--radius-md)] hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
+              title="Send message (Cmd+Enter)"
+            >
+              <Send size={14} />
+            </button>
+          </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// QueuedMessageBubble — visual indicator for pending / failed / retrying msgs
+// ---------------------------------------------------------------------------
+
+function QueuedMessageBubble({
+  item,
+  onRetry,
+  onDismiss,
+}: {
+  item: QueuedMessage;
+  onRetry: () => void;
+  onDismiss: () => void;
+}) {
+  const { status, errorMessage, comment, retryAttempts } = item;
+
+  // Border + background per status
+  const wrapperClass =
+    status === 'pending'
+      ? 'bg-[var(--bg-secondary)] border border-[var(--border-default)] opacity-60'
+      : status === 'retrying'
+        ? 'bg-[var(--bg-secondary)] border border-[var(--border-default)] opacity-50'
+        : status === 'sent'
+          ? 'bg-[var(--success)]/5 border border-[var(--success)]/30'
+          : 'bg-red-500/5 border border-red-500/30'; // failed
+
+  return (
+    <div className={`rounded-[var(--radius-md)] px-3 py-2 ${wrapperClass}`}>
+      {/* Message content */}
+      <div className="flex items-center gap-2 mb-1">
+        <span className="text-[11px] font-semibold text-[var(--text-secondary)]">
+          {comment.author}
+        </span>
+      </div>
+      <p className="text-[var(--text-sm)] text-[var(--text-secondary)] leading-relaxed whitespace-pre-wrap">
+        {renderCommentWithMentions(comment.content)}
+      </p>
+
+      {/* Status row */}
+      <div className="flex items-center gap-2 mt-1.5">
+        {status === 'pending' && (
+          <span className="text-[10px] text-[var(--text-muted)] flex items-center gap-1">
+            <Loader className="w-3 h-3 animate-spin" />
+            ⏳ Sending…
+          </span>
+        )}
+
+        {status === 'retrying' && (
+          <span className="text-[10px] text-[var(--text-muted)] flex items-center gap-1">
+            <RefreshCw className="w-3 h-3 animate-spin" />
+            🔄 Retrying… (attempt {retryAttempts})
+          </span>
+        )}
+
+        {status === 'sent' && (
+          <span className="text-[10px] text-[var(--success)] flex items-center gap-1">
+            ✓ Sent
+          </span>
+        )}
+
+        {status === 'failed' && (
+          <>
+            <span className="text-[10px] text-red-500 flex-1">
+              {errorMessage || '❌ Send failed'}
+            </span>
+            <button
+              onClick={onRetry}
+              aria-label={`Retry sending message: ${comment.content.slice(0, 40)}`}
+              className="text-[10px] font-semibold text-[var(--accent-primary)] hover:underline"
+            >
+              Retry
+            </button>
+            <button
+              onClick={onDismiss}
+              aria-label="Dismiss failed message"
+              className="text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors"
+            >
+              <X size={12} />
+            </button>
+          </>
+        )}
+      </div>
     </div>
   );
 }
