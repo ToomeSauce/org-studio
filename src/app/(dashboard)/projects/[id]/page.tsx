@@ -10,6 +10,7 @@ import { getProjectStatusLabel } from '@/lib/vision-status';
 import { TaskDetailPanel } from '@/components/TaskDetailPanel';
 import { ProjectChat } from '@/components/ProjectChat';
 import { updateTask, addComment as addTaskComment, deleteTask } from '@/lib/store';
+import { isVersionInHorizon, formatVersion } from '@/lib/version-utils';
 import dynamic from 'next/dynamic';
 
 const RoadmapWithApprovalHorizon = dynamic(
@@ -426,7 +427,7 @@ export default function ProjectDetailPage() {
       const nextVersion = roadmapVersions.find((v) => {
         if (v.status === 'shipped') return false;
         if (!approvedThrough) return false; // Nothing approved
-        return parseFloat(v.version) <= parseFloat(approvedThrough);
+        return isVersionInHorizon(v.version, approvedThrough);
       });
       if (!nextVersion) return; // No approved unshipped versions
 
@@ -475,9 +476,8 @@ export default function ProjectDetailPage() {
 
       // 3. Update project — set currentVersion + approvedThrough
       const currentApproved = project.autonomy?.approvedThrough;
-      const approvedNum = currentApproved ? parseFloat(currentApproved) : 0;
-      const launchedNum = parseFloat(nextVersion.version);
-      const newApprovedThrough = launchedNum > approvedNum ? nextVersion.version : currentApproved;
+      const shouldExpandHorizon = !currentApproved || isVersionInHorizon(currentApproved, nextVersion.version);
+      const newApprovedThrough = shouldExpandHorizon ? nextVersion.version : currentApproved;
 
       await fetch('/api/store', {
         method: 'POST',
@@ -557,7 +557,7 @@ export default function ProjectDetailPage() {
               {roadmapVersions.length > 0 && !currentVersion && (() => {
                 const approvedThrough = project.autonomy?.approvedThrough;
                 const hasApprovedUnshipped = approvedThrough && roadmapVersions.some(v =>
-                  v.status !== 'shipped' && parseFloat(v.version) <= parseFloat(approvedThrough)
+                  v.status !== 'shipped' && isVersionInHorizon(v.version, approvedThrough)
                 );
                 if (!hasApprovedUnshipped) {
                   return (
