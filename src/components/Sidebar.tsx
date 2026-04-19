@@ -81,8 +81,9 @@ export function Sidebar() {
         )}
         <button
           onClick={() => collapsed ? setCollapsed(false) : setCollapsed(true)}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           className={clsx(
-            'p-1.5 rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)] transition-colors',
+            'p-1.5 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]',
             collapsed ? 'mx-auto' : 'ml-auto hidden md:flex'
           )}
         >
@@ -92,7 +93,8 @@ export function Sidebar() {
         {isMobile && mobileOpen && (
           <button
             onClick={() => setMobileOpen(false)}
-            className="p-1.5 rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)] ml-auto md:hidden"
+            aria-label="Close sidebar"
+            className="p-1.5 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)] ml-auto md:hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]"
           >
             <X size={18} />
           </button>
@@ -100,7 +102,7 @@ export function Sidebar() {
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 px-2.5 py-3 space-y-0.5 overflow-y-auto">
+      <nav aria-label="Main navigation" className="flex-1 px-2.5 py-3 space-y-0.5 overflow-y-auto">
         {mainNav.map((item) => {
           const isActive = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href));
           
@@ -108,12 +110,14 @@ export function Sidebar() {
             <Link key={item.name} href={item.href}
               className={clsx(
                 'flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] text-[var(--text-sm)] font-medium transition-all duration-100 min-h-[44px] md:min-h-auto',
+                'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]',
                 isActive
                   ? 'bg-[var(--accent-muted)] text-[var(--accent-primary)]'
                   : 'text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]',
                 collapsed && 'justify-center px-0'
               )}
               title={collapsed ? item.name : undefined}
+              aria-current={isActive ? 'page' : undefined}
             >
               <item.icon size={17} className={clsx('shrink-0', isActive ? 'opacity-100' : 'opacity-70')} />
               {!collapsed && <span className="truncate">{item.name}</span>}
@@ -130,12 +134,14 @@ export function Sidebar() {
             <Link key={item.name} href={item.href}
               className={clsx(
                 'flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] text-[var(--text-sm)] font-medium transition-all duration-100 min-h-[44px] md:min-h-auto',
+                'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]',
                 isActive
                   ? 'bg-[var(--accent-muted)] text-[var(--accent-primary)]'
                   : 'text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]',
                 collapsed && 'justify-center px-0'
               )}
               title={collapsed ? item.name : undefined}
+              aria-current={isActive ? 'page' : undefined}
             >
               <item.icon size={17} className="shrink-0 opacity-70" />
               {!collapsed && <span className="truncate">{item.name}</span>}
@@ -147,10 +153,12 @@ export function Sidebar() {
         <button
           onClick={handleLogout}
           disabled={loggingOut}
+          aria-label={loggingOut ? 'Logging out' : 'Logout'}
           className={clsx(
             'w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] text-[var(--text-sm)] font-medium transition-all duration-100 min-h-[44px] md:min-h-auto',
             'text-red-500 hover:bg-red-50 dark:hover:bg-red-900 dark:hover:bg-opacity-20 hover:text-red-600',
             'disabled:opacity-50 disabled:cursor-not-allowed',
+            'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]',
             collapsed && 'justify-center px-0'
           )}
           title={collapsed ? 'Logout' : undefined}

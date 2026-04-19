@@ -101,7 +101,8 @@ function Toggle({
       aria-label={label}
       onClick={() => onChange(!enabled)}
       className={clsx(
-        'relative shrink-0 w-10 h-6 rounded-full transition-colors border-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]',
+        'relative shrink-0 w-11 h-7 rounded-full transition-colors border-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]',
+        'min-h-[44px] min-w-[44px] flex items-center',
         enabled
           ? 'bg-[var(--success)] border-[var(--success)]'
           : 'bg-[var(--bg-tertiary)] border-[var(--border-default)]',
@@ -109,8 +110,8 @@ function Toggle({
     >
       <span
         className={clsx(
-          'block w-4 h-4 rounded-full bg-white transition-transform',
-          enabled ? 'translate-x-4' : 'translate-x-0',
+          'block w-5 h-5 rounded-full bg-white transition-transform',
+          enabled ? 'translate-x-4' : 'translate-x-0.5',
         )}
       />
     </button>
@@ -141,7 +142,8 @@ function AccordionSection({
       <button
         onClick={() => setOpen(!open)}
         aria-expanded={open}
-        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-[var(--bg-hover)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--accent-primary)]"
+        aria-controls={`accordion-${title.replace(/\s+/g, '-').toLowerCase()}`}
+        className="w-full flex items-center gap-3 px-4 py-3 min-h-[44px] text-left hover:bg-[var(--bg-hover)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--accent-primary)]"
       >
         <Icon size={16} className="text-[var(--text-secondary)] shrink-0" />
         <span className="flex-1 text-[var(--text-sm)] font-semibold text-[var(--text-primary)]">
@@ -366,14 +368,14 @@ function LogoutSection({ onClose }: { onClose: () => void }) {
           <button
             onClick={handleLogout}
             disabled={loggingOut}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-md)] text-[var(--text-xs)] font-medium bg-red-600 text-white hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center gap-1.5 px-3 py-1.5 min-h-[44px] rounded-[var(--radius-md)] text-[var(--text-xs)] font-medium bg-red-600 text-white hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]"
           >
             <LogOut size={12} />
             {loggingOut ? 'Logging out…' : 'Confirm Logout'}
           </button>
           <button
             onClick={() => setConfirming(false)}
-            className="px-3 py-1.5 rounded-[var(--radius-md)] text-[var(--text-xs)] font-medium bg-[var(--bg-tertiary)] border border-[var(--border-default)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-hover)] transition-colors"
+            className="px-3 py-1.5 min-h-[44px] rounded-[var(--radius-md)] text-[var(--text-xs)] font-medium bg-[var(--bg-tertiary)] border border-[var(--border-default)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-hover)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]"
           >
             Cancel
           </button>
@@ -385,7 +387,7 @@ function LogoutSection({ onClose }: { onClose: () => void }) {
   return (
     <button
       onClick={() => setConfirming(true)}
-      className="mt-2 w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-[var(--radius-md)] text-[var(--text-sm)] font-medium text-red-500 border border-red-500/20 hover:bg-red-500/10 transition-colors"
+      className="mt-2 w-full flex items-center justify-center gap-2 px-4 py-2.5 min-h-[44px] rounded-[var(--radius-md)] text-[var(--text-sm)] font-medium text-red-500 border border-red-500/20 hover:bg-red-500/10 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]"
     >
       <LogOut size={14} />
       Logout
@@ -498,7 +500,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
         </div>
         <a
           href="/settings"
-          className="flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-[var(--text-xs)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors"
+          className="flex items-center gap-2 px-3 py-2 min-h-[44px] rounded-[var(--radius-md)] text-[var(--text-xs)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]"
           onClick={onClose}
         >
           <Settings size={13} />
@@ -537,7 +539,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
       {/* Advanced link */}
       <a
         href="/settings"
-        className="flex items-center gap-2 px-4 py-3 rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--card)] text-[var(--text-xs)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors shadow-[var(--shadow-sm)]"
+        className="flex items-center gap-2 px-4 py-3 min-h-[44px] rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--card)] text-[var(--text-xs)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors shadow-[var(--shadow-sm)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]"
         onClick={onClose}
       >
         <Settings size={14} className="shrink-0" />
@@ -568,7 +570,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
       {/* Full settings link */}
       <a
         href="/settings"
-        className="flex items-center gap-2 px-4 py-3 rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--card)] text-[var(--text-xs)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors"
+        className="flex items-center gap-2 px-4 py-3 min-h-[44px] rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--card)] text-[var(--text-xs)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]"
         onClick={onClose}
       >
         <Settings size={14} className="shrink-0" />
@@ -612,7 +614,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
           <button
             onClick={onClose}
             aria-label="Close settings"
-            className="p-1.5 rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]"
+            className="p-1.5 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]"
           >
             <X size={18} />
           </button>

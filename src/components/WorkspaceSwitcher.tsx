@@ -47,7 +47,7 @@ export function WorkspaceSwitcher({
       .finally(() => setLoading(false));
   }, []);
 
-  // Close dropdown on outside click
+  // Close dropdown on outside click or Escape
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
@@ -55,8 +55,15 @@ export function WorkspaceSwitcher({
         setOpen(false);
       }
     };
+    const keyHandler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
     document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+    document.addEventListener('keydown', keyHandler);
+    return () => {
+      document.removeEventListener('mousedown', handler);
+      document.removeEventListener('keydown', keyHandler);
+    };
   }, [open]);
 
   const handleSwitch = async (workspaceId: string) => {
@@ -119,11 +126,14 @@ export function WorkspaceSwitcher({
     <div ref={dropdownRef} className="relative">
       <button
         onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        aria-label={`Switch workspace, current: ${data.current.name}`}
         className={clsx(
-          'flex items-center gap-1.5 rounded-[var(--radius-md)] border transition-all',
+          'flex items-center gap-1.5 rounded-[var(--radius-md)] border transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]',
           variant === 'compact'
-            ? 'px-2 py-1 text-[var(--text-xs)] bg-[var(--bg-tertiary)] border-[var(--border-default)] hover:border-[var(--border-strong)]'
-            : 'px-3 py-2.5 text-[var(--text-sm)] bg-[var(--bg-primary)] border-[var(--border-subtle)] hover:border-[var(--border-default)] w-full',
+            ? 'px-2 py-1 min-h-[44px] text-[var(--text-xs)] bg-[var(--bg-tertiary)] border-[var(--border-default)] hover:border-[var(--border-strong)]'
+            : 'px-3 py-2.5 min-h-[44px] text-[var(--text-sm)] bg-[var(--bg-primary)] border-[var(--border-subtle)] hover:border-[var(--border-default)] w-full',
         )}
       >
         <Building2 size={variant === 'compact' ? 12 : 16} className="text-[var(--text-secondary)]" />
@@ -146,7 +156,7 @@ export function WorkspaceSwitcher({
             variant === 'compact' ? 'right-0 w-56' : 'left-0 right-0',
           )}
         >
-          <div className="p-1.5 max-h-64 overflow-y-auto">
+          <div className="p-1.5 max-h-64 overflow-y-auto" role="listbox" aria-label="Available workspaces">
             {data.workspaces.map((ws) => {
               const isCurrent = ws.id === data.current.id;
               return (
@@ -154,8 +164,11 @@ export function WorkspaceSwitcher({
                   key={ws.id}
                   onClick={() => !isCurrent && handleSwitch(ws.id)}
                   disabled={isCurrent || switching}
+                  role="option"
+                  aria-selected={isCurrent}
                   className={clsx(
-                    'w-full flex items-center gap-2.5 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors',
+                    'w-full flex items-center gap-2.5 px-3 py-2 min-h-[44px] rounded-[var(--radius-md)] text-left transition-colors',
+                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--accent-primary)]',
                     isCurrent
                       ? 'bg-[color-mix(in_srgb,var(--accent-primary)_10%,transparent)]'
                       : 'hover:bg-[var(--bg-hover)]',

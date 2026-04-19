@@ -1,0 +1,61 @@
+[2026-04-19T17:41:10.893Z] 
+╔════════════════════════════════════════════════════════════════╗
+[2026-04-19T17:41:10.893Z] ║         SEMVER MIGRATION — API-based Batch Update            ║
+[2026-04-19T17:41:10.893Z] ╚════════════════════════════════════════════════════════════════╝
+
+[2026-04-19T17:41:10.893Z] Dry-run: false
+[2026-04-19T17:41:10.894Z] Backup directory: /home/openclaw_user/org-studio/backups
+
+[2026-04-19T17:41:10.894Z] [1/6] Fetching store data...
+[2026-04-19T17:41:12.554Z] ✅ Loaded 20 projects, 728 tasks
+[2026-04-19T17:41:12.554Z] 
+[2/6] Creating pre-migration backup...
+[2026-04-19T17:41:12.583Z] ✅ Backup saved: /home/openclaw_user/org-studio/backups/pre-semver-2026-04-19T17-41-10-889Z.json
+[2026-04-19T17:41:12.583Z] 
+[3/6] Building migration plan...
+[2026-04-19T17:41:12.584Z] ✅ Migration plan built:
+[2026-04-19T17:41:12.584Z]    Projects with changes: 15
+[2026-04-19T17:41:12.584Z]    Tasks to migrate: 453
+[2026-04-19T17:41:12.584Z]    Orphaned refs cleared: 0
+
+[2026-04-19T17:41:12.584Z] 
+[4/6] Applying migrations...
+[2026-04-19T17:41:13.133Z]    ✅ Voice Service
+[2026-04-19T17:41:13.677Z]    ✅ Agent Operations
+[2026-04-19T17:41:15.678Z]    ✅ Short-Form Learning
+[2026-04-19T17:41:16.365Z]    ✅ Org Studio
+[2026-04-19T17:41:17.176Z]    ✅ Catpilot Platform
+[2026-04-19T17:41:17.873Z]    ✅ Garage
+[2026-04-19T17:41:18.531Z]    ✅ Platform Engine
+[2026-04-19T17:41:19.303Z]    ✅ Studio V2 Refresh
+[2026-04-19T17:41:20.039Z]    ✅ Thrivor
+[2026-04-19T17:41:20.783Z]    ✅ OrgStudio.dev landing page
+[2026-04-19T17:41:21.541Z]    ✅ Alpha Garage End User Validation
+[2026-04-19T17:41:22.298Z]    ✅ GarlicStamp
+[2026-04-19T17:41:23.078Z]    ✅ Blog Posts
+[2026-04-19T17:41:23.895Z]    ✅ Podcast API
+[2026-04-19T17:41:24.943Z]    ✅ Thrivor QA
+[2026-04-19T17:47:28.518Z] 
+   Results: 468 succeeded, 0 failed
+
+[2026-04-19T17:47:28.518Z] 
+[5/6] Verifying migration...
+[2026-04-19T17:47:29.035Z] ✅ Found 46 unique versions
+[2026-04-19T17:47:29.035Z]    Sample sort order: 0.1.0 < 0.2.0 < 0.3.0 < 0.4.0 < 0.5.0 < ...
+
+[2026-04-19T17:47:29.035Z] 
+[6/6] Migration complete
+
+[2026-04-19T17:47:29.035Z] ╔════════ MIGRATION SUMMARY ════════╗
+
+[2026-04-19T17:47:29.035Z] MIGRATION COMPLETED SUCCESSFULLY:
+[2026-04-19T17:47:29.035Z]   Backup: /home/openclaw_user/org-studio/backups/pre-semver-2026-04-19T17-41-10-889Z.json
+[2026-04-19T17:47:29.035Z]   Projects updated: 15
+[2026-04-19T17:47:29.035Z]   Tasks updated: 453
+[2026-04-19T17:47:29.035Z]   Orphaned refs cleared: 0
+[2026-04-19T17:47:29.035Z]   Versions now sortable: 46 unique
+
+[2026-04-19T17:47:29.035Z] Next steps:
+[2026-04-19T17:47:29.036Z]   1. Verify data: curl http://localhost:4501/api/store | jq '.projects[0].versions'
+[2026-04-19T17:47:29.036Z]   2. Commit changes: git add -A && git commit -m "feat: semver migration (0.141→0.14.1, etc)"
+[2026-04-19T17:47:29.036Z]   3. Update codebase to use semver lib
