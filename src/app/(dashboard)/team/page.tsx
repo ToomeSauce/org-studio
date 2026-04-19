@@ -2,10 +2,14 @@
 
 import { Pencil, Check, X, Trash2, Unplug, RefreshCw } from 'lucide-react';
 import { clsx } from 'clsx';
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef, Suspense } from 'react';
 import { useWSData } from '@/lib/ws';
+import dynamic from 'next/dynamic';
 
-import { ForceGraph } from '@/components/ForceGraph';
+const ForceGraph = dynamic(
+  () => import('@/components/ForceGraph').then(mod => mod.ForceGraph),
+  { ssr: false, loading: () => <div className="h-[420px] flex items-center justify-center text-[var(--text-muted)]">Loading graph…</div> }
+);
 import { Teammate, resolveColor } from '@/lib/teammates';
 import { EmojiAvatarPicker, AddTeammateCard } from '@/components/TeammateEditor';
 import { mergeTeammates, hasGateway } from '@/lib/teammate-sync';

@@ -6,9 +6,11 @@ import { useWSData } from '@/lib/ws';
 import { useMemo, useState, useCallback, useRef, useEffect } from 'react';
 import { Rocket, Settings, Pencil, Loader, ChevronDown, ChevronRight, CheckCircle2, Plus, X } from 'lucide-react';
 import { clsx } from 'clsx';
-import ReactMarkdown from 'react-markdown';
+import dynamic from 'next/dynamic';
 import remarkGfm from 'remark-gfm';
 import RoadmapTaskCreator from '@/components/RoadmapTaskCreator';
+
+const ReactMarkdown = dynamic(() => import('react-markdown'), { ssr: false });
 
 // --- Section Parsing Helpers ---
 

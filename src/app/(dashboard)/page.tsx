@@ -3,11 +3,16 @@
 import { useWSData, useWSConnected } from '@/lib/ws';
 import { Teammate, buildAgentMap } from '@/lib/teammates';
 import { getProjectStatusLabel } from '@/lib/vision-status';
-import { OnboardingWizard } from '@/components/OnboardingWizard';
 import { SuggestedFeedbackSection } from '@/components/SuggestedFeedbackSection';
 import { clsx } from 'clsx';
 import { useMemo, useState, useEffect, useCallback } from 'react';
 import { ArrowRight, AlertCircle } from 'lucide-react';
+import dynamic from 'next/dynamic';
+
+const OnboardingWizard = dynamic(
+  () => import('@/components/OnboardingWizard').then(mod => mod.OnboardingWizard),
+  { ssr: false, loading: () => <div className="p-8 text-center text-[var(--text-muted)]">Loading…</div> }
+);
 
 // ─── SECTION 1: Mission Statement ──────────────────────────────────────────
 

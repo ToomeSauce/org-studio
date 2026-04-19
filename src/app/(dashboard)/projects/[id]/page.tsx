@@ -8,10 +8,15 @@ import { ArrowLeft, Loader, Pencil, X, Archive, ChevronRight, Plus } from 'lucid
 import { useWSData } from '@/lib/ws';
 import { getProjectStatusLabel } from '@/lib/vision-status';
 import { TaskDetailPanel } from '@/components/TaskDetailPanel';
-import { RoadmapWithApprovalHorizon } from '@/components/RoadmapWithApprovalHorizon';
 import { ProjectChat } from '@/components/ProjectChat';
 import { updateTask, addComment as addTaskComment, deleteTask } from '@/lib/store';
-import ReactMarkdown from 'react-markdown';
+import dynamic from 'next/dynamic';
+
+const RoadmapWithApprovalHorizon = dynamic(
+  () => import('@/components/RoadmapWithApprovalHorizon').then(mod => mod.RoadmapWithApprovalHorizon),
+  { ssr: false, loading: () => <div className="p-8 text-center text-[var(--text-muted)]">Loading roadmap…</div> }
+);
+const ReactMarkdown = dynamic(() => import('react-markdown'), { ssr: false });
 import remarkGfm from 'remark-gfm';
 
 // Type definitions

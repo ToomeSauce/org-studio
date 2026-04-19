@@ -3,13 +3,30 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useWSData } from '@/lib/ws';
 import { clsx } from 'clsx';
-import TeamHealthSection from '@/components/TeamHealthSection';
-import QualityScorecardSection from '@/components/QualityScorecardSection';
-import CulturalAlignmentSection from '@/components/CulturalAlignmentSection';
-import AgentComparisonSection from '@/components/AgentComparisonSection';
-import WeeklyDigestSection from '@/components/WeeklyDigestSection';
+import dynamic from 'next/dynamic';
 import { CoachingInsight } from '@/lib/coaching-insights';
 import { agentOwnedSections } from '@/lib/section-access';
+
+const TeamHealthSection = dynamic(() => import('@/components/TeamHealthSection'), {
+  ssr: false,
+  loading: () => <div className="h-32 animate-pulse bg-[var(--bg-secondary)] rounded-[var(--radius-md)]" />,
+});
+const QualityScorecardSection = dynamic(() => import('@/components/QualityScorecardSection'), {
+  ssr: false,
+  loading: () => <div className="h-32 animate-pulse bg-[var(--bg-secondary)] rounded-[var(--radius-md)]" />,
+});
+const CulturalAlignmentSection = dynamic(() => import('@/components/CulturalAlignmentSection'), {
+  ssr: false,
+  loading: () => <div className="h-32 animate-pulse bg-[var(--bg-secondary)] rounded-[var(--radius-md)]" />,
+});
+const AgentComparisonSection = dynamic(() => import('@/components/AgentComparisonSection'), {
+  ssr: false,
+  loading: () => <div className="h-32 animate-pulse bg-[var(--bg-secondary)] rounded-[var(--radius-md)]" />,
+});
+const WeeklyDigestSection = dynamic(() => import('@/components/WeeklyDigestSection'), {
+  ssr: false,
+  loading: () => <div className="h-32 animate-pulse bg-[var(--bg-secondary)] rounded-[var(--radius-md)]" />,
+});
 
 interface Teammate {
   agentId?: string;
