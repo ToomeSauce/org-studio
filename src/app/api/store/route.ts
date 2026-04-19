@@ -6,6 +6,7 @@ import { parseMentions } from '@/lib/mention-notifier';
 import { routeCommentNotifications } from '@/lib/notification-router';
 import { syncRoadmapItemForTask } from '@/lib/roadmap-sync';
 import { checkArchivedProject } from '@/lib/archived-project-compat';
+import { isTelegramCommsEnabled } from '@/lib/telegram-guard';
 import {
   resolveWorkspaceContext,
   filterByWorkspace,
@@ -229,6 +230,7 @@ function triggerAgentLoop(assignee: string, store: StoreData) {
 /** Send task status notification via Telegram. Best-effort, non-blocking. */
 function notifyTaskStatusChange(task: any, newStatus: string, store: StoreData) {
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
+  if (!isTelegramCommsEnabled()) return; // v0.15: comms relay disabled by default
   
   // Notify on all significant status transitions (user needs to see these)
   // All statuses go to the activity feed, but only high-signal ones go to Telegram
@@ -1024,7 +1026,7 @@ export async function POST(req: NextRequest) {
           const isAgentComment = teammates.some((t: any) => 
             !t.isHuman && (t.name?.toLowerCase() === commentAuthor || t.agentId?.toLowerCase() === commentAuthor)
           );
-          if (isAgentComment && TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID) {
+          if (isAgentComment && TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID && isTelegramCommsEnabled()) {
             const projectName = store.projects?.find((p: any) => p.id === task.projectId)?.name || '';
             const truncContent = comment.content?.length > 200 ? comment.content.slice(0, 200) + '…' : comment.content;
             const tgMsg = `💬 *${comment.author}* commented on "${task.title}"${projectName ? ` · ${projectName}` : ''}\n\n${truncContent}`;

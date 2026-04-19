@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateWeeklyDigest, formatDigestMarkdown } from '@/lib/weekly-digest';
+import { isTelegramCommsEnabled } from '@/lib/telegram-guard';
 
 /**
  * GET /api/metrics/weekly-digest
@@ -33,6 +34,9 @@ export async function POST(req: NextRequest) {
     let telegramSent = false;
 
     if (action === 'send') {
+      if (!isTelegramCommsEnabled()) {
+        console.log('[weekly-digest] Telegram comms relay disabled (ENABLE_TELEGRAM_COMMS=false)');
+      } else {
       const botToken = process.env.TELEGRAM_BOT_TOKEN;
       const chatId   = process.env.TELEGRAM_CHAT_ID || process.env.NOTIFY_CHAT_ID;
 
@@ -61,6 +65,7 @@ export async function POST(req: NextRequest) {
       } else {
         console.warn('[weekly-digest] No TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID — skipping send');
       }
+      } // close isTelegramCommsEnabled
     }
 
     return NextResponse.json({ ok: true, digest, markdown, telegramSent });

@@ -13,11 +13,18 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const port = parseInt(process.env.PORT || '4501');
 const dev = false;
 
+// --- Telegram comms guard (v0.15) ---
+const ENABLE_TELEGRAM_COMMS = (() => {
+  const val = (process.env.ENABLE_TELEGRAM_COMMS || 'false').toLowerCase().trim();
+  return val === 'true' || val === '1' || val === 'yes';
+})();
+
 // --- Telegram notification helper ---
 const TG_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const TG_CHAT_ID = process.env.TELEGRAM_CHAT_ID || process.env.NOTIFY_CHAT_ID || '';
 
 function sendTelegramNotification(message) {
+  if (!ENABLE_TELEGRAM_COMMS) return; // v0.15: comms relay disabled by default
   if (!TG_BOT_TOKEN || !TG_CHAT_ID) return;
   fetch(`https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage`, {
     method: 'POST',
@@ -104,6 +111,61 @@ const server = createServer((req, res) => {
     res.end(JSON.stringify({ events: feed }));
     return;
   }
+
+  // --- Health-alerts webhook (v0.15) ---
+  if (req.url === '/api/webhooks/health-alerts' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', async () => {
+      try {
+        const data = JSON.parse(body);
+        const { agentId, metric, value, threshold, status } = data;
+        if (!agentId || !metric) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Missing required fields: agentId, metric' }));
+          return;
+        }
+
+        const alertType = `webhook_${metric}_${agentId}`;
+        const emoji = status === 'critical' ? '🚨' : status === 'warning' ? '⚠️' : '📊';
+        const title = `Health Alert: ${metric}`;
+        const context = `Agent: ${agentId} | ${metric}: ${value} (threshold: ${threshold}) | Status: ${status || 'unknown'}`;
+
+        // 1. Forward to external webhook URL if configured
+        const webhookUrl = process.env.TELEGRAM_HEALTH_ALERTS_WEBHOOK_URL;
+        if (webhookUrl) {
+          fetch(webhookUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ agentId, metric, value, threshold, status, timestamp: Date.now() }),
+          }).catch(err => console.error('[HealthWebhook] Forward failed:', err.message));
+        }
+
+        // 2. Forward to Telegram health bot if configured (independent of ENABLE_TELEGRAM_COMMS)
+        const sent = await sendHealthAlert({ type: alertType, emoji, title, context });
+
+        // 3. Add to activity feed
+        const feedApi = globalThis.__orgStudioActivityFeed;
+        if (feedApi?.add) {
+          feedApi.add({
+            type: 'health-alert',
+            emoji,
+            agent: agentId,
+            message: `${emoji} ${title}: ${context}`,
+          });
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, telegramSent: sent, webhookForwarded: !!webhookUrl }));
+      } catch (err) {
+        console.error('[HealthWebhook] Parse error:', err.message);
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid JSON body' }));
+      }
+    });
+    return;
+  }
+
   handle(req, res);
 });
 
@@ -2152,6 +2214,37 @@ server.listen(port, async () => {
 
   // Initialize health alerts (startup log)
   initHealthAlerts();
+
+  // --- Telegram comms deprecation notice (v0.15) ---
+  if (!ENABLE_TELEGRAM_COMMS) {
+    console.log('[Telegram] Comms relay DISABLED (v0.15 default). Set ENABLE_TELEGRAM_COMMS=true to re-enable.');
+  } else {
+    console.log('[Telegram] Comms relay ENABLED (ENABLE_TELEGRAM_COMMS=true)');
+  }
+  // Send deprecation notice to Telegram once on startup (best-effort)
+  if (TG_BOT_TOKEN && TG_CHAT_ID) {
+    const deprecationSent = globalThis.__tgDeprecationSent;
+    if (!deprecationSent) {
+      globalThis.__tgDeprecationSent = true;
+      const deprecationMsg = [
+        '📢 *Org Studio v0.15 — Telegram Transition Notice*',
+        '',
+        "We're transitioning to in-app notifications. Task updates and mentions will no longer be sent to Telegram in v0.16.",
+        '',
+        'Please enable in-app push notifications in Settings → Notifications.',
+        '',
+        'Health alerts will continue via this channel for now.',
+        '',
+        '→ Settings: ' + (process.env.ORG_STUDIO_PUBLIC_URL || 'http://localhost:4501') + '/settings',
+      ].join('\n');
+      fetch(`https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: TG_CHAT_ID, text: deprecationMsg, parse_mode: 'Markdown', disable_web_page_preview: true }),
+      }).then(() => console.log('[Telegram] Deprecation notice sent'))
+        .catch(err => console.error('[Telegram] Deprecation notice failed:', err.message));
+    }
+  }
 
   // Initialize PostgreSQL LISTEN for bidirectional sync
   await initializePostgresListener();
