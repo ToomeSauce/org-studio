@@ -898,6 +898,15 @@ async function initializePostgresListener() {
         // msg.channel is the event name, msg.payload is the JSON data
         if (msg.channel === 'org_studio_change') {
           const changeEvent = JSON.parse(msg.payload);
+          // Ensure workspace_id is present; default to 'default-workspace' if missing
+          if (!changeEvent.workspace_id) {
+            changeEvent.workspace_id = 'default-workspace';
+            // Only warn once per server lifetime for missing workspace_id
+            if (!globalThis.__wsIdWarnLogged) {
+              console.warn('[LISTEN] Notification missing workspace_id — defaulting to default-workspace');
+              globalThis.__wsIdWarnLogged = true;
+            }
+          }
           console.log(`[LISTEN] Received ${changeEvent.type} event:`, changeEvent.action || '');
           
           // --- Intent Router ---
@@ -2085,7 +2094,8 @@ async function checkDeadLetterBacklog() {
     await client.connect();
     try {
       const { rows } = await client.query(
-        `SELECT count(*)::int AS cnt FROM org_studio_outbox WHERE status = 'dead_letter'`
+        `SELECT count(*)::int AS cnt FROM org_studio_outbox WHERE status = 'dead_letter' AND workspace_id = $1`,
+        ['default-workspace'] // TODO(v0.17-multi-workspace): aggregate across all workspaces or scope per-request
       );
       const count = rows[0]?.cnt || 0;
       if (count > 10) {
