@@ -5,6 +5,7 @@ import { AgentLoop } from '@/lib/store';
 import type { PromptSection } from '@/lib/store';
 import { getStoreProvider } from './store-provider';
 import { agentOwnedSections, agentHasTaskAccess, isDefaultMainSection } from './section-access';
+import { isVersionInHorizon } from './version-utils';
 
 // Re-export for convenience
 export type { PromptSection };
@@ -596,7 +597,18 @@ export async function buildDispatchMessage(
   });
 
   const inProgress = agentTasks.filter((t: any) => t.status === 'in-progress');
-  const backlog = agentTasks.filter((t: any) => t.status === 'backlog');
+
+  // Approval horizon filter for backlog only. In-progress and QA tasks keep going —
+  // they were already approved when the agent picked them up. Only NEW work pulls
+  // need to respect the current approval horizon.
+  const backlog = agentTasks.filter((t: any) => {
+    if (t.status !== 'backlog') return false;
+    if (!t.projectId || !t.version) return true; // no version → not version-gated
+    const proj = (store.projects || []).find((p: any) => p.id === t.projectId);
+    const approvedThrough = proj?.autonomy?.approvedThrough;
+    if (!approvedThrough) return false; // no horizon set → hold off on all backlog
+    return isVersionInHorizon(t.version, approvedThrough);
+  });
   const inQA = agentTasks.filter((t: any) => t.status === 'qa');
 
   // Nothing to do
@@ -626,7 +638,7 @@ export async function buildDispatchMessage(
     for (const t of inProgress) {
       const proj = projects.find((p: any) => p.id === t.projectId);
       lines.push(`- **${t.title}** ${t.ticketNumber ? `(#${t.ticketNumber})` : ''}`);
-      if (proj) lines.push(` Project: ${proj.name}${t.version ? ` v${t.version}` : ''}`);
+      if (proj) lines.push(` Project: ${proj.name}${t.version ? ` ${t.version}` : ''}`);
       if (t.sectionId && proj && !isDefaultMainSection(t.sectionId, proj.id)) {
         const sec = (proj.sections || []).find((s: any) => s.id === t.sectionId);
         if (sec) lines.push(` Section: ${sec.name}`);
@@ -662,7 +674,7 @@ export async function buildDispatchMessage(
     const proj = projects.find((p: any) => p.id === next.projectId);
     lines.push(`**Next from backlog:**`);
     lines.push(`- **${next.title}** ${next.ticketNumber ? `(#${next.ticketNumber})` : ''}`);
-    if (proj) lines.push(` Project: ${proj.name}${next.version ? ` v${next.version}` : ''}`);
+    if (proj) lines.push(` Project: ${proj.name}${next.version ? ` ${next.version}` : ''}`);
     if (next.sectionId && proj && !isDefaultMainSection(next.sectionId, proj.id)) {
       const sec = (proj.sections || []).find((s: any) => s.id === next.sectionId);
       if (sec) lines.push(` Section: ${sec.name}`);

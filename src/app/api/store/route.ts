@@ -772,16 +772,17 @@ export async function POST(req: NextRequest) {
               
               if (completedVersion) {
                 console.log(
-                  `[Version Dispatch] All tasks for v${completedVersion} in project ${versionCompletionTriggered.projectId} are done`
+                  `[Version Dispatch] All tasks for ${completedVersion} in project ${versionCompletionTriggered.projectId} are done`
                 );
-                
-                // **FIX #2: Update project state after version completion**
+
+                // Update the version record: status = 'shipped', set approvedAt
+                // Do NOT bump approvedThrough automatically — humans explicitly move the
+                // approval horizon. Auto-advancing past what the human approved violates
+                // the autonomy-within-guardrails contract.
                 const updates: any = {
                   currentVersion: completedVersion,
-                  approvedThrough: completedVersion,
                 };
-                
-                // Update the version record: status = 'shipped', set approvedAt
+
                 const versions = versionCompletionTriggered.project.versions || [];
                 const completedVersionRecord = versions.find((v: any) => v.label === completedVersion);
                 if (completedVersionRecord) {
@@ -789,20 +790,7 @@ export async function POST(req: NextRequest) {
                   completedVersionRecord.approvedAt = new Date().toISOString();
                   updates.versions = versions;
                 }
-                
-                // **FIX #3: Auto-advance to next version if enabled**
-                if (versionCompletionTriggered.project.autonomy?.autoAdvance) {
-                  const currentIdx = versions.findIndex((v: any) => v.label === completedVersion);
-                  if (currentIdx !== -1 && currentIdx < versions.length - 1) {
-                    const nextVersion = versions[currentIdx + 1];
-                    if (nextVersion) {
-                      nextVersion.status = 'current';
-                      updates.approvedThrough = nextVersion.label;
-                      console.log(`[Version Dispatch] Auto-advanced project ${versionCompletionTriggered.projectId} to v${nextVersion.label}`);
-                    }
-                  }
-                }
-                
+
                 // Persist all updates
                 await getStoreProvider().updateProject(versionCompletionTriggered.projectId, updates);
               }
@@ -864,11 +852,9 @@ export async function POST(req: NextRequest) {
             version_type: 'outcome',
           }];
         }
-        if (project.autoAdvance === undefined || project.autoAdvance === null) {
-          project.autoAdvance = true;
-        }
-        if (project.approvedThrough === undefined) {
-          project.approvedThrough = null;
+        if (!project.autonomy) project.autonomy = {};
+        if (project.autonomy.approvedThrough === undefined) {
+          project.autonomy.approvedThrough = null;
         }
         // --- End integrity guard ---
 

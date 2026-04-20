@@ -89,6 +89,13 @@ export class OfflineQueue {
   private listeners = new Set<Listener>();
   private _onlineHandler: (() => void) | null = null;
 
+  // Cached snapshot for useSyncExternalStore. Must be a STABLE reference
+  // between calls when nothing mutates — otherwise React's getSnapshot
+  // stability check fails and re-renders in a loop (React error #185).
+  // Invalidated by emit() on every mutation.
+  private _snapshot: QueuedMessage[] = [];
+  private _snapshotDirty = true;
+
   constructor() {
     // Listen for online events — flush pending/failed items
     if (typeof window !== 'undefined') {
@@ -105,13 +112,19 @@ export class OfflineQueue {
   }
 
   private emit() {
+    // Any mutation invalidates the cached snapshot.
+    this._snapshotDirty = true;
     this.listeners.forEach(fn => fn());
   }
 
   // ---- Public API ----------------------------------------------------------
 
   getAll(): QueuedMessage[] {
-    return Array.from(this.queue.values()).sort((a, b) => a.createdAt - b.createdAt);
+    if (this._snapshotDirty) {
+      this._snapshot = Array.from(this.queue.values()).sort((a, b) => a.createdAt - b.createdAt);
+      this._snapshotDirty = false;
+    }
+    return this._snapshot;
   }
 
   get count(): number {

@@ -193,7 +193,7 @@ async function parseRoadmapStructured(projectId: string, fallbackContent: string
     for (const version of roadmapVersions) {
       const vt = version.version_type || 'outcome';
       const typeEmoji = vt === 'foundation' ? '🏗️' : vt === 'chore' ? '🧹' : '🎯';
-      const header = `### v${version.version}: ${version.title} [${typeEmoji} ${vt}]`;
+      const header = `### ${version.version}: ${version.title} [${typeEmoji} ${vt}]`;
       const isShipped = version.status === 'shipped';
       
       if (isShipped) {
@@ -416,7 +416,7 @@ ${boundaries.map(b => `- ${b}`).join('\n') || '(none defined)'}
 ${
   outcomeVersions.length === 0
     ? '(no outcome-type versions defined)'
-    : outcomeVersions.map(v => `- [${v.status === 'shipped' ? 'x' : ' '}] v${v.version}: ${v.title}`).join('\n')
+    : outcomeVersions.map(v => `- [${v.status === 'shipped' ? 'x' : ' '}] ${v.version}: ${v.title}`).join('\n')
 }
 
 ### Guardrails (boundaries + contribution criteria)

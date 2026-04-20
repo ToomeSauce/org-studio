@@ -95,7 +95,7 @@ export async function createVersionTopic(
   // Post version kickoff message to the existing project topic
   const leads = buildLeadsList(project);
   const kickoffMessage = [
-    `🚀 **${project.name} v${version} — Sprint Started**`,
+    `🚀 **${project.name} ${version} — Sprint Started**`,
     ``,
     `**Tasks:** ${taskCount}`,
     `**Dev:** ${project.devOwner || project.owner || 'Unassigned'}`,
@@ -104,7 +104,7 @@ export async function createVersionTopic(
     ``,
     leads.length > 0 ? `**Leads:** ${leads.join(', ')}` : '',
     ``,
-    `Task updates for v${version} will post here.`,
+    `Task updates for ${version} will post here.`,
   ].filter(Boolean).join('\n');
 
   try {
@@ -190,7 +190,7 @@ export async function closeVersionTopic(
   const topic = await getProjectTopic(projectId);
   if (!topic) return;
 
-  let message = `🏁 **v${version} Complete!**\n\n`;
+  let message = `🏁 **${version} Complete!**\n\n`;
   message += `✅ ${summary.tasksShipped} tasks shipped`;
   if (summary.retrospective) {
     message += `\n\n📊 **Retrospective:**\n${summary.retrospective}`;

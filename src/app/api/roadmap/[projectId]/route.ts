@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getStoreProvider } from '@/lib/store-provider';
 import { authenticateRequest } from '@/lib/auth';
 import { checkArchivedProject } from '@/lib/archived-project-compat';
+import { versionSortKey, compareVersions } from '@/lib/version-utils';
+import semver from 'semver';
 
 export const dynamic = 'force-dynamic';
 
@@ -119,6 +121,27 @@ export async function POST(
     const body = await req.json();
     const { action, version, title, status, items, order, versionType } = body;
 
+    // Validate version semver on any action that takes one (upsert/delete).
+    // Per docs/decisions/2026-04-19-version-numbering-convention.md the API
+    // refuses non-semver inputs. Strict check: must be 3-part semver, no `v`
+    // prefix, no coercion. Callers must send canonical form.
+    if ((action === 'upsert' || action === 'delete') && version !== undefined) {
+      const isStrictSemver =
+        typeof version === 'string' &&
+        !version.startsWith('v') &&
+        /^\d+\.\d+\.\d+$/.test(version) &&
+        !!semver.valid(version);
+      if (!isStrictSemver) {
+        return NextResponse.json(
+          {
+            error: 'invalid_version',
+            message: `Version "${version}" is not valid semver. Use 3-part semver: MAJOR.MINOR.PATCH (e.g. 0.15.0). No "v" prefix, no 2-part shortcuts.`,
+          },
+          { status: 400 },
+        );
+      }
+    }
+
     // Authenticate request (supports both session cookies and API keys)
     const authError = await authenticateRequest(req);
     if (authError) {
@@ -144,7 +167,7 @@ export async function POST(
       try {
         if (action === 'upsert') {
           const versionId = `rv-${projectId}-${version.replace(/\./g, '-')}`;
-          const sortOrder = parseFloat(version);
+          const sortOrder = versionSortKey(version);
 
           const resolvedVersionType = versionType || 'outcome';
           await client.query(
@@ -249,11 +272,12 @@ function readRoadmapsFromFile(projectId: string): RoadmapVersion[] {
       const content = fs.readFileSync(roadmapPath, 'utf-8');
       const data = JSON.parse(content);
       const versions = data.versions || [];
-      // Sort ascending by sort_order then version
+      // Sort ascending by explicit sort_order when present, else by semver
       versions.sort((a: RoadmapVersion, b: RoadmapVersion) => {
-        const aOrder = a.sort_order ?? parseFloat(a.version);
-        const bOrder = b.sort_order ?? parseFloat(b.version);
-        return aOrder - bOrder;
+        if (a.sort_order != null && b.sort_order != null) return a.sort_order - b.sort_order;
+        if (a.sort_order != null) return -1;
+        if (b.sort_order != null) return 1;
+        return compareVersions(a.version, b.version);
       });
       return versions.map((v: any) => ({
         ...v,
@@ -299,7 +323,7 @@ function handleFileBasedRoadmap(
         title,
         status,
         items,
-        sort_order: parseFloat(version),
+        sort_order: versionSortKey(version),
         version_type: versionType || 'outcome',
       };
 
@@ -309,7 +333,12 @@ function handleFileBasedRoadmap(
         data.versions.push(newVersion);
       }
 
-      data.versions.sort((a: any, b: any) => (a.sort_order ?? parseFloat(a.version)) - (b.sort_order ?? parseFloat(b.version)));
+      data.versions.sort((a: any, b: any) => {
+        if (a.sort_order != null && b.sort_order != null) return a.sort_order - b.sort_order;
+        if (a.sort_order != null) return -1;
+        if (b.sort_order != null) return 1;
+        return compareVersions(a.version, b.version);
+      });
       fs.writeFileSync(roadmapPath, JSON.stringify(data, null, 2));
 
       return NextResponse.json({ action: 'upserted', version });

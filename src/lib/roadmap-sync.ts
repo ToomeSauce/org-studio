@@ -1,14 +1,27 @@
 /**
  * roadmap-sync.ts
  *
- * Keeps roadmap-version item `done` flags in sync with task statuses,
- * and auto-advances to the next planned version when all items in the
- * current version are done.
+ * Keeps roadmap-version item `done` flags in sync with task statuses.
+ *
+ * When the current version's items are all done:
+ *   1. Mark it shipped.
+ *   2. If the next planned version is still within the approval horizon
+ *      (`autonomy.approvedThrough`), promote it to `current` and move its
+ *      linked planning tasks into backlog. The horizon itself is never
+ *      modified here — only humans move it.
+ *   3. If the next planned version is ABOVE the horizon, stop. Agent's
+ *      work is done until a human bumps `approvedThrough`.
+ *
+ * Per docs/decisions/2026-04-19-version-numbering-convention.md:
+ *   "Horizon = permission ceiling. Auto-advance within the horizon is safe;
+ *    crossing the horizon is never automatic."
  *
  * Non-fatal: every public function wraps in try/catch so it never
  * breaks the task-update path.  Gracefully no-ops when DATABASE_URL
  * is unset (file-store mode with no Postgres pool).
  */
+
+import { isVersionGreater } from './version-utils';
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -82,7 +95,7 @@ export async function syncRoadmapItemForTask(
           changed = true;
           changedVersionId = row.id;
           console.log(
-            `[RoadmapSync] ${projectId} v${row.version}: item ${taskId} → done=${isDone}`,
+            `[RoadmapSync] ${projectId} ${row.version}: item ${taskId} → done=${isDone}`,
           );
         }
       }
@@ -104,8 +117,14 @@ export async function syncRoadmapItemForTask(
 /* ------------------------------------------------------------------ */
 
 /**
- * If the current version has all items done, ship it and optionally
- * launch the next planned version.
+ * If the current version has all items done:
+ *   • Mark it shipped.
+ *   • If the next planned version is ≤ horizon, promote it to `current`
+ *     and move its planning tasks to backlog.
+ *   • Otherwise stop — horizon is the hard ceiling.
+ *
+ * The horizon (`autonomy.approvedThrough`) is NEVER written by this
+ * function. Only humans move the horizon.
  *
  * @param projectId - the project to check
  * @param existingClient - optional pg client to reuse (avoids extra checkout)
@@ -147,9 +166,9 @@ export async function checkAndAutoAdvance(
        WHERE id = $2 AND workspace_id = $3`,
       [String(shippedAt), current.id, 'default-workspace'],
     );
-    console.log(`[AutoAdvance] ${projectId}: v${current.version} shipped`);
+    console.log(`[VersionShip] ${projectId}: ${current.version} shipped`);
 
-    // 3. Read project autonomy
+    // 3. Read project autonomy to check horizon
     const projResult = await client.query(
       `SELECT data FROM org_studio_projects WHERE id = $1 AND workspace_id = $2`,
       [projectId, 'default-workspace'],
@@ -161,18 +180,17 @@ export async function checkAndAutoAdvance(
         ? JSON.parse(projResult.rows[0].data)
         : projResult.rows[0].data || {};
 
-    const autonomy = projData.autonomy || {};
-    const autoAdvance: boolean = autonomy.autoAdvance === true;
-    const approvedThrough: string | undefined = autonomy.approvedThrough;
+    const approvedThrough: string | undefined = projData.autonomy?.approvedThrough;
 
-    if (!autoAdvance) {
+    // 4. No horizon = nothing is approved. Stop.
+    if (!approvedThrough) {
       console.log(
-        `[AutoAdvance] auto-advance disabled for ${projectId} — v${current.version} shipped, manual launch required`,
+        `[AutoAdvance] ${projectId}: no approvedThrough set — stopping after ${current.version}`,
       );
       return;
     }
 
-    // 4. Find next planned version (next by sort_order)
+    // 5. Find next planned version (next by sort_order)
     const nextResult = await client.query(
       `SELECT id, version, status, items, sort_order
        FROM org_studio_roadmap_versions
@@ -184,57 +202,47 @@ export async function checkAndAutoAdvance(
 
     if (nextResult.rows.length === 0) {
       console.log(
-        `[AutoAdvance] ${projectId}: v${current.version} shipped → no next planned version`,
+        `[AutoAdvance] ${projectId}: ${current.version} shipped — no next planned version`,
       );
       return;
     }
 
     const next = nextResult.rows[0];
 
-    // 5. Approval gating
-    if (approvedThrough) {
-      if (parseFloat(next.version) > parseFloat(approvedThrough)) {
-        console.log(
-          `[AutoAdvance] ${projectId}: approval required for v${next.version} (approvedThrough=${approvedThrough}) — manual launch needed`,
-        );
-        return;
-      }
-    } else {
-      // No approvedThrough set at all — block auto-advance to be safe
+    // 6. Horizon gate — HARD STOP if next version is above the ceiling.
+    //    isVersionGreater(next, horizon) === true  ⇒  next > horizon  ⇒  stop.
+    if (isVersionGreater(next.version, approvedThrough)) {
       console.log(
-        `[AutoAdvance] ${projectId}: no approvedThrough set — manual launch needed for v${next.version}`,
+        `[AutoAdvance] ${projectId}: ${current.version} shipped — next ${next.version} is above horizon ${approvedThrough}, stopping`,
       );
       return;
     }
 
-    // 6. Check all items have taskIds (can't launch without planning tickets)
+    // 7. All roadmap items must have taskIds (can't launch without tickets)
     const nextItems: any[] = next.items || [];
     const draftItems = nextItems.filter((i: any) => !i.taskId);
     if (draftItems.length > 0) {
       console.log(
-        `[AutoAdvance] ${projectId}: v${next.version} has ${draftItems.length} item(s) without taskId — manual launch needed`,
+        `[AutoAdvance] ${projectId}: ${next.version} has ${draftItems.length} item(s) without taskId — stopping (manual launch will alert user)`,
       );
       return;
     }
 
-    // 7. Launch the next version
+    // 8. Promote next version to current
     await client.query(
       `UPDATE org_studio_roadmap_versions SET status = 'current' WHERE id = $1 AND workspace_id = $2`,
       [next.id, 'default-workspace'],
     );
 
-    // 8. Move linked tasks from planning → backlog
-    let movedCount = 0;
-    const taskIds = nextItems.map((i: any) => i.taskId).filter(Boolean);
-
-    // Read devOwner for assignee
+    // 9. Move linked planning tasks → backlog, set version + assignee
     const devOwner = projData.devOwner || '';
-
-    for (const tid of taskIds) {
+    let movedCount = 0;
+    for (const item of nextItems) {
+      if (!item.taskId) continue;
       try {
         const taskRes = await client.query(
           `SELECT id, status FROM org_studio_tasks WHERE id = $1 AND workspace_id = $2`,
-          [tid, 'default-workspace'],
+          [item.taskId, 'default-workspace'],
         );
         if (taskRes.rows.length > 0 && taskRes.rows[0].status === 'planning') {
           await client.query(
@@ -243,19 +251,19 @@ export async function checkAndAutoAdvance(
                  version = $1,
                  assignee = COALESCE(NULLIF(assignee, ''), $2)
              WHERE id = $3 AND workspace_id = $4`,
-            [next.version, devOwner, tid, 'default-workspace'],
+            [next.version, devOwner, item.taskId, 'default-workspace'],
           );
           movedCount++;
         }
       } catch (taskErr: any) {
         console.error(
-          `[AutoAdvance] Failed to move task ${tid} to backlog:`,
+          `[AutoAdvance] Failed to move task ${item.taskId} to backlog:`,
           taskErr?.message,
         );
       }
     }
 
-    // 9. Update project's currentVersion
+    // 10. Update project.currentVersion. HORIZON IS NEVER TOUCHED.
     try {
       projData.currentVersion = next.version;
       await client.query(
@@ -263,11 +271,11 @@ export async function checkAndAutoAdvance(
         [JSON.stringify(projData), projectId, 'default-workspace'],
       );
     } catch (err: any) {
-      console.error('[AutoAdvance] Failed to update project currentVersion:', err?.message);
+      console.error('[AutoAdvance] Failed to update currentVersion:', err?.message);
     }
 
     console.log(
-      `[AutoAdvance] ${projectId}: v${current.version} shipped → v${next.version} launched (${movedCount} tasks moved planning→backlog)`,
+      `[AutoAdvance] ${projectId}: ${current.version} → ${next.version} (horizon=${approvedThrough}, ${movedCount} tasks moved planning→backlog)`,
     );
   } catch (err: any) {
     console.error('[AutoAdvance] checkAndAutoAdvance error (non-fatal):', err?.message || err);

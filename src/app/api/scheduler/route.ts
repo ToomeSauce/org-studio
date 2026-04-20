@@ -17,6 +17,7 @@ import type { AgentLoop } from '@/lib/store';
 import { authenticateRequest } from '@/lib/auth';
 import { writeHeartbeat } from '@/lib/heartbeats';
 import { getStoreProvider, type StoreData } from '@/lib/store-provider';
+import { isVersionInHorizon } from '@/lib/version-utils';
 const DEFAULT_MODEL = 'foundry-openai-chat/gpt-5.4';
 
 // Minimum seconds between event-driven triggers for the same agent (debounce)
@@ -199,9 +200,19 @@ function getActionableWork(store: StoreData, agentId: string): { hasWork: boolea
       continue;
     }
 
-    // Backlog: new work to pick up
+    // Backlog: new work to pick up — but only if the task's version is
+    // within the project's approval horizon. Versions above the horizon stay
+    // invisible to the agent until a human explicitly advances approvedThrough.
     if (isAssigned && status === 'backlog') {
-      hasNewWork = true;
+      let gated = false;
+      if (t.projectId && t.version) {
+        const proj = (store.projects || []).find((p: any) => p.id === t.projectId);
+        const approvedThrough = proj?.autonomy?.approvedThrough;
+        if (!approvedThrough || !isVersionInHorizon(t.version, approvedThrough)) {
+          gated = true;
+        }
+      }
+      if (!gated) hasNewWork = true;
     }
 
     // QA work: tasks in qa column assigned to this agent
@@ -616,10 +627,17 @@ export async function POST(request: NextRequest) {
           const nameLower = agentName.toLowerCase();
           const agentId = loop.agentId;
 
-          // 1. Backlog orphans — tasks in backlog assigned to this agent
+          // 1. Backlog orphans — tasks in backlog assigned to this agent,
+          //    respecting the per-project approval horizon.
           const backlogTasks = store.tasks.filter(t => {
             const a = (t.assignee || '').toLowerCase();
-            return (a === nameLower || a === agentId) && t.status === 'backlog';
+            if (!(a === nameLower || a === agentId)) return false;
+            if (t.status !== 'backlog') return false;
+            if (!t.projectId || !t.version) return true;
+            const proj = (store.projects || []).find((p: any) => p.id === t.projectId);
+            const approvedThrough = proj?.autonomy?.approvedThrough;
+            if (!approvedThrough) return false;
+            return isVersionInHorizon(t.version, approvedThrough);
           });
 
           if (backlogTasks.length > 0) {

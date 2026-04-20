@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getStoreProvider } from '@/lib/store-provider';
+import { versionSortKey } from '@/lib/version-utils';
 
 export const dynamic = 'force-dynamic';
 
@@ -155,7 +156,7 @@ export async function POST(req: NextRequest) {
         // Insert each version
         for (const version of versions) {
           const versionId = `rv-${projectId}-${version.version.replace(/\./g, '-')}`;
-          const sortOrder = parseFloat(version.version);
+          const sortOrder = versionSortKey(version.version);
 
           try {
             await client.query(
@@ -182,9 +183,9 @@ export async function POST(req: NextRequest) {
               ]
             );
             migratedCount++;
-            console.log(`   ✅ Migrated v${version.version} (${version.status})`);
+            console.log(`   ✅ Migrated ${version.version} (${version.status})`);
           } catch (err: any) {
-            console.error(`   ❌ Error inserting v${version.version}:`, err.message);
+            console.error(`   ❌ Error inserting ${version.version}:`, err.message);
           }
         }
       }
@@ -251,7 +252,7 @@ function parseRoadmapVersions(text: string): any[] {
     }
     
     // Clean up title
-    const title = headerTitle.replace(/✅|✓|—|–|-/g, '').trim() || `v${versionNum}`;
+    const title = headerTitle.replace(/✅|✓|—|–|-/g, '').trim() || `${versionNum}`;
     
     // Parse checklist items from entire section
     const items: any[] = [];

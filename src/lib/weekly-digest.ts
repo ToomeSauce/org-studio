@@ -6,6 +6,8 @@
 
 const BASE_URL = 'http://localhost:4501';
 
+import { compareVersions } from './version-utils';
+
 export interface WeeklyDigest {
   weekLabel: string;        // e.g. "Apr 7 – Apr 13, 2026"
   generatedAt: string;      // ISO timestamp
@@ -149,7 +151,7 @@ export async function generateWeeklyDigest(): Promise<WeeklyDigest> {
   // Sort: by project name, then version number
   versionProgress.sort((a, b) => {
     if (a.projectName !== b.projectName) return a.projectName.localeCompare(b.projectName);
-    return parseFloat(a.version) - parseFloat(b.version);
+    return compareVersions(a.version, b.version);
   });
 
   // ── Top Performers ────────────────────────────────────────────────────────
@@ -285,7 +287,7 @@ export function formatDigestMarkdown(digest: WeeklyDigest): string {
     lines.push('*📈 Version Progress*');
     for (const vp of digest.versionProgress) {
       const complete = vp.done === vp.total ? ' ✅' : '';
-      lines.push(`• ${vp.projectName} v${vp.version}: ${vp.done}/${vp.total} done${complete}`);
+      lines.push(`• ${vp.projectName} ${vp.version}: ${vp.done}/${vp.total} done${complete}`);
     }
     lines.push('');
   }

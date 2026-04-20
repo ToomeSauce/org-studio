@@ -1,4 +1,5 @@
 import { Project, Task } from './store';
+import { nextMinorVersion } from './version-utils';
 
 export interface Teammate {
   id?: string;
@@ -52,7 +53,7 @@ export function generateVisionTemplate(
             .join('\n');
           
           versionHistory.push(
-            `### v${versionNum} (shipped ${shippedDate})\n${taskLines}`
+            `### ${versionNum} (shipped ${shippedDate})\n${taskLines}`
           );
         }
         
@@ -88,7 +89,7 @@ Project activated. Ready for the first milestone.
 
 ## Roadmap
 
-### v${(parseFloat(project.currentVersion || '0.1') + 0.1).toFixed(1)} (next)
+### ${nextMinorVersion(project.currentVersion)} (next)
 - [ ] Define key features for next version
 - [ ] Impact: enables X for users
 

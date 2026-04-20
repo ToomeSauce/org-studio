@@ -229,6 +229,16 @@ export function generateOrgMd(ctx: OrgContext, forAgentId?: string): string {
   lines.push('- ❌ Route messages through coordinators when you can talk to the other agent directly');
   lines.push('');
 
+  // Versioning & approval horizon — shared rule
+  lines.push('## Versions & Approval Horizon');
+  lines.push('- **Versions are 3-part semver.** Always `MAJOR.MINOR.PATCH` (e.g. `0.15.0`, `1.0.0`). No `v` prefix — storage and display match exactly.');
+  lines.push('- **Approval horizon = `project.autonomy.approvedThrough`.** A single semver string per project.');
+  lines.push('- **You may execute any task whose version ≤ `approvedThrough`.** You must not pull, plan, or work on tasks above the horizon — ever.');
+  lines.push('- **Only humans move the horizon.** When the current version\'s tasks all ship, the next planned version automatically promotes to `current` and its tasks land in backlog — but only if that next version is still ≤ horizon. If it would cross the horizon, the system stops. You wait for a human to bump `approvedThrough` before touching new work.');
+  lines.push('- **In-progress and QA work is grandfathered.** If you started a task while it was approved, finish it even if the horizon doesn\'t move.');
+  lines.push('- See `docs/decisions/2026-04-19-version-numbering-convention.md` for the full contract.');
+  lines.push('');
+
   // Inter-Agent Communication — shared protocol
   lines.push('## Inter-Agent Communication');
   lines.push('You can reach other agents directly. Use the `wake-agent` command to send a message that will wake the target agent even if they\'re idle:');
