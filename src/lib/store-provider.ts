@@ -1124,6 +1124,7 @@ export class PostgresStoreProvider implements StoreProvider {
       const changePayload = JSON.stringify({
         type: 'comment_added',
         taskId: notifyTaskId,
+        commentId: commentObj.id,
         scopeKind: scope.kind,
         timestamp: Date.now(),
         source: 'postgres',

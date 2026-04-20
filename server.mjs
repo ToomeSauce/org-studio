@@ -4,6 +4,25 @@ import { watch, readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import next from 'next';
+
+// Load .env.local so server.mjs has the same env vars as Next.js route handlers
+// (notably ORG_STUDIO_API_KEY for self-calls to /api/scheduler)
+const __envDir = dirname(fileURLToPath(import.meta.url));
+try {
+  const envPath = join(__envDir, '.env.local');
+  if (existsSync(envPath)) {
+    const envContent = readFileSync(envPath, 'utf-8');
+    for (const line of envContent.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx < 0) continue;
+      const key = trimmed.slice(0, eqIdx).trim();
+      const val = trimmed.slice(eqIdx + 1).trim();
+      if (!process.env[key]) process.env[key] = val; // don't override existing
+    }
+  }
+} catch {} // best-effort
 import { getRuntimeRegistry } from './lib/runtimes.mjs';
 import { ensureHeartbeatSchema, startLoopWatchdog, logIncident } from './lib/heartbeats.mjs';
 import { ensureOutboxSchema, startOutboxWorker } from './lib/outbox.mjs';
@@ -916,20 +935,28 @@ async function initializePostgresListener() {
 
           // Process @mentions from comments added via remote (staging) UI
           if (changeEvent.type === 'comment_added' && changeEvent.taskId) {
+            console.log(`[LISTEN] comment_added taskId=${changeEvent.taskId} commentId=${changeEvent.commentId || 'none'}`);
             try {
               const freshStore = await refreshCachedStore();
               if (freshStore) {
                 const task = freshStore.tasks?.find(t => t.id === changeEvent.taskId);
-                const lastComment = task?.comments?.[task.comments.length - 1];
-                if (lastComment?.content && lastComment.mentions?.length > 0) {
+                // Look up by commentId if available, fall back to last comment
+                let comment;
+                if (changeEvent.commentId && task?.comments) {
+                  comment = task.comments.find(c => c.id === changeEvent.commentId);
+                }
+                if (!comment) {
+                  comment = task?.comments?.[task.comments.length - 1];
+                }
+                if (comment?.content && comment.mentions?.length > 0) {
                   const teammates = freshStore.settings?.teammates || [];
-                  for (const mentionName of lastComment.mentions) {
+                  for (const mentionName of comment.mentions) {
                     const tm = teammates.find(t =>
                       t.name?.toLowerCase() === mentionName.toLowerCase() ||
                       t.agentId?.toLowerCase() === mentionName.toLowerCase()
                     );
                     if (tm?.agentId && !tm.isHuman) {
-                      const msg = `\ud83d\udcac **${lastComment.author}** mentioned you on task: **${task.title}**\n\n> ${lastComment.content}\n\nTask ID: ${task.id}`;
+                      const msg = `\ud83d\udcac **${comment.author}** mentioned you on task: **${task.title}**\n\n> ${comment.content}\n\nTask ID: ${task.id}`;
                       try {
                         // Route based on agent type: Hermes → /v1/runs, OpenClaw → rpc
                         if (tm.agentId.startsWith('hermes-')) {
@@ -965,12 +992,16 @@ async function initializePostgresListener() {
                           const apiKey = process.env.ORG_STUDIO_API_KEY || '';
                           const triggerHeaders = { 'Content-Type': 'application/json' };
                           if (apiKey) triggerHeaders['Authorization'] = `Bearer ${apiKey}`;
-                          await fetch(`http://127.0.0.1:${port}/api/scheduler`, {
+                          const triggerRes = await fetch(`http://127.0.0.1:${port}/api/scheduler`, {
                             method: 'POST',
                             headers: triggerHeaders,
                             body: JSON.stringify({ action: 'trigger', agentId: tm.agentId }),
                           });
-                          console.log(`[LISTEN] Mention triggered OpenClaw ${mentionName}`);
+                          if (triggerRes.ok) {
+                            console.log(`[LISTEN] Mention routing: recipient=${mentionName} agentId=${tm.agentId} status=${triggerRes.status}`);
+                          } else {
+                            console.warn(`[LISTEN] Mention trigger failed for ${mentionName}: HTTP ${triggerRes.status}`);
+                          }
                         }
                       } catch (e) {
                         console.warn(`[LISTEN] Mention dispatch failed for ${mentionName}:`, e.message);
