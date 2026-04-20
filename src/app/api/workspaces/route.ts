@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticateRequest, getSession, getSessionTokenFromCookie } from '@/lib/auth';
+import { authenticateRequest, authenticateRequestWithContext, getSession, getSessionTokenFromCookie } from '@/lib/auth';
 import {
   getUserWorkspaces,
   resolveWorkspaceContext,
@@ -17,17 +17,9 @@ export async function GET(req: NextRequest) {
   const authError = await authenticateRequest(req);
   if (authError) return authError;
 
-  // Resolve the current user
-  const cookieHeader = req.headers.get('cookie');
-  const sessionToken = getSessionTokenFromCookie(cookieHeader);
-  let userId = 'anonymous';
-
-  if (sessionToken) {
-    const session = await getSession(sessionToken);
-    if (session) {
-      userId = session.userId;
-    }
-  }
+  // Resolve the current user (supports session + Bearer + noauth)
+  const authResult = await authenticateRequestWithContext(req);
+  const userId = authResult.context?.userId || 'anonymous';
 
   // Get current workspace context
   const wsResult = await resolveWorkspaceContext(req, userId);
@@ -69,13 +61,8 @@ export async function POST(req: NextRequest) {
       }
 
       // Resolve the current user
-      const cookieHeader = req.headers.get('cookie');
-      const sessionToken = getSessionTokenFromCookie(cookieHeader);
-      let userId = 'anonymous';
-      if (sessionToken) {
-        const session = await getSession(sessionToken);
-        if (session) userId = session.userId;
-      }
+      const authResult2 = await authenticateRequestWithContext(req);
+      const userId = authResult2.context?.userId || 'anonymous';
 
       // Validate the user has access to this workspace
       const wsResult = await resolveWorkspaceContext(

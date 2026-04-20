@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticateRequest, getSession, getSessionTokenFromCookie } from '@/lib/auth';
+import { authenticateRequest, authenticateRequestWithContext, getSession, getSessionTokenFromCookie } from '@/lib/auth';
 import { rpc } from '@/lib/gateway-rpc';
 import { getStoreProvider, type StoreData } from '@/lib/store-provider';
 import { parseMentions } from '@/lib/mention-notifier';
@@ -366,17 +366,17 @@ function piggybackStuckCheck(store: any) {
 /**
  * Helper: resolve workspace from request, returning DEFAULT_WORKSPACE_ID
  * for unauthenticated / internal callers (backward-compat).
+ *
+ * Uses authenticateRequestWithContext to get userId from both session cookies
+ * AND Bearer API keys (resolves ORG_STUDIO_API_KEY → basil).
  */
-async function resolveRequestWorkspace(req: NextRequest): Promise<WorkspaceContext> {
+async function resolveRequestWorkspace(req: NextRequest): Promise<WorkspaceContext | NextResponse> {
   try {
-    const cookieHeader = req.headers.get('cookie');
-    const sessionToken = getSessionTokenFromCookie(cookieHeader);
-    let userId: string | undefined;
-    if (sessionToken) {
-      const session = await getSession(sessionToken);
-      if (session) userId = session.userId;
-    }
+    // Get auth context (includes userId for both session and Bearer)
+    const authResult = await authenticateRequestWithContext(req);
+    const userId = authResult.context?.userId;
     const wsResult = await resolveWorkspaceContext(req, userId);
+    if (wsResult.error) return wsResult.error;
     if (wsResult.context) return wsResult.context;
   } catch {}
   return { id: DEFAULT_WORKSPACE_ID, name: 'Default Workspace' };
@@ -388,7 +388,9 @@ export async function GET(req: NextRequest) {
     piggybackStuckCheck(data);
 
     // Workspace filtering — transparent: single-workspace users see everything
-    const workspace = await resolveRequestWorkspace(req);
+    const wsOrError = await resolveRequestWorkspace(req);
+    if (wsOrError instanceof NextResponse) return wsOrError;
+    const workspace = wsOrError;
     const filteredData = {
       ...data,
       projects: filterByWorkspace(data.projects, workspace.id),
@@ -407,7 +409,9 @@ export async function POST(req: NextRequest) {
   if (authError) return authError;
 
   // Resolve workspace context for this request
-  const workspace = await resolveRequestWorkspace(req);
+  const wsOrError = await resolveRequestWorkspace(req);
+  if (wsOrError instanceof NextResponse) return wsOrError;
+  const workspace = wsOrError;
 
   try {
     const body = await req.json();

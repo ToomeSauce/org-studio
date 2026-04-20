@@ -16,6 +16,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import type { AuthContext } from '@/lib/auth';
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -53,8 +54,8 @@ export const DEFAULT_WORKSPACE: WorkspaceContext = {
 export const WORKSPACE_COOKIE_KEY = 'org_studio_workspace_id';
 
 // ── In-memory workspace registry ───────────────────────────────────────
-// For v0.16: workspace data lives in settings.workspaces[]
-// Production (v1.0+) will move this to its own Postgres table
+// Workspaces + memberships now live in Postgres tables:
+//   org_studio_workspaces, org_studio_workspace_memberships
 
 let _workspacesCache: Workspace[] | null = null;
 let _membershipCache: WorkspaceMembership[] | null = null;
@@ -66,8 +67,7 @@ function isCacheFresh(): boolean {
 }
 
 /**
- * Load workspaces and memberships from the store.
- * Lazy-loaded and cached to avoid reading the store on every request.
+ * Load workspaces and memberships from Postgres (primary) or settings (fallback).
  */
 async function loadWorkspaceData(): Promise<{
   workspaces: Workspace[];
@@ -77,6 +77,43 @@ async function loadWorkspaceData(): Promise<{
     return { workspaces: _workspacesCache!, memberships: _membershipCache! };
   }
 
+  // Try Postgres first
+  const dbUrl = process.env.DATABASE_URL;
+  if (dbUrl) {
+    try {
+      const pg = await import('pg');
+      const client = new pg.Client(dbUrl);
+      await client.connect();
+      try {
+        const wsResult = await client.query(
+          'SELECT id, name, owner, created_at FROM org_studio_workspaces ORDER BY id',
+        );
+        const memResult = await client.query(
+          'SELECT workspace_id, user_id, role, joined_at FROM org_studio_workspace_memberships ORDER BY workspace_id, user_id',
+        );
+        _workspacesCache = wsResult.rows.map((r: any) => ({
+          id: r.id,
+          name: r.name,
+          owner: r.owner,
+          createdAt: typeof r.created_at === 'string' ? parseInt(r.created_at, 10) : (r.created_at || 0),
+        }));
+        _membershipCache = memResult.rows.map((r: any) => ({
+          workspaceId: r.workspace_id,
+          userId: r.user_id,
+          role: r.role as 'owner' | 'member',
+          joinedAt: typeof r.joined_at === 'string' ? parseInt(r.joined_at, 10) : (r.joined_at || 0),
+        }));
+        _cacheTs = Date.now();
+        return { workspaces: _workspacesCache!, memberships: _membershipCache! };
+      } finally {
+        await client.end();
+      }
+    } catch (e: any) {
+      console.warn('[workspace-auth] Postgres load failed, falling back to settings:', e.message);
+    }
+  }
+
+  // Fallback: read from store settings
   try {
     const { getStoreProvider } = await import('@/lib/store-provider');
     const store = await getStoreProvider().read();
@@ -116,16 +153,74 @@ export function invalidateWorkspaceCache(): void {
   _cacheTs = 0;
 }
 
+// ── WORKSPACE_ENFORCE feature flag ─────────────────────────────────────
+
+/**
+ * Read WORKSPACE_ENFORCE at request time (not import time!).
+ * This allows flipping the flag via env var update without a redeploy.
+ *
+ * Values:
+ *   'strict'     — return 403 on cross-workspace access
+ *   'permissive' — log but allow, fall back to default-workspace (DEFAULT)
+ */
+function getEnforceMode(): 'strict' | 'permissive' {
+  const val = process.env.WORKSPACE_ENFORCE;
+  if (val === 'strict') return 'strict';
+  return 'permissive'; // default
+}
+
+/**
+ * Lookup a user's primary workspace via membership.
+ * Priority: owner role first, then first match.
+ * Returns DEFAULT_WORKSPACE_ID if no membership found.
+ */
+export async function lookupUserWorkspace(userId: string): Promise<string> {
+  const { memberships } = await loadWorkspaceData();
+  // Prefer owner role
+  const ownerMembership = memberships.find(
+    (m) => m.userId === userId && m.role === 'owner',
+  );
+  if (ownerMembership) return ownerMembership.workspaceId;
+  // Fallback: first membership
+  const anyMembership = memberships.find((m) => m.userId === userId);
+  if (anyMembership) return anyMembership.workspaceId;
+  return DEFAULT_WORKSPACE_ID;
+}
+
+/**
+ * Check if a user has membership in a specific workspace.
+ */
+export async function hasWorkspaceMembership(
+  userId: string,
+  workspaceId: string,
+): Promise<boolean> {
+  const { memberships } = await loadWorkspaceData();
+  return memberships.some(
+    (m) => m.userId === userId && m.workspaceId === workspaceId,
+  );
+}
+
 // ── Workspace Resolution ───────────────────────────────────────────────
 
 /**
  * Extract workspace_id from the request using the resolution chain.
- * Returns the workspace context or null if the workspace is invalid.
+ * Enforces workspace membership based on WORKSPACE_ENFORCE env var.
+ *
+ * Resolution order:
+ *   1. X-Workspace-Id header
+ *   2. Query parameter ?workspace_id=
+ *   3. workspace_id cookie (org_studio_workspace_id)
+ *   4. Default: 'default-workspace'
+ *
+ * @param req - The incoming request
+ * @param userId - The authenticated user's ID (from AuthContext)
  */
 export async function resolveWorkspaceContext(
   req: NextRequest,
   userId?: string,
 ): Promise<{ context: WorkspaceContext; error?: never } | { context?: never; error: NextResponse }> {
+  // Read enforce mode at REQUEST TIME — not import time
+  const enforceMode = getEnforceMode();
   const { workspaces, memberships } = await loadWorkspaceData();
 
   // 1. Check X-Workspace-Id header (API clients)
@@ -137,7 +232,7 @@ export async function resolveWorkspaceContext(
     workspaceId = url.searchParams.get('workspace_id');
   }
 
-  // 3. Check session cookie
+  // 3. Check workspace cookie
   if (!workspaceId) {
     const cookieHeader = req.headers.get('cookie') || '';
     const match = cookieHeader.match(new RegExp(`${WORKSPACE_COOKIE_KEY}=([^;]+)`));
@@ -158,6 +253,13 @@ export async function resolveWorkspaceContext(
   }
 
   if (!workspace) {
+    // Unknown workspace — in permissive mode, fall back to default
+    if (enforceMode === 'permissive') {
+      console.warn(
+        `[workspace-auth][permissive] Unknown workspace '${workspaceId}' for user '${userId ?? 'anonymous'}' — falling back to default-workspace`,
+      );
+      return { context: { ...DEFAULT_WORKSPACE } };
+    }
     return {
       error: NextResponse.json(
         { error: 'Workspace not found', workspaceId },
@@ -166,7 +268,7 @@ export async function resolveWorkspaceContext(
     };
   }
 
-  // Check membership (if userId provided and workspace is not default)
+  // ── Membership enforcement ───────────────────────────────────────
   if (userId && workspaceId !== DEFAULT_WORKSPACE_ID) {
     const isMember =
       workspace.owner === userId ||
@@ -175,6 +277,34 @@ export async function resolveWorkspaceContext(
       );
 
     if (!isMember) {
+      if (enforceMode === 'strict') {
+        console.warn(
+          `[workspace-auth][strict] 403: user '${userId}' not a member of workspace '${workspaceId}'`,
+        );
+        return {
+          error: NextResponse.json(
+            { error: 'Forbidden — not a member of this workspace' },
+            { status: 403 },
+          ),
+        };
+      }
+      // Permissive: log and fall back to default
+      console.warn(
+        `[workspace-auth][permissive] Cross-workspace access: user '${userId}' requested workspace '${workspaceId}' but has no membership — falling back to default-workspace`,
+      );
+      return { context: { ...DEFAULT_WORKSPACE } };
+    }
+  }
+
+  // For default-workspace, also verify membership if we're in strict mode
+  if (userId && workspaceId === DEFAULT_WORKSPACE_ID && enforceMode === 'strict') {
+    const isMember = memberships.some(
+      (m) => m.workspaceId === DEFAULT_WORKSPACE_ID && m.userId === userId,
+    );
+    if (!isMember) {
+      console.warn(
+        `[workspace-auth][strict] 403: user '${userId}' not a member of default-workspace`,
+      );
       return {
         error: NextResponse.json(
           { error: 'Forbidden — not a member of this workspace' },

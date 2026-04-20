@@ -209,6 +209,12 @@ export function getSessionTokenFromCookie(cookieHeader: string | null): string |
   return match ? match[1] : null;
 }
 
+/** Result of authenticateRequestWithContext — includes userId and auth method */
+export interface AuthContext {
+  userId: string;
+  method: 'session' | 'apikey' | 'noauth';
+}
+
 /**
  * Authenticate a request using:
  * 1. Session cookie (browser)
@@ -243,6 +249,42 @@ export async function authenticateRequest(req: NextRequest): Promise<NextRespons
 
   // No auth configured — allow localhost dev mode
   return null;
+}
+
+/**
+ * Authenticate a request and return full auth context (userId + method).
+ * Used by workspace enforcement to know WHO is making the request.
+ *
+ * @returns { error: NextResponse } on 401, or { context: AuthContext } on success
+ */
+export async function authenticateRequestWithContext(
+  req: NextRequest,
+): Promise<{ context: AuthContext; error?: never } | { context?: never; error: NextResponse }> {
+  // Try session cookie first
+  const cookieHeader = req.headers.get('cookie');
+  const sessionToken = getSessionTokenFromCookie(cookieHeader);
+
+  if (sessionToken) {
+    const session = await getSession(sessionToken);
+    if (session) {
+      return { context: { userId: session.userId, method: 'session' } };
+    }
+  }
+
+  // Try API key
+  const apiKey = process.env.ORG_STUDIO_API_KEY;
+  if (apiKey) {
+    const authHeader = req.headers.get('authorization') || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    if (token === apiKey) {
+      // Global API key maps to the legacy owner (basil)
+      return { context: { userId: 'basil', method: 'apikey' } };
+    }
+    return { error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) };
+  }
+
+  // No auth configured — allow localhost dev mode (treat as basil for workspace purposes)
+  return { context: { userId: 'basil', method: 'noauth' } };
 }
 
 /**
