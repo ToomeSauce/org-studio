@@ -173,7 +173,7 @@ function PillSelector({
 // --- Status Strip ---
 
 function StatusStrip({ project }: { project: ProjectWithVision }) {
-  const versionText = project.currentVersion ? `v${project.currentVersion}` : 'no version';
+  const versionText = project.currentVersion ? `${project.currentVersion}` : 'no version';
   const pending = project.autonomy?.pendingVersion;
 
   let statusText: string;

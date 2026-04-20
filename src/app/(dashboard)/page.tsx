@@ -330,7 +330,7 @@ function SprintsSection({ projects, tasks, agentMap }: { projects: any[]; tasks:
       results.push({
         id: project.id,
         name: project.name || project.title || 'Untitled',
-        version: project.currentVersion ? `v${project.currentVersion}` : undefined,
+        version: project.currentVersion ? `${project.currentVersion}` : undefined,
         done,
         total,
         statusEmoji,
@@ -407,7 +407,7 @@ function AttentionSection({ tasks, projects }: { tasks: any[]; projects: any[] }
         result.push({
           type: 'pending-approval',
           emoji: '🔴',
-          title: `${project.name || project.title || 'Untitled'} v${project.autonomy.pendingVersion} proposed`,
+          title: `${project.name || project.title || 'Untitled'} ${project.autonomy.pendingVersion} proposed`,
           detail: 'Awaiting approval',
           id: `project-${project.id}`,
         });
@@ -494,7 +494,7 @@ function RecentDecisionsSection({ projects }: { projects: any[] }) {
         result.push({
           type: 'approved',
           emoji: '✅',
-          title: `${project.name || project.title || 'Untitled'} v${project.currentVersion || '?'} auto-approved`,
+          title: `${project.name || project.title || 'Untitled'} ${project.currentVersion || '?'} auto-approved`,
           timestamp: autonomy.lastApprovedAt,
         });
       }
@@ -563,6 +563,9 @@ function RecentDecisionsSection({ projects }: { projects: any[] }) {
 // ─── MAIN PAGE ──────────────────────────────────────────────────────────────
 
 export default function HomePage() {
+  // Feature-flag dispatch for mobile-first UX was removed — the /tabs/* routes
+  // were never built. Flag remains reserved for v0.14+ Thread IA work.
+
   const wsConnected = useWSConnected();
   const storeData = useWSData<any>('store');
   const rawStatuses = useWSData<any>('activity-status');

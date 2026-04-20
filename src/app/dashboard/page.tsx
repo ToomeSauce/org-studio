@@ -4,14 +4,15 @@ import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 
 /**
- * Backward compat: /dashboard redirects to /projects (main app entry)
- * Note: The actual routes are in (dashboard)/ group, so the URL is just /projects
+ * Backward compat: /dashboard redirects to / (the home page).
+ * The actual home lives in the (dashboard) route group at `/` and renders
+ * Mission Statement, Needs Your Attention, Team Activity, etc.
  */
 export default function DashboardPage() {
   const router = useRouter();
 
   useEffect(() => {
-    router.replace('/projects');
+    router.replace('/');
   }, [router]);
 
   return null;

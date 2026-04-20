@@ -6,6 +6,7 @@ import { clsx } from 'clsx';
 import dynamic from 'next/dynamic';
 import { CoachingInsight } from '@/lib/coaching-insights';
 import { agentOwnedSections } from '@/lib/section-access';
+import { compareVersions } from '@/lib/version-utils';
 
 const TeamHealthSection = dynamic(() => import('@/components/TeamHealthSection'), {
   ssr: false,
@@ -183,7 +184,7 @@ export default function PerformancePage() {
 
     return results.sort((a, b) => {
       if (a.projectId !== b.projectId) return a.projectName.localeCompare(b.projectName);
-      return parseFloat(a.version) - parseFloat(b.version);
+      return compareVersions(a.version, b.version);
     });
   }, [storeData, selectedProject]);
 
@@ -343,7 +344,7 @@ export default function PerformancePage() {
                         className="border-b border-[var(--border-subtle)] hover:bg-[var(--bg-secondary)] transition-colors"
                       >
                         <td className="px-4 py-3 text-[var(--text-secondary)]">{v.projectName}</td>
-                        <td className="px-4 py-3 font-medium text-[var(--text-primary)]">v{v.version}</td>
+                        <td className="px-4 py-3 font-medium text-[var(--text-primary)]">{v.version}</td>
                         <td className="px-4 py-3 text-right text-[var(--text-secondary)]">{v.doneTasks}/{v.totalTasks}</td>
                         <td className="px-4 py-3 text-right text-[var(--text-secondary)] tabular-nums">{durationStr}</td>
                         <td className="px-4 py-3">
