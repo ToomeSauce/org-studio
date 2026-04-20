@@ -57,7 +57,7 @@ function formatFullDate(ts: number): string {
 function renderCommentWithMentions(content: string): React.ReactNode {
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
-  const regex = /(@\w+)/g;
+  const regex = /(?<![\w.])(@\w+)/g;
   let match;
 
   while ((match = regex.exec(content)) !== null) {

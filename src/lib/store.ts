@@ -428,7 +428,7 @@ export async function permanentlyDeleteTask(id: string): Promise<void> {
  * Returns array of mentioned agent names
  */
 export function extractMentions(content: string): string[] {
-  const regex = /@(\w+)/g;
+  const regex = /(?<![\w.])@(\w+)/g;
   const matches = content.match(regex);
   return matches ? matches.map(m => m.slice(1)) : [];
 }
