@@ -8,7 +8,6 @@ import { ArrowLeft, Loader, Pencil, X, Archive, ChevronRight, Plus } from 'lucid
 import { useWSData } from '@/lib/ws';
 import { getProjectStatusLabel } from '@/lib/vision-status';
 import { TaskDetailPanel } from '@/components/TaskDetailPanel';
-import { ProjectChat } from '@/components/ProjectChat';
 import { updateTask, addComment as addTaskComment, deleteTask } from '@/lib/store';
 import { isVersionInHorizon, formatVersion } from '@/lib/version-utils';
 import dynamic from 'next/dynamic';
@@ -29,9 +28,8 @@ interface Project {
   qaOwner?: string;
   currentVersion?: string;
   autonomy?: {
-    approvedThrough?: string | null; // New: version string up to which versions auto-advance
+    approvedThrough?: string | null; // version string up to which the agent may execute
     cadence?: string;
-    autoAdvance?: boolean;
     lastApprovedAt?: number;
     lastProposal?: any;
   };
@@ -131,7 +129,7 @@ function getProjectState(
         label: 'Sprint Complete',
         emoji: '🎉',
         color: 'green',
-        detail: `v${currentVersion} done — ready for v${nextVersion.version}`,
+        detail: `${currentVersion} done — ready for ${nextVersion.version}`,
       };
     }
     return {
@@ -151,7 +149,7 @@ function getProjectState(
     label: 'Running',
     emoji: '⚙️',
     color: 'blue',
-    detail: `v${currentVersion} — ${doneTasks.length}/${sprintTasks.length} tasks done`,
+    detail: `${currentVersion} — ${doneTasks.length}/${sprintTasks.length} tasks done`,
   };
 }
 
@@ -166,10 +164,6 @@ export default function ProjectDetailPage() {
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [showDetailPanel, setShowDetailPanel] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'chat'>(() => {
-    if (typeof window !== 'undefined' && window.location.hash.startsWith('#chat')) return 'chat';
-    return 'overview';
-  });
   const [editProject, setEditProject] = useState({ name: '', lifecycle: '', devOwner: '', visionOwner: '', qaOwner: '' });
   const [editLoading, setEditLoading] = useState(false);
   const [editingVision, setEditingVision] = useState(false);
@@ -434,7 +428,7 @@ export default function ProjectDetailPage() {
       // Gate: block launch if any items are missing planning tickets
       const draftItems = nextVersion.items?.filter((item: any) => !item.taskId) || [];
       if (draftItems.length > 0) {
-        alert(`Cannot launch v${nextVersion.version}: ${draftItems.length} item(s) need planning tickets before launch.`);
+        alert(`Cannot launch ${nextVersion.version}: ${draftItems.length} item(s) need planning tickets before launch.`);
         return;
       }
 
@@ -490,7 +484,6 @@ export default function ProjectDetailPage() {
             autonomy: {
               ...project.autonomy,
               approvedThrough: newApprovedThrough,
-              autoAdvance: !!newApprovedThrough,
             },
           },
         }),
@@ -608,7 +601,6 @@ export default function ProjectDetailPage() {
                           updates: {
                             autonomy: {
                               ...project.autonomy,
-                              autoAdvance: false,
                             },
                             currentVersion: null,
                           },
@@ -646,36 +638,6 @@ export default function ProjectDetailPage() {
             )}
           </div>
         </div>
-
-        {/* Tab strip: Overview | Chat */}
-        <div className="flex items-center gap-1 border-b border-[var(--border-color)] -mb-2">
-          {([
-            { id: 'overview' as const, label: 'Overview' },
-            { id: 'chat' as const, label: '💬 Chat' },
-          ]).map(t => (
-            <button
-              key={t.id}
-              onClick={() => {
-                setActiveTab(t.id);
-                if (t.id === 'chat' && !window.location.hash.startsWith('#chat')) {
-                  history.replaceState(null, '', '#chat-general');
-                } else if (t.id === 'overview' && window.location.hash.startsWith('#chat')) {
-                  history.replaceState(null, '', window.location.pathname);
-                }
-              }}
-              className={clsx(
-                'px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px',
-                activeTab === t.id
-                  ? 'border-[var(--accent-primary)] text-[var(--text-primary)]'
-                  : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
-              )}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-
-        {activeTab === 'overview' && (<>
 
         {/* No Roadmap Banner (#697) */}
         {!roadmapLoading && roadmapVersions.length === 0 && (
@@ -989,20 +951,6 @@ What makes a good proposal?
             )}
           </div>
         </details>
-
-        </>)}
-
-        {activeTab === 'chat' && (
-          <div className="rounded-2xl border border-[var(--border-color)] overflow-hidden bg-[var(--bg-primary)]" style={{ minHeight: '70vh' }}>
-            <ProjectChat
-              project={project}
-              tasks={allTasks}
-              agents={storeData?.settings?.teammates?.map((t: any) => t.name) || []}
-              nameColors={{}}
-              currentAuthor="You"
-            />
-          </div>
-        )}
 
         {/* Danger Zone */}
         <div className="rounded-2xl border border-red-200/50 dark:border-red-800/30 overflow-hidden">

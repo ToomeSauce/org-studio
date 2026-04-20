@@ -17,7 +17,6 @@ import TeammateDetailPanel from '@/components/TeammateDetailPanel';
 import { GiveKudosModal } from '@/components/GiveKudosModal';
 import { KudosBoard } from '@/components/KudosBoard';
 import { KudosLeaderboard } from '@/components/KudosLeaderboard';
-import { NewDmButton } from '@/components/NewDmButton';
 import { CURRENT_USER_ID } from '@/lib/dm';
 
 function PersonCard({ person, isActive, activityStatus, overrides, onSave, onUpdateTeammate, onRemove, taskCount, projectCount, isDisconnected, isGatewayAgent, onClick }: {
@@ -127,10 +126,7 @@ function PersonCard({ person, isActive, activityStatus, overrides, onSave, onUpd
             {person.isHuman && <span className="ml-auto" />}
             {!editing && !confirmingRemove && (
               <>
-                {/* DM button — skip if self */}
-                {person.id !== CURRENT_USER_ID && person.agentId !== CURRENT_USER_ID && (
-                  <NewDmButton participantId={person.agentId || person.id} participantName={person.name} />
-                )}
+                {/* DM button removed with Messages cleanup — threads coming back via v0.14 Mobile-First IA */}
                 <button onClick={(e) => { e.stopPropagation(); startEdit(); }} className="text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors" title="Edit">
                   <Pencil size={12} />
                 </button>
