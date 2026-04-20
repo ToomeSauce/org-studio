@@ -54,9 +54,9 @@ export async function GET(
         const result = await client.query(
           `SELECT id, version, title, status, items, shipped_at, sort_order, version_type
            FROM org_studio_roadmap_versions
-           WHERE project_id = $1
+           WHERE project_id = $1 AND workspace_id = $2
            ORDER BY sort_order ASC, version ASC`,
-          [projectId]
+          [projectId, 'default-workspace'] // TODO(v0.17-multi-workspace): resolve from request context
         );
 
         const versions: RoadmapVersion[] = result.rows.map((row: any) => ({
@@ -149,8 +149,8 @@ export async function POST(
           const resolvedVersionType = versionType || 'outcome';
           await client.query(
             `INSERT INTO org_studio_roadmap_versions 
-              (id, project_id, version, title, status, items, sort_order, created_at, version_type)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+              (id, project_id, version, title, status, items, sort_order, created_at, version_type, workspace_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
              ON CONFLICT (project_id, version) DO UPDATE SET
               title = EXCLUDED.title,
               status = EXCLUDED.status,
@@ -167,6 +167,7 @@ export async function POST(
               sortOrder,
               Date.now(),
               resolvedVersionType,
+              'default-workspace', // TODO(v0.17-multi-workspace): resolve from request context
             ]
           );
 
@@ -200,8 +201,8 @@ export async function POST(
           });
         } else if (action === 'delete') {
           await client.query(
-            'DELETE FROM org_studio_roadmap_versions WHERE project_id = $1 AND version = $2',
-            [projectId, version]
+            'DELETE FROM org_studio_roadmap_versions WHERE project_id = $1 AND version = $2 AND workspace_id = $3',
+            [projectId, version, 'default-workspace']
           );
 
           return NextResponse.json({ action: 'deleted', version });
@@ -210,8 +211,8 @@ export async function POST(
           // sort_order ASC = first in array appears first
           for (let i = 0; i < order.length; i++) {
             await client.query(
-              'UPDATE org_studio_roadmap_versions SET sort_order = $1 WHERE project_id = $2 AND version = $3',
-              [i + 1, projectId, order[i]]
+              'UPDATE org_studio_roadmap_versions SET sort_order = $1 WHERE project_id = $2 AND version = $3 AND workspace_id = $4',
+              [i + 1, projectId, order[i], 'default-workspace']
             );
           }
 

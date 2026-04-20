@@ -451,8 +451,8 @@ export async function POST(req: NextRequest) {
                 const { Pool } = await import('pg');
                 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
                 const result = await pool.query(
-                  `SELECT id, items FROM org_studio_roadmap_versions WHERE project_id = $1 AND version = $2 LIMIT 1`,
-                  [roadmapProjectId, taskVersion]
+                  `SELECT id, items FROM org_studio_roadmap_versions WHERE project_id = $1 AND version = $2 AND workspace_id = $3 LIMIT 1`,
+                  [roadmapProjectId, taskVersion, workspace.id]
                 );
                 await pool.end();
                 if (result.rows.length > 0) {
@@ -552,8 +552,8 @@ export async function POST(req: NextRequest) {
                 const { Pool } = await import('pg');
                 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
                 const result = await pool.query(
-                  `SELECT id, items FROM org_studio_roadmap_versions WHERE project_id = $1 AND version = $2 LIMIT 1`,
-                  [task.projectId, task.version]
+                  `SELECT id, items FROM org_studio_roadmap_versions WHERE project_id = $1 AND version = $2 AND workspace_id = $3 LIMIT 1`,
+                  [task.projectId, task.version, workspace.id]
                 );
                 if (result.rows.length > 0) {
                   const items = result.rows[0].items || [];
