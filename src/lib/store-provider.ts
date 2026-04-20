@@ -344,9 +344,11 @@ export class FileStoreProvider implements StoreProvider {
 export class PostgresStoreProvider implements StoreProvider {
   private connectionString: string;
   private pool: any;
+  private workspaceId: string;
 
-  constructor(connectionString: string) {
+  constructor(connectionString: string, workspaceId: string = 'default-workspace') {
     this.connectionString = connectionString;
+    this.workspaceId = workspaceId;
   }
 
   private async getPool() {
@@ -440,14 +442,16 @@ export class PostgresStoreProvider implements StoreProvider {
     const client = await pool.connect();
     try {
       const projectsResult = await client.query(
-        'SELECT * FROM org_studio_projects ORDER BY created_at'
+        'SELECT * FROM org_studio_projects WHERE workspace_id = $1 ORDER BY created_at',
+        [this.workspaceId]
       );
       const tasksResult = await client.query(
-        'SELECT * FROM org_studio_tasks ORDER BY created_at'
+        'SELECT * FROM org_studio_tasks WHERE workspace_id = $1 ORDER BY created_at',
+        [this.workspaceId]
       );
       const settingsResult = await client.query(
-        'SELECT data FROM org_studio_settings WHERE id = $1',
-        ['default']
+        'SELECT data FROM org_studio_settings WHERE id = $1 AND workspace_id = $2',
+        ['default', this.workspaceId]
       );
 
       const projects = projectsResult.rows.map((row: any) => this.reconstructProject(row));
@@ -473,8 +477,8 @@ export class PostgresStoreProvider implements StoreProvider {
     try {
       await client.query('BEGIN');
 
-      // Clear and rewrite projects
-      await client.query('DELETE FROM org_studio_projects');
+      // Clear and rewrite projects (scoped to workspace)
+      await client.query('DELETE FROM org_studio_projects WHERE workspace_id = $1', [this.workspaceId]);
       for (const project of data.projects) {
         const {
           id,
@@ -491,8 +495,8 @@ export class PostgresStoreProvider implements StoreProvider {
 
         await client.query(
           `INSERT INTO org_studio_projects
-           (id, name, description, phase, owner, priority, sort_order, created_at, created_by, data)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+           (id, name, description, phase, owner, priority, sort_order, created_at, created_by, data, workspace_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
           [
             id,
             name || null,
@@ -504,12 +508,13 @@ export class PostgresStoreProvider implements StoreProvider {
             createdAt || null,
             createdBy || null,
             JSON.stringify(overflow),
+            this.workspaceId,
           ]
         );
       }
 
-      // Clear and rewrite tasks
-      await client.query('DELETE FROM org_studio_tasks');
+      // Clear and rewrite tasks (scoped to workspace)
+      await client.query('DELETE FROM org_studio_tasks WHERE workspace_id = $1', [this.workspaceId]);
       for (const task of data.tasks) {
         const {
           id,
@@ -541,8 +546,8 @@ export class PostgresStoreProvider implements StoreProvider {
           `INSERT INTO org_studio_tasks
            (id, ticket_number, title, status, project_id, assignee, priority, test_type, test_assignee,
             initiated_by, description, done_when, constraints, test_plan, review_notes, loop_count,
-            loop_paused_at, loop_pause_reason, last_activity_at, created_at, status_history, comments, data)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
+            loop_paused_at, loop_pause_reason, last_activity_at, created_at, status_history, comments, data, workspace_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
           [
             id,
             ticketNumber || null,
@@ -567,14 +572,15 @@ export class PostgresStoreProvider implements StoreProvider {
             JSON.stringify(statusHistory || []),
             JSON.stringify(comments || []),
             JSON.stringify(overflow),
+            this.workspaceId,
           ]
         );
       }
 
-      // Update settings
+      // Update settings (scoped to workspace)
       await client.query(
-        'INSERT INTO org_studio_settings (id, data) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET data = $2',
-        ['default', JSON.stringify(data.settings || {})]
+        'INSERT INTO org_studio_settings (id, data, workspace_id) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET data = $2',
+        ['default', JSON.stringify(data.settings || {}), this.workspaceId]
       );
 
       await client.query('COMMIT');
@@ -617,8 +623,8 @@ export class PostgresStoreProvider implements StoreProvider {
 
       await client.query(
         `INSERT INTO org_studio_projects
-         (id, name, description, phase, owner, priority, sort_order, created_at, created_by, data)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+         (id, name, description, phase, owner, priority, sort_order, created_at, created_by, data, workspace_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
         [
           id,
           name || null,
@@ -630,6 +636,7 @@ export class PostgresStoreProvider implements StoreProvider {
           createdAt,
           createdBy,
           JSON.stringify(overflow),
+          this.workspaceId,
         ]
       );
 
@@ -655,8 +662,8 @@ export class PostgresStoreProvider implements StoreProvider {
     const client = await pool.connect();
     try {
       const result = await client.query(
-        'SELECT * FROM org_studio_projects WHERE id = $1',
-        [projectId]
+        'SELECT * FROM org_studio_projects WHERE id = $1 AND workspace_id = $2',
+        [projectId, this.workspaceId]
       );
       if (result.rows.length === 0) throw new Error(`Project not found: ${projectId}`);
 
@@ -680,7 +687,7 @@ export class PostgresStoreProvider implements StoreProvider {
         `UPDATE org_studio_projects
          SET name = $1, description = $2, phase = $3, owner = $4, priority = $5,
              sort_order = $6, created_at = $7, created_by = $8, data = $9
-         WHERE id = $10`,
+         WHERE id = $10 AND workspace_id = $11`,
         [
           name || null,
           description || null,
@@ -692,6 +699,7 @@ export class PostgresStoreProvider implements StoreProvider {
           createdBy || null,
           JSON.stringify(overflow),
           id,
+          this.workspaceId,
         ]
       );
 
@@ -709,7 +717,7 @@ export class PostgresStoreProvider implements StoreProvider {
     const pool = await this.getPool();
     const client = await pool.connect();
     try {
-      await client.query('DELETE FROM org_studio_projects WHERE id = $1', [projectId]);
+      await client.query('DELETE FROM org_studio_projects WHERE id = $1 AND workspace_id = $2', [projectId, this.workspaceId]);
     } finally {
       client.release();
     }
@@ -754,8 +762,8 @@ export class PostgresStoreProvider implements StoreProvider {
         `INSERT INTO org_studio_tasks
          (id, ticket_number, title, status, project_id, assignee, priority, test_type, test_assignee,
           initiated_by, description, done_when, constraints, test_plan, review_notes, loop_count,
-          loop_paused_at, loop_pause_reason, last_activity_at, created_at, status_history, comments, data)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
+          loop_paused_at, loop_pause_reason, last_activity_at, created_at, status_history, comments, data, workspace_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
         [
           id,
           ticketNumber || null,
@@ -780,6 +788,7 @@ export class PostgresStoreProvider implements StoreProvider {
           JSON.stringify(statusHistory || []),
           JSON.stringify(comments || []),
           JSON.stringify(overflow),
+          this.workspaceId,
         ]
       );
 
@@ -838,8 +847,8 @@ export class PostgresStoreProvider implements StoreProvider {
     const client = await pool.connect();
     try {
       const result = await client.query(
-        'SELECT * FROM org_studio_tasks WHERE id = $1',
-        [taskId]
+        'SELECT * FROM org_studio_tasks WHERE id = $1 AND workspace_id = $2',
+        [taskId, this.workspaceId]
       );
       if (result.rows.length === 0) throw new Error(`Task not found: ${taskId}`);
 
@@ -880,7 +889,7 @@ export class PostgresStoreProvider implements StoreProvider {
              done_when = $11, constraints = $12, test_plan = $13, review_notes = $14, loop_count = $15,
              loop_paused_at = $16, loop_pause_reason = $17, last_activity_at = $18, created_at = $19,
              version = $20, status_history = $21, comments = $22, data = $23
-         WHERE id = $24`,
+         WHERE id = $24 AND workspace_id = $25`,
         [
           ticketNumber || null,
           title || null,
@@ -906,6 +915,7 @@ export class PostgresStoreProvider implements StoreProvider {
           JSON.stringify(comments || []),
           JSON.stringify(overflow),
           id,
+          this.workspaceId,
         ]
       );
 
@@ -931,7 +941,7 @@ export class PostgresStoreProvider implements StoreProvider {
     const pool = await this.getPool();
     const client = await pool.connect();
     try {
-      await client.query('DELETE FROM org_studio_tasks WHERE id = $1', [taskId]);
+      await client.query('DELETE FROM org_studio_tasks WHERE id = $1 AND workspace_id = $2', [taskId, this.workspaceId]);
     } finally {
       client.release();
     }
@@ -984,8 +994,8 @@ export class PostgresStoreProvider implements StoreProvider {
       // 2. For task-scoped comments, also write inline on the task (dual-write)
       if (scope.kind === 'task' && scope.taskId) {
         const result = await client.query(
-          'SELECT * FROM org_studio_tasks WHERE id = $1',
-          [scope.taskId]
+          'SELECT * FROM org_studio_tasks WHERE id = $1 AND workspace_id = $2',
+          [scope.taskId, this.workspaceId]
         );
         if (result.rows.length === 0) throw new Error(`Task not found: ${scope.taskId}`);
 
@@ -1131,8 +1141,8 @@ export class PostgresStoreProvider implements StoreProvider {
     const client = await pool.connect();
     try {
       const result = await client.query(
-        'SELECT data FROM org_studio_settings WHERE id = $1',
-        ['default']
+        'SELECT data FROM org_studio_settings WHERE id = $1 AND workspace_id = $2',
+        ['default', this.workspaceId]
       );
       const rawData = result.rows[0]?.data;
       const current = rawData
@@ -1141,8 +1151,8 @@ export class PostgresStoreProvider implements StoreProvider {
       const updated = { ...current, ...updates };
 
       await client.query(
-        'INSERT INTO org_studio_settings (id, data) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET data = $2',
-        ['default', JSON.stringify(updated)]
+        'INSERT INTO org_studio_settings (id, data, workspace_id) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET data = $2',
+        ['default', JSON.stringify(updated), this.workspaceId]
       );
 
       // Emit NOTIFY event for bidirectional sync
@@ -1168,7 +1178,7 @@ export class PostgresStoreProvider implements StoreProvider {
     const pool = await this.getPool();
     const client = await pool.connect();
     try {
-      const result = await client.query('SELECT * FROM org_studio_projects WHERE id = $1', [projectId]);
+      const result = await client.query('SELECT * FROM org_studio_projects WHERE id = $1 AND workspace_id = $2', [projectId, this.workspaceId]);
       if (result.rows.length === 0) throw new Error(`Project not found: ${projectId}`);
       const current = this.reconstructProject(result.rows[0]);
       const id = section.id || `sec-${Math.random().toString(36).slice(2, 10)}`;
@@ -1186,7 +1196,7 @@ export class PostgresStoreProvider implements StoreProvider {
     const pool = await this.getPool();
     const client = await pool.connect();
     try {
-      const result = await client.query('SELECT * FROM org_studio_projects WHERE id = $1', [projectId]);
+      const result = await client.query('SELECT * FROM org_studio_projects WHERE id = $1 AND workspace_id = $2', [projectId, this.workspaceId]);
       if (result.rows.length === 0) throw new Error(`Project not found: ${projectId}`);
       const current = this.reconstructProject(result.rows[0]);
       const section = (current.sections || []).find((s: any) => s.id === sectionId);
@@ -1202,7 +1212,7 @@ export class PostgresStoreProvider implements StoreProvider {
     const pool = await this.getPool();
     const client = await pool.connect();
     try {
-      const result = await client.query('SELECT * FROM org_studio_projects WHERE id = $1', [projectId]);
+      const result = await client.query('SELECT * FROM org_studio_projects WHERE id = $1 AND workspace_id = $2', [projectId, this.workspaceId]);
       if (result.rows.length === 0) throw new Error(`Project not found: ${projectId}`);
       const current = this.reconstructProject(result.rows[0]);
       const sections = current.sections || [];
@@ -1224,7 +1234,7 @@ export class PostgresStoreProvider implements StoreProvider {
     const pool = await this.getPool();
     const client = await pool.connect();
     try {
-      const result = await client.query('SELECT * FROM org_studio_projects WHERE id = $1', [projectId]);
+      const result = await client.query('SELECT * FROM org_studio_projects WHERE id = $1 AND workspace_id = $2', [projectId, this.workspaceId]);
       if (result.rows.length === 0) throw new Error(`Project not found: ${projectId}`);
       const current = this.reconstructProject(result.rows[0]);
       const sections = current.sections || [];
@@ -1239,7 +1249,7 @@ export class PostgresStoreProvider implements StoreProvider {
     const pool = await this.getPool();
     const client = await pool.connect();
     try {
-      const result = await client.query('SELECT * FROM org_studio_projects WHERE id = $1', [projectId]);
+      const result = await client.query('SELECT * FROM org_studio_projects WHERE id = $1 AND workspace_id = $2', [projectId, this.workspaceId]);
       if (result.rows.length === 0) throw new Error(`Project not found: ${projectId}`);
       const current = this.reconstructProject(result.rows[0]);
       const currentSections = current.sections || [];
@@ -1439,13 +1449,13 @@ export class PostgresStoreProvider implements StoreProvider {
 /**
  * Factory function to create the right provider based on environment
  */
-export function createStoreProvider(): StoreProvider {
+export function createStoreProvider(workspaceId: string = 'default-workspace'): StoreProvider {
   const dbUrl = process.env.DATABASE_URL;
   const storePath = process.env.STORE_PATH || join(process.cwd(), 'data', 'store.json');
 
   if (dbUrl) {
     console.log('Using Postgres store provider');
-    return new PostgresStoreProvider(dbUrl);
+    return new PostgresStoreProvider(dbUrl, workspaceId);
   }
 
   console.log('Using file store provider');
