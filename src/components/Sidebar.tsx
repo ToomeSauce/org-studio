@@ -1,16 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { clsx } from 'clsx';
 import {
-  LayoutDashboard, FolderKanban, Layers, Settings, ChevronLeft, ChevronRight, Atom,
-  LogOut, X, Menu, Lock, ChevronDown, Users, BarChart3, Activity, MessageCircle,
+  LayoutDashboard, FolderKanban, Layers, ChevronLeft, ChevronRight, Atom,
+  X, Users, BarChart3, Activity,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
-import { useGateway } from '@/lib/hooks';
-import { useWSConnected } from '@/lib/ws';
-import { useWSData } from '@/lib/ws';
 import { useMobileMenu } from '@/lib/mobile-menu-context';
 
 // New 5-item navigation structure
@@ -19,26 +16,18 @@ const mainNav = [
   { name: 'Projects', href: '/projects', icon: FolderKanban, emoji: '📋' },
   { name: 'Context', href: '/context', icon: Layers, emoji: '📊' },
   { name: 'Team', href: '/team', icon: Users, emoji: '👥' },
-  { name: 'Messages', href: '/dms', icon: MessageCircle, emoji: '💬' },
   { name: 'Performance', href: '/performance', icon: BarChart3, emoji: '📊' },
 ];
 
 const bottomNav = [
   { name: 'Health', href: '/health', icon: Activity, emoji: '🩺' },
-  { name: 'Settings', href: '/settings', icon: Settings, emoji: '⚙️' },
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
-  const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
-  const [loggingOut, setLoggingOut] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
-  const { state } = useGateway();
-  const wsConnected = useWSConnected();
   const { mobileOpen, setMobileOpen } = useMobileMenu();
-  const storeData = useWSData('store');
-  const projects = storeData?.projects || [];
 
   // Close mobile menu when pathname changes
   useEffect(() => {
@@ -55,17 +44,6 @@ export function Sidebar() {
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
-
-  const handleLogout = async () => {
-    setLoggingOut(true);
-    try {
-      await fetch('/api/auth/logout', { method: 'POST' });
-      router.push('/login');
-    } catch (e) {
-      console.error('Logout error:', e);
-      setLoggingOut(false);
-    }
-  };
 
   const SidebarContent = () => (
     <>
@@ -148,24 +126,6 @@ export function Sidebar() {
             </Link>
           );
         })}
-
-        {/* Logout Button */}
-        <button
-          onClick={handleLogout}
-          disabled={loggingOut}
-          aria-label={loggingOut ? 'Logging out' : 'Logout'}
-          className={clsx(
-            'w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] text-[var(--text-sm)] font-medium transition-all duration-100 min-h-[44px] md:min-h-auto',
-            'text-red-500 hover:bg-red-50 dark:hover:bg-red-900 dark:hover:bg-opacity-20 hover:text-red-600',
-            'disabled:opacity-50 disabled:cursor-not-allowed',
-            'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]',
-            collapsed && 'justify-center px-0'
-          )}
-          title={collapsed ? 'Logout' : undefined}
-        >
-          <LogOut size={17} className="shrink-0 opacity-70" />
-          {!collapsed && <span className="truncate">{loggingOut ? 'Logging out...' : 'Logout'}</span>}
-        </button>
       </div>
     </>
   );

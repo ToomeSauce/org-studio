@@ -4,11 +4,10 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   X, Bell, BellOff, Building2, LogOut, ChevronDown, ChevronRight,
-  Shield, Zap, AlertCircle, Settings, Monitor, Smartphone, Tablet,
+  Shield, AlertCircle, Settings, Monitor, Smartphone, Tablet,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { WorkspaceInfoCard, WorkspaceSwitcher } from '@/components/WorkspaceSwitcher';
-import { FEATURE_FLAGS, isFeatureEnabled, toggleFeatureFlag } from '@/lib/feature-flags';
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                             */
@@ -249,92 +248,10 @@ function NotificationSettings({ compact = false }: { compact?: boolean }) {
           />
         </div>
       ))}
-
-      {/* Feature flag callout */}
-      <div className="flex items-start gap-2 px-3 py-2.5 rounded-[var(--radius-md)] bg-[color-mix(in_srgb,var(--accent-primary)_5%,var(--bg-primary))] border border-[color-mix(in_srgb,var(--accent-primary)_15%,var(--border-default))] text-[var(--text-xs)] text-[var(--text-tertiary)]">
-        <Zap size={12} className="mt-0.5 shrink-0 text-[var(--accent-primary)]" />
-        <span>
-          Push notifications require the <strong>Push Notifications</strong> feature flag enabled in{' '}
-          <span className="text-[var(--accent-primary)] font-medium">Experimental Features</span>.
-        </span>
-      </div>
     </div>
   );
 }
 
-/* ------------------------------------------------------------------ */
-/*  Experimental Features Section (inline version)                    */
-/* ------------------------------------------------------------------ */
-
-function ExperimentalFlagsInline() {
-  const [flags, setFlags] = useState<Record<string, boolean>>({});
-  const [loaded, setLoaded] = useState(false);
-
-  useEffect(() => {
-    const f: Record<string, boolean> = {};
-    for (const flag of Object.values(FEATURE_FLAGS)) {
-      f[flag] = isFeatureEnabled(flag);
-    }
-    setFlags(f);
-    setLoaded(true);
-
-    const handler = (e: CustomEvent) => {
-      setFlags((prev) => ({ ...prev, [e.detail.flag]: e.detail.enabled }));
-    };
-    window.addEventListener('feature-flag-changed', handler as EventListener);
-    return () => window.removeEventListener('feature-flag-changed', handler as EventListener);
-  }, []);
-
-  if (!loaded) return null;
-
-  const flagMeta: Record<string, { label: string; desc: string }> = {
-    [FEATURE_FLAGS.MOBILE_FIRST_UX]: {
-      label: 'Mobile-First UX',
-      desc: 'Tab-based interface with threaded inbox',
-    },
-    [FEATURE_FLAGS.PUSH_NOTIFICATIONS]: {
-      label: 'Push Notifications',
-      desc: 'Desktop/mobile push for task updates',
-    },
-    [FEATURE_FLAGS.TELEGRAM_MIGRATION]: {
-      label: 'Telegram Migration',
-      desc: 'Tools to migrate from Telegram',
-    },
-  };
-
-  return (
-    <div className="space-y-2 mt-2">
-      {Object.entries(flags).map(([flag, enabled]) => {
-        const meta = flagMeta[flag];
-        if (!meta) return null;
-        return (
-          <div
-            key={flag}
-            className="flex items-center justify-between gap-3 px-3 py-2 rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] transition-colors"
-          >
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-1.5">
-                <p className="text-[var(--text-xs)] font-medium text-[var(--text-primary)]">{meta.label}</p>
-                <span className="inline-flex items-center px-1.5 py-0.5 rounded-full bg-amber-500/10 text-[9px] font-medium text-amber-400 uppercase tracking-wider">
-                  Beta
-                </span>
-              </div>
-              <p className="text-[var(--text-xs)] text-[var(--text-tertiary)] mt-0.5">{meta.desc}</p>
-            </div>
-            <Toggle
-              enabled={enabled}
-              onChange={() => {
-                toggleFeatureFlag(flag as any);
-                setFlags((prev) => ({ ...prev, [flag]: !prev[flag] }));
-              }}
-              label={`Toggle ${meta.label}`}
-            />
-          </div>
-        );
-      })}
-    </div>
-  );
-}
 
 /* ------------------------------------------------------------------ */
 /*  Logout Confirmation                                               */
@@ -481,17 +398,6 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
 
       <hr className="border-[var(--border-subtle)]" />
 
-      {/* Experimental Features */}
-      <section>
-        <div className="flex items-center gap-2 mb-1">
-          <Zap size={16} className="text-[var(--text-secondary)]" />
-          <h3 className="text-[var(--text-sm)] font-semibold text-[var(--text-primary)]">Experimental Features</h3>
-        </div>
-        <ExperimentalFlagsInline />
-      </section>
-
-      <hr className="border-[var(--border-subtle)]" />
-
       {/* Advanced link */}
       <section>
         <div className="flex items-center gap-2 mb-2">
@@ -529,11 +435,6 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
       {/* Notifications */}
       <AccordionSection title="Notifications" icon={Bell} defaultOpen>
         <NotificationSettings />
-      </AccordionSection>
-
-      {/* Experimental */}
-      <AccordionSection title="Experimental Features" icon={Zap}>
-        <ExperimentalFlagsInline />
       </AccordionSection>
 
       {/* Advanced link */}

@@ -1,6 +1,5 @@
 'use client';
 
-import { FeatureFlagsSection } from '@/components/FeatureFlagsSection';
 import { PageHeader } from '@/components/PageHeader';
 import { useWSData } from '@/lib/ws';
 import { useState, useEffect, useMemo, useCallback } from 'react';
@@ -633,10 +632,6 @@ export default function SettingsPage() {
 
       {/* Backup History */}
       <BackupHistorySection />
-      {/* Feature Flags */}
-      <section className="bg-[var(--card)] border border-[var(--border-default)] rounded-[var(--radius-lg)] p-5 space-y-3 shadow-[var(--shadow-sm),inset_0_1px_0_var(--card-highlight)]">
-        <FeatureFlagsSection />
-      </section>
 
 
       {/* Advanced Section */}
