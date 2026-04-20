@@ -61,11 +61,14 @@ export async function enqueueOutbox(params: EnqueueOutboxParams): Promise<string
     ...(params.onCompleteKind ? { onCompleteKind: params.onCompleteKind } : {}),
   };
 
+  // TODO(v0.17-multi-workspace): resolve workspace from request context when available
+  const workspaceId = 'default-workspace';
+
   await pool.query(
-    `INSERT INTO org_studio_outbox (id, idempotency_key, agent_id, payload, status, attempts, next_attempt_at, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, 'pending', 0, NOW(), NOW(), NOW())
+    `INSERT INTO org_studio_outbox (id, idempotency_key, agent_id, payload, status, attempts, next_attempt_at, created_at, updated_at, workspace_id)
+     VALUES ($1, $2, $3, $4, 'pending', 0, NOW(), NOW(), NOW(), $5)
      ON CONFLICT (idempotency_key) DO NOTHING`,
-    [id, params.idempotencyKey, params.agentId, JSON.stringify(payload)]
+    [id, params.idempotencyKey, params.agentId, JSON.stringify(payload), workspaceId]
   );
 
   return id;

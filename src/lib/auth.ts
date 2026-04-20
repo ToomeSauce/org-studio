@@ -96,8 +96,8 @@ export async function getSession(sessionToken: string): Promise<{ userId: string
       await client.connect();
       try {
         const result = await client.query(
-          'SELECT user_id, expires_at FROM org_studio_sessions WHERE token = $1',
-          [sessionToken]
+          'SELECT user_id, expires_at FROM org_studio_sessions WHERE token = $1 AND workspace_id = $2',
+          [sessionToken, 'default-workspace'] // TODO(v0.17-multi-workspace): sessions are workspace-scoped
         );
         if (result.rows.length === 0) return null;
 
@@ -108,7 +108,7 @@ export async function getSession(sessionToken: string): Promise<{ userId: string
         
         if (expiresAt < Date.now()) {
           // Session expired — delete it
-          await client.query('DELETE FROM org_studio_sessions WHERE token = $1', [sessionToken]);
+          await client.query('DELETE FROM org_studio_sessions WHERE token = $1 AND workspace_id = $2', [sessionToken, 'default-workspace']);
           return null;
         }
 
@@ -152,8 +152,8 @@ export async function createSession(
       await client.connect();
       try {
         await client.query(
-          'INSERT INTO org_studio_sessions (token, user_id, expires_at) VALUES ($1, $2, $3)',
-          [token, userId, expiresAt]
+          'INSERT INTO org_studio_sessions (token, user_id, expires_at, workspace_id) VALUES ($1, $2, $3, $4)',
+          [token, userId, expiresAt, 'default-workspace'] // TODO(v0.17-multi-workspace): sessions are workspace-scoped
         );
         return token;
       } finally {
@@ -183,7 +183,7 @@ export async function destroySession(sessionToken: string): Promise<void> {
       const client = new pg.Client(process.env.DATABASE_URL);
       await client.connect();
       try {
-        await client.query('DELETE FROM org_studio_sessions WHERE token = $1', [sessionToken]);
+        await client.query('DELETE FROM org_studio_sessions WHERE token = $1 AND workspace_id = $2', [sessionToken, 'default-workspace']);
         return;
       } finally {
         await client.end();

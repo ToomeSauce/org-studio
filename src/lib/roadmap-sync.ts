@@ -52,11 +52,12 @@ export async function syncRoadmapItemForTask(
     const client = await pool.connect();
     try {
       // Find all roadmap versions for this project that mention this taskId
+      // Note: roadmap_versions are scoped by project_id; workspace_id guard applied
       const result = await client.query(
         `SELECT id, version, status, items, sort_order
          FROM org_studio_roadmap_versions
-         WHERE project_id = $1`,
-        [projectId],
+         WHERE project_id = $1 AND workspace_id = $2`,
+        [projectId, 'default-workspace'], // TODO(v0.17-multi-workspace): resolve from caller context
       );
 
       let changed = false;
@@ -124,10 +125,10 @@ export async function checkAndAutoAdvance(
     const versionResult = await client.query(
       `SELECT id, version, status, items, sort_order
        FROM org_studio_roadmap_versions
-       WHERE project_id = $1 AND status = 'current'
+       WHERE project_id = $1 AND status = 'current' AND workspace_id = $2
        ORDER BY sort_order ASC
        LIMIT 1`,
-      [projectId],
+      [projectId, 'default-workspace'], // TODO(v0.17-multi-workspace): resolve from caller context
     );
 
     if (versionResult.rows.length === 0) return; // no current version
@@ -142,17 +143,16 @@ export async function checkAndAutoAdvance(
     // 2. Ship the current version
     const shippedAt = Date.now();
     await client.query(
-      `UPDATE org_studio_roadmap_versions
-       SET status = 'shipped', shipped_at = $1
-       WHERE id = $2`,
-      [String(shippedAt), current.id],
+      `UPDATE org_studio_roadmap_versions SET status = 'shipped', shipped_at = $1
+       WHERE id = $2 AND workspace_id = $3`,
+      [String(shippedAt), current.id, 'default-workspace'],
     );
     console.log(`[AutoAdvance] ${projectId}: v${current.version} shipped`);
 
     // 3. Read project autonomy
     const projResult = await client.query(
-      `SELECT data FROM org_studio_projects WHERE id = $1`,
-      [projectId],
+      `SELECT data FROM org_studio_projects WHERE id = $1 AND workspace_id = $2`,
+      [projectId, 'default-workspace'],
     );
     if (projResult.rows.length === 0) return;
 
@@ -176,10 +176,10 @@ export async function checkAndAutoAdvance(
     const nextResult = await client.query(
       `SELECT id, version, status, items, sort_order
        FROM org_studio_roadmap_versions
-       WHERE project_id = $1 AND status = 'planned' AND sort_order > $2
+       WHERE project_id = $1 AND status = 'planned' AND sort_order > $2 AND workspace_id = $3
        ORDER BY sort_order ASC
        LIMIT 1`,
-      [projectId, current.sort_order],
+      [projectId, current.sort_order, 'default-workspace'],
     );
 
     if (nextResult.rows.length === 0) {
@@ -219,8 +219,8 @@ export async function checkAndAutoAdvance(
 
     // 7. Launch the next version
     await client.query(
-      `UPDATE org_studio_roadmap_versions SET status = 'current' WHERE id = $1`,
-      [next.id],
+      `UPDATE org_studio_roadmap_versions SET status = 'current' WHERE id = $1 AND workspace_id = $2`,
+      [next.id, 'default-workspace'],
     );
 
     // 8. Move linked tasks from planning → backlog
@@ -233,8 +233,8 @@ export async function checkAndAutoAdvance(
     for (const tid of taskIds) {
       try {
         const taskRes = await client.query(
-          `SELECT id, status FROM org_studio_tasks WHERE id = $1`,
-          [tid],
+          `SELECT id, status FROM org_studio_tasks WHERE id = $1 AND workspace_id = $2`,
+          [tid, 'default-workspace'],
         );
         if (taskRes.rows.length > 0 && taskRes.rows[0].status === 'planning') {
           await client.query(
@@ -242,8 +242,8 @@ export async function checkAndAutoAdvance(
              SET status = 'backlog',
                  version = $1,
                  assignee = COALESCE(NULLIF(assignee, ''), $2)
-             WHERE id = $3`,
-            [next.version, devOwner, tid],
+             WHERE id = $3 AND workspace_id = $4`,
+            [next.version, devOwner, tid, 'default-workspace'],
           );
           movedCount++;
         }
@@ -259,8 +259,8 @@ export async function checkAndAutoAdvance(
     try {
       projData.currentVersion = next.version;
       await client.query(
-        `UPDATE org_studio_projects SET data = $1 WHERE id = $2`,
-        [JSON.stringify(projData), projectId],
+        `UPDATE org_studio_projects SET data = $1 WHERE id = $2 AND workspace_id = $3`,
+        [JSON.stringify(projData), projectId, 'default-workspace'],
       );
     } catch (err: any) {
       console.error('[AutoAdvance] Failed to update project currentVersion:', err?.message);

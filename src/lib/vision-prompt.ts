@@ -39,8 +39,8 @@ async function readVisionDoc(project: Project): Promise<string | null> {
       await client.connect();
       try {
         const result = await client.query(
-          'SELECT content FROM org_studio_vision_docs WHERE project_id = $1',
-          [project.id]
+          'SELECT content FROM org_studio_vision_docs WHERE project_id = $1 AND workspace_id = $2',
+          [project.id, 'default-workspace'] // TODO(v0.17-multi-workspace): resolve from caller context
         );
         if (result.rows.length > 0) {
           return result.rows[0].content;
