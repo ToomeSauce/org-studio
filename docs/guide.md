@@ -49,10 +49,7 @@ Navigate to **Settings → Team** to add teammates. Each teammate has:
 
 ### Special Roles
 
-Setting `role: "qa"` on a teammate enables **QA-specific scheduler behavior**:
-- Scheduler prompts emphasize scanning the QA column first
-- Test plan execution and bounce-back rules replace code-writing instructions
-- The agent is guided to validate rather than implement
+Setting `role: "qa"` on a teammate marks them as a QA owner. Their tickets still flow through the standard `backlog → in-progress → done` path; the role is used for scheduler prompts (validation-oriented rather than code-writing) and for team-level defaults when no explicit `testAssignee` is set.
 
 ### ORG.md Auto-Sync
 
@@ -93,58 +90,51 @@ This replaces the need for a separate AGENTS.md for Org Studio concerns. Your ag
 
 ### Columns
 
-Tasks flow through a simple kanban. The default path is **backlog → in-progress → done**. Review, Planning, and QA are optional lanes used only when the work warrants them.
+Tasks flow through a simple 5-column kanban. The default path is **backlog → in-progress → done**. Review and Planning are optional lanes.
 
 | Column | Owner | Purpose |
 |--------|-------|---------|
-| **Planning** | Agents + Humans | Scoping and spec work. Agents ARE encouraged to pull from planning, scope the task, and move it to backlog. |
+| **Planning** | Agents + Humans | Scoping and spec work. Agents are encouraged to pull from planning, scope the task, and move it to backlog. |
 | **Backlog** | Agents | Ready for pickup. Agent intake queue. |
 | **In Progress** | Agents | Actively being worked. |
-| **QA** | QA Agent | Optional. For tasks with `testType: qa` — end-to-end user-facing test validation. |
-| **Review** | Humans | **OPT-IN ONLY.** For irreversible, cross-domain, mission-level, or security-sensitive work. Agent sets `needsReview: true` + writes `reviewNotes`. |
+| **Review** | Humans | **OPT-IN ONLY.** For **irreversible** or **security-sensitive** work. Agent sets `needsReview: true` + writes `reviewNotes`. |
 | **Done** | — | **Default destination for finished work.** |
+
+### QA is a component, not a column
+
+QA work runs through the **same columns** as every other ticket. A project may have a QA component with its own owner; the QA owner's tickets live in `backlog → in-progress → done` alongside dev work, distinguished by assignee (and optionally component/label), not by a separate column. Coordination between dev owner and QA owner happens via comment pings.
 
 ### Key Rules
 - **Default path is backlog → in-progress → done.** Review is opt-in.
 - **Planning is agent-encouraged.** Agents pull from planning, flesh out acceptance criteria, then move to backlog.
 - **Backlog is the intake queue.** Agents pick from the top first.
-- **QA column** is opt-in via `testType: qa` on a task.
-- **Review is triggered only by `needsReview: true`.** Set it when work is (a) irreversible, (b) cross-domain, (c) mission/vision/roadmap-level, (d) security-sensitive.
+- **Review is triggered only by `needsReview: true`.** Set it only when work is (a) **irreversible** (DB migrations, deletions, billing, external writes with cost) or (b) **security-sensitive** (auth, secrets, permissions). Cross-domain coordination is handled via comment pings, not Review. Direction changes happen in the vision doc / roadmap.
+- **Blocked** is a separate status for work waiting on an external answer — not the same as Review.
 - Task order determines priority within a column.
 
 ### Primary Directive
-Org Studio exists to unlock continuous agent delivery. After mission, vision, domain ownership, and boundaries are set, agents deliver autonomously. Human involvement is for blockers, irreversible decisions, and cross-domain changes — not routine work in an agent's owned domain.
+Org Studio exists to unlock continuous agent delivery. After mission, vision, domain ownership, and boundaries are set, agents deliver autonomously. Human involvement is for irreversible and security-sensitive calls — not routine work in an agent's owned domain.
 
 ---
 
 ## Testing
 
-Every task gets tested. The variable is _type_, not _whether_ testing happens.
+Every task gets tested before leaving in-progress. The agent self-tests, documents results, and ships.
 
-### Test Types
+### How to test
 
-**`testType: "self"` (default)**
-- Developer writes a test plan in the `testPlan` field
-- Developer executes the plan themselves (curl endpoints, check builds, verify output)
-- Results are documented in `reviewNotes`
-- Task moves to review or done
+- Write a brief test plan (in `testPlan` or a comment).
+- Execute it yourself: curl endpoints, check builds, verify output, run the relevant UI path.
+- Document results in `reviewNotes` or a final comment.
+- Move to **done** (or review if `needsReview` applies).
 
-**`testType: "qa"`**
-- Developer self-tests first (basic sanity)
-- Developer writes a test plan describing end-user verification steps
-- Task moves to the **QA** column (not review)
-- QA agent picks it up and executes the test plan
+### QA component projects
 
-### Test Assignee Resolution
-
-When a task needs QA, the test assignee is resolved in order:
-1. **Explicit** — `testAssignee` field on the task
-2. **Team default** — teammate with `role: "qa"`
-3. **Self** — developer tests it themselves
+For projects with a QA component owner, QA tickets are **ordinary tickets** assigned to the QA owner. They run through `backlog → in-progress → done` just like dev tickets. If a dev ticket wants a cross-check from the QA owner before shipping, the dev agent pings the QA owner in a comment — no column change.
 
 ### Bounce-Back
 
-If a QA agent finds basic failures (500 errors, build breaks, missing endpoints), they bounce the task back to in-progress with a comment explaining what's broken. No point running a full test plan on broken fundamentals.
+If you discover another agent's shipped work has basic failures (500s, build breaks, missing endpoints), comment on the original ticket (or open a bug ticket) rather than reopening it. Don't run deep validation on broken fundamentals — flag the basic break first.
 
 ### Test Plans
 
@@ -175,15 +165,14 @@ When a task lands in an agent's backlog, the dispatcher sends a focused task mes
 - **Loop detection** — stalled tasks auto-pause after repeated attempts
 - **Global sweep** — safety net checks for orphaned/stuck work
 
-### QA Agent Prompts
+### QA Owner Prompts
 
-Agents with `role: "qa"` automatically receive QA-specific scheduler prompts:
-- Scan QA column first (instead of backlog)
+Agents with `role: "qa"` automatically receive validation-oriented scheduler prompts:
 - Execute test plans (instead of writing code)
 - Bounce-back rules for broken basics
 - Failure reporting guidelines
 
-No manual prompt configuration needed — just set the role.
+Their tickets flow through the standard columns — the role shapes *how they work*, not *where their tickets live*. No manual prompt configuration needed; just set the role.
 
 ### Prompt Sections
 
@@ -264,7 +253,7 @@ When autonomy is enabled for a project, Org Studio runs a version improvement cy
    - Sprint topic created in Telegram (if configured) with version info
    - The event-driven scheduler fires immediately for the dev agent
 
-4. **Execute** — The dev agent works through the tasks using the normal Context Board workflow (backlog → in-progress → QA → review → done). All status changes post to the sprint topic (if configured).
+4. **Execute** — The dev agent works through the tasks using the normal Context Board workflow (backlog → in-progress → done). QA component tickets (if any) run the same path, owned by the QA owner. All status changes post to the sprint topic (if configured).
 
 5. **Complete** — When all tasks for the version are done:
    - VISION.md is auto-updated (version marked as shipped, items checked off)

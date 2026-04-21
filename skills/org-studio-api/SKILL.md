@@ -27,8 +27,6 @@ Org Studio uses **push-based triggers** — not polling. When work lands in an a
 
 **What triggers automatically:**
 - Task created/moved to `backlog` → assigned agent wakes immediately
-- Task moves to `qa` → QA agent wakes
-- Task bounces from QA → dev agent wakes
 - Task reassigned while in-progress → new assignee wakes
 - Version approved/launched → creates backlog tasks + triggers dev agent
 - All version tasks complete → project pauses, human launches next version
@@ -65,29 +63,34 @@ For detailed API schemas and examples, read `references/api-reference.md` in thi
 
 ## Columns
 
-Org Studio's context board has six columns. Each has a specific contract.
+Org Studio's context board has **five columns**. Each has a specific contract.
 
 | Column | Who owns it | What it means |
 |---|---|---|
 | **Planning** | Humans + agents | Scoping column. Tasks here are being refined. **Agents ARE encouraged to pull from planning**, flesh out acceptance criteria / constraints / context, and move to backlog when ready for execution. If a task lacks enough context to scope, post a comment asking instead of guessing. |
 | **Backlog** | Agents | Ready-for-work queue. Pull from the top (highest priority first). |
 | **In Progress** | Agents | Actively being worked. Move here only AFTER work starts — do not claim speculatively. |
-| **QA** | QA agent (e.g. Billy) | Tasks with `testType: qa` land here after dev finishes. QA agent verifies end-user behavior. |
-| **Review** | Humans | OPT-IN ONLY. For irreversible/cross-domain/security-sensitive work. Agent sets `needsReview: true` + writes `reviewNotes`. |
+| **Review** | Humans | OPT-IN ONLY. For **irreversible** or **security-sensitive** work. Agent sets `needsReview: true` + writes `reviewNotes`. |
 | **Done** | — | Complete and verified. **DEFAULT destination** for finished work. |
 
 **Default agent path: backlog → in-progress → done.**
 Review is opt-in. Ship directly to done for reversible work in your owned domain.
 
+### QA is a component, not a column
+
+Projects may have a **QA component** with its own owner. QA tickets follow the **same default path** as every other ticket: backlog → in-progress → done, owned by the QA component owner (the ticket's `assignee`). Do not route QA work to a separate column — it runs as an independent workflow within the project, same columns, different owner. If a dev ticket needs cross-checking by the QA owner, coordinate via comment pings, not column hops.
+
 ### When to use Review (opt-in)
 
 Set `needsReview: true` and `reviewReason: "<why>"` at task start (or mid-work if scope changes). Move to **review** instead of **done** ONLY when:
 - **(a) Irreversible** — DB migrations, deletions, money/billing, external API writes with cost
-- **(b) Cross-domain** — touching another agent's owned code/section
-- **(c) Mission/vision/roadmap** direction changes
-- **(d) Security-sensitive** changes
+- **(b) Security-sensitive** — auth, secrets, permissions, exposed endpoints
 
-When in doubt about reversibility, use review. Everything else ships directly to done.
+That's it. **Cross-domain work** is handled via comment @-pings to the relevant owner — no column change needed. **Direction changes** (mission/vision/roadmap) happen in the vision doc / roadmap, not via board review. When in doubt about reversibility, use review. Everything else ships directly to done.
+
+### Blocked is a separate status, not Review
+
+If a task is stuck waiting on an external answer or dependency, move it to **blocked** (dedicated status) with a comment explaining what's needed. Blocked ≠ Review. Review is for human sign-off on finished work; blocked is for work that can't proceed.
 
 ## Work Loop
 
@@ -97,23 +100,23 @@ This is the canonical work loop for every agent session. Follow it exactly.
 2. **If nothing in-progress, scan backlog.** Pick the highest priority task.
    - Read the full task description AND all comments FIRST.
    - Only move to in-progress AFTER actual work starts. Do NOT claim tasks speculatively.
-3. **Check `testType` before moving out of in-progress:**
-   - `self` (default): self-test, write results in a comment or `reviewNotes`, move to done (or review if `needsReview: true`).
-   - `qa`: self-test first (basic sanity), write a `testPlan`, move to QA column.
-4. **When complete:** move to done (default) or review (if `needsReview: true`). Include `reviewNotes` when moving to review. Clear activity status.
+3. **Self-test before moving out of in-progress:**
+   - Write a test plan, execute it yourself (curl, build check, DB verify), document results in a comment or `reviewNotes`.
+   - If this is a QA-component ticket (your domain as QA owner), the testing IS the work — run it and move to done.
+4. **When complete:** move to done (default) or review (if `needsReview: true` per the opt-in rules above). Include `reviewNotes` when moving to review. Clear activity status.
 5. **If more backlog tasks remain**, continue with the next one.
 6. **If you run out of time mid-task**, leave it where it is. Status must reflect reality.
 7. **If you discover a follow-up task**, create it as adhoc (no `version`), do NOT expand scope of current task.
 
-**Task lifecycle:** `planning → backlog → in-progress → [qa] → done` (default) or `→ review → done` (opt-in)
+**Task lifecycle:** `planning → backlog → in-progress → done` (default) or `→ review → done` (opt-in for irreversible / security-sensitive)
 
 ## Testing — Every Task Gets Tested
 
-Every task must be tested before leaving in-progress. The variable is *type*, not *whether*.
+Every task must be tested before leaving in-progress. Self-test, document results, ship.
 
-- **`testType: self`** (default) — You write a test plan, execute it yourself (curl, build check, DB verify), document results in a comment or `reviewNotes`, move to done.
-- **`testType: qa`** — You still self-test first (basic sanity: build passes, no 500s), write a `testPlan` field for end-user verification, then move to **qa** column (not review). QA agent runs the user-facing tests.
-- **Never skip self-testing.** If QA gets a task with broken basics (500s, build fails), they'll bounce it back.
+- Write a test plan (in a comment or in `reviewNotes`), execute it yourself (curl, build check, DB verify), document results, move to done.
+- For projects with a **QA component**: the QA owner's tickets live in the normal backlog → in-progress → done flow, same as any other work. Coordinate with the dev owner via comment pings when needed.
+- **Never skip self-testing.** Broken basics (500s, build fails) in shipped work is a bounce-back.
 
 ## Short form summary
 

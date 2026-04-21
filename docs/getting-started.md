@@ -113,31 +113,27 @@ A task needs:
 
 ## Step 6: Watch It Move
 
-The **task board** shows your kanban workflow:
+The **task board** shows your kanban workflow (5 columns):
 
 | Column | Meaning |
 |--------|---------|
+| **Planning** | Being scoped / refined (optional) |
 | **Backlog** | Ready to start, waiting for someone to pull it |
 | **In Progress** | Being actively worked |
-| **QA** | Needs testing (only if `testType: qa`) |
-| **Review** | Built and tested, waiting for approval |
+| **Review** | Opt-in: waiting for human approval on irreversible or security-sensitive work |
 | **Done** | Shipped and verified |
 
 As you (or agents) work, drag tasks left-to-right. Each move is tracked with a timestamp and who moved it.
 
+> **QA is a component, not a column.** Projects with a QA component have a QA owner whose tickets flow through the same columns (backlog → in-progress → done), coordinated with the dev owner via comments.
+
 ### Testing Protocol
 
-Every task gets tested. Two ways:
+Every task gets tested before leaving in-progress.
 
-1. **Self-test** (`testType: self`, default)
-   - Dev builds it, tests it themselves (curl, build check, DB verify)
-   - Moves directly to review/done when ready
-
-2. **QA test** (`testType: qa`)
-   - Dev self-tests first (basic sanity)
-   - Then moves to **QA** column
-   - QA agent (or teammate) runs end-to-end user-facing tests
-   - If it breaks, bounces back to in-progress with feedback
+- The agent (dev or QA owner) writes a brief test plan, executes it (curl, build check, verify output), documents results in a comment or `reviewNotes`, and moves to **done**.
+- For projects with a QA component, the QA owner's tickets live in the normal backlog → in-progress → done flow. If a dev wants the QA owner to cross-check something before shipping, they ping the QA owner in a comment.
+- Basic failures (500s, build breaks) should be caught before marking done — if they slip through, file a bug ticket or comment on the original rather than reopening.
 
 ## Step 7: Invite Agents (Advanced)
 
