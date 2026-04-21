@@ -169,6 +169,18 @@ export async function POST(
           const versionId = `rv-${projectId}-${version.replace(/\./g, '-')}`;
           const sortOrder = versionSortKey(version);
 
+          // Ensure every item has an id. Older items were stored as {title, done, taskId}
+          // with no id field; agents hitting the API couldn't create versioned tasks against
+          // them (403 roadmapItemId required). Auto-mint here is safe: the UI's lazy-mint
+          // flow uses the same id shape, and ids are only added, never changed.
+          const itemsWithIds = (items || []).map((it: any) => {
+            if (it && typeof it === 'object' && !it.id) {
+              const newId = `item-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`;
+              return { ...it, id: newId };
+            }
+            return it;
+          });
+
           const resolvedVersionType = versionType || 'outcome';
           await client.query(
             `INSERT INTO org_studio_roadmap_versions 
@@ -186,7 +198,7 @@ export async function POST(
               version,
               title,
               status,
-              JSON.stringify(items || []),
+              JSON.stringify(itemsWithIds),
               sortOrder,
               Date.now(),
               resolvedVersionType,
@@ -317,12 +329,21 @@ function handleFileBasedRoadmap(
       const { version, title, status, items, versionType } = payload;
       const idx = data.versions.findIndex((v: any) => v.version === version);
 
+      // Mirror the Postgres path: auto-mint ids for items that don't have one.
+      const itemsWithIds = (items || []).map((it: any) => {
+        if (it && typeof it === 'object' && !it.id) {
+          const newId = `item-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`;
+          return { ...it, id: newId };
+        }
+        return it;
+      });
+
       const newVersion = {
         id: `rv-${projectId}-${version.replace(/\./g, '-')}`,
         version,
         title,
         status,
-        items,
+        items: itemsWithIds,
         sort_order: versionSortKey(version),
         version_type: versionType || 'outcome',
       };
