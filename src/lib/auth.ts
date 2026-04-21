@@ -209,6 +209,44 @@ export function getSessionTokenFromCookie(cookieHeader: string | null): string |
   return match ? match[1] : null;
 }
 
+// ── User ID Resolution ─────────────────────────────────────────────────
+// Browser sessions created before the login fix store auto-generated ids
+// (user-{timestamp}) which don't match workspace membership user_ids
+// (teammate usernames like 'basil'). This resolver maps them back.
+
+let _userIdMap: Map<string, string> | null = null;
+let _userIdMapTs = 0;
+const USER_ID_MAP_TTL = 60_000; // 1 minute
+
+export async function resolveSessionUserId(rawUserId: string): Promise<string> {
+  // Only resolve auto-generated ids; usernames pass through
+  if (!rawUserId.startsWith('user-')) return rawUserId;
+
+  if (!_userIdMap || Date.now() - _userIdMapTs > USER_ID_MAP_TTL) {
+    try {
+      const { getStoreProvider } = await import('@/lib/store-provider');
+      const store = await getStoreProvider().read();
+      const users = store.settings?.users || [];
+      _userIdMap = new Map();
+      for (const u of users as any[]) {
+        if (u.id && u.username) {
+          _userIdMap.set(u.id, u.username);
+        }
+      }
+      _userIdMapTs = Date.now();
+    } catch {
+      return rawUserId;
+    }
+  }
+  return _userIdMap.get(rawUserId) || rawUserId;
+}
+
+/** Bust user ID resolution cache (call after user settings change) */
+export function invalidateUserIdCache(): void {
+  _userIdMap = null;
+  _userIdMapTs = 0;
+}
+
 /** Result of authenticateRequestWithContext — includes userId and auth method */
 export interface AuthContext {
   userId: string;
@@ -267,7 +305,10 @@ export async function authenticateRequestWithContext(
   if (sessionToken) {
     const session = await getSession(sessionToken);
     if (session) {
-      return { context: { userId: session.userId, method: 'session' } };
+      // Resolve legacy auto-generated ids (user-*) back to username
+      // so session userId matches workspace membership user_id
+      const userId = await resolveSessionUserId(session.userId);
+      return { context: { userId, method: 'session' } };
     }
   }
 

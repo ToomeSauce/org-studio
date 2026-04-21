@@ -50,11 +50,13 @@ export async function POST(req: NextRequest) {
     }
 
     // Create session (30-day expiry to match workspace cookie)
+    // Use username (not auto-generated user.id) so session.userId matches
+    // teammate.id and workspace membership user_id (e.g. 'basil', not 'user-1713...')
     const SESSION_EXPIRY_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
-    const sessionToken = await createSession(user.id, SESSION_EXPIRY_MS);
+    const sessionToken = await createSession(user.username, SESSION_EXPIRY_MS);
 
-    // Resolve workspace via membership lookup
-    const workspaceId = await lookupUserWorkspace(user.id);
+    // Resolve workspace via membership lookup (use username to match membership user_id)
+    const workspaceId = await lookupUserWorkspace(user.username);
 
     // Return response with session cookie + workspace_id cookie
     const response = NextResponse.json({
