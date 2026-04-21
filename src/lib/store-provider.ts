@@ -109,41 +109,100 @@ export class FileStoreProvider implements StoreProvider {
   private storePath: string;
   private backupDir: string;
   private maxBackups = 20;
+  private migrated = false;
 
   constructor(storePath: string, backupDir?: string) {
     this.storePath = storePath;
     this.backupDir = backupDir || storePath.replace(/store\.json$/, 'backups');
   }
 
-  async read(): Promise<StoreData> {
+  /**
+   * Detect old top-level shape and silently migrate to workspace envelope.
+   * Old shape: { projects, tasks, settings }
+   * New shape: { activeWorkspace, workspaces: { 'default-workspace': { projects, tasks, settings, ... } } }
+   */
+  private migrateIfNeeded(raw: any): any {
+    // Already new shape
+    if (raw.workspaces && raw.activeWorkspace) return raw;
+
+    // Old shape detected — wrap into workspace envelope
+    const { existsSync, copyFileSync } = require('fs');
+    const timestamp = Date.now();
+    const backupPath = this.storePath.replace(/\.json$/, `.json.pre-workspace-migration.${timestamp}`);
+
+    try {
+      if (existsSync(this.storePath)) {
+        copyFileSync(this.storePath, backupPath);
+      }
+    } catch (e) {
+      console.error('[FileStore] Backup before workspace migration failed:', e);
+    }
+
+    const migrated = {
+      activeWorkspace: 'default-workspace',
+      workspaces: {
+        'default-workspace': {
+          projects: raw.projects || [],
+          tasks: raw.tasks || [],
+          settings: raw.settings || {},
+          kudos: raw.kudos || [],
+          roadmapVersions: raw.roadmapVersions || [],
+          visionDocs: raw.visionDocs || {},
+        },
+      },
+    };
+
+    // Write migrated shape back
+    try {
+      const { writeFileSync } = require('fs');
+      writeFileSync(this.storePath, JSON.stringify(migrated, null, 2));
+      console.log(`[FileStore] Migrated store.json to workspace envelope (backup: ${backupPath})`);
+    } catch (e) {
+      console.error('[FileStore] Failed to write migrated store:', e);
+    }
+
+    return migrated;
+  }
+
+  /** Read workspace data from the envelope, returning the active workspace slice as StoreData */
+  private readEnvelope(): { root: any; ws: any } {
     const { existsSync, readFileSync } = require('fs');
-    const { dirname } = require('path');
-    
+
     if (!existsSync(this.storePath)) {
-      // Return empty store structure
-      return { projects: [], tasks: [], settings: {} };
+      const root = {
+        activeWorkspace: 'default-workspace',
+        workspaces: {
+          'default-workspace': { projects: [], tasks: [], settings: {} },
+        },
+      };
+      return { root, ws: root.workspaces['default-workspace'] };
     }
 
     try {
       const content = readFileSync(this.storePath, 'utf-8');
-      const data = JSON.parse(content);
-      // Inject default "Main" section for projects missing sections
-      if (data.projects) {
-        for (const p of data.projects) {
-          if (!p.sections || p.sections.length === 0) {
-            p.sections = [{ id: `sec-main-${p.id}`, name: 'Main', owner: p.owner || '', outcomes: '', contract: '' }];
-          }
-        }
+      let data = JSON.parse(content);
+      data = this.migrateIfNeeded(data);
+
+      const activeWs = data.activeWorkspace || 'default-workspace';
+      if (!data.workspaces[activeWs]) {
+        data.workspaces[activeWs] = { projects: [], tasks: [], settings: {} };
       }
-      return data;
+      return { root: data, ws: data.workspaces[activeWs] };
     } catch (e) {
       console.error(`Failed to read store at ${this.storePath}:`, e);
-      return { projects: [], tasks: [], settings: {} };
+      const root = {
+        activeWorkspace: 'default-workspace',
+        workspaces: {
+          'default-workspace': { projects: [], tasks: [], settings: {} },
+        },
+      };
+      return { root, ws: root.workspaces['default-workspace'] };
     }
   }
 
-  async write(data: StoreData): Promise<void> {
-    const { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync, copyFileSync } = require('fs');
+  /** Write back the full envelope to disk */
+  private writeEnvelope(root: any): void {
+    const { existsSync, writeFileSync, mkdirSync, readdirSync, unlinkSync, copyFileSync } = require('fs');
     const { join } = require('path');
 
     // Auto-backup before every write
@@ -164,75 +223,102 @@ export class FileStoreProvider implements StoreProvider {
       }
     } catch (e) {
       console.error('Backup creation failed:', e);
-      // Don't block write on backup failure
     }
 
     try {
-      writeFileSync(this.storePath, JSON.stringify(data, null, 2));
+      writeFileSync(this.storePath, JSON.stringify(root, null, 2));
     } catch (e) {
       console.error(`Failed to write store to ${this.storePath}:`, e);
       throw e;
     }
   }
 
+  async read(): Promise<StoreData> {
+    const { ws } = this.readEnvelope();
+    const data: StoreData = {
+      projects: ws.projects || [],
+      tasks: ws.tasks || [],
+      settings: ws.settings || {},
+    };
+    // Inject default "Main" section for projects missing sections
+    if (data.projects) {
+      for (const p of data.projects) {
+        if (!p.sections || p.sections.length === 0) {
+          p.sections = [{ id: `sec-main-${p.id}`, name: 'Main', owner: p.owner || '', outcomes: '', contract: '' }];
+        }
+      }
+    }
+    return data;
+  }
+
+  async write(data: StoreData): Promise<void> {
+    const { root } = this.readEnvelope();
+    const activeWs = root.activeWorkspace || 'default-workspace';
+    root.workspaces[activeWs] = {
+      ...root.workspaces[activeWs],
+      projects: data.projects,
+      tasks: data.tasks,
+      settings: data.settings,
+    };
+    this.writeEnvelope(root);
+  }
+
   async createProject(project: any): Promise<any> {
-    const store = await this.read();
+    const { root, ws } = this.readEnvelope();
     project.id = project.id || `proj-${Date.now()}`;
     project.createdAt = project.createdAt || Date.now();
-    store.projects.push(project);
-    await this.write(store);
+    ws.projects.push(project);
+    this.writeEnvelope(root);
     return project;
   }
 
   async updateProject(projectId: string, updates: Partial<any>): Promise<any> {
-    const store = await this.read();
-    const idx = store.projects.findIndex((p: any) => p.id === projectId);
+    const { root, ws } = this.readEnvelope();
+    const idx = ws.projects.findIndex((p: any) => p.id === projectId);
     if (idx === -1) throw new Error(`Project not found: ${projectId}`);
-    store.projects[idx] = { ...store.projects[idx], ...updates };
-    await this.write(store);
-    return store.projects[idx];
+    ws.projects[idx] = { ...ws.projects[idx], ...updates };
+    this.writeEnvelope(root);
+    return ws.projects[idx];
   }
 
   async deleteProject(projectId: string): Promise<void> {
-    const store = await this.read();
-    store.projects = store.projects.filter((p: any) => p.id !== projectId);
-    await this.write(store);
+    const { root, ws } = this.readEnvelope();
+    ws.projects = ws.projects.filter((p: any) => p.id !== projectId);
+    this.writeEnvelope(root);
   }
 
   async createTask(task: any): Promise<any> {
-    const store = await this.read();
+    const { root, ws } = this.readEnvelope();
     task.id = task.id || `task-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     task.createdAt = task.createdAt || Date.now();
-    store.tasks.push(task);
-    await this.write(store);
+    ws.tasks.push(task);
+    this.writeEnvelope(root);
     return task;
   }
 
   async updateTask(taskId: string, updates: Partial<any>): Promise<any> {
-    const store = await this.read();
-    const idx = store.tasks.findIndex((t: any) => t.id === taskId);
+    const { root, ws } = this.readEnvelope();
+    const idx = ws.tasks.findIndex((t: any) => t.id === taskId);
     if (idx === -1) throw new Error(`Task not found: ${taskId}`);
-    store.tasks[idx] = { ...store.tasks[idx], ...updates };
-    await this.write(store);
-    return store.tasks[idx];
+    ws.tasks[idx] = { ...ws.tasks[idx], ...updates };
+    this.writeEnvelope(root);
+    return ws.tasks[idx];
   }
 
   async deleteTask(taskId: string): Promise<void> {
-    const store = await this.read();
-    store.tasks = store.tasks.filter((t: any) => t.id !== taskId);
-    await this.write(store);
+    const { root, ws } = this.readEnvelope();
+    ws.tasks = ws.tasks.filter((t: any) => t.id !== taskId);
+    this.writeEnvelope(root);
   }
 
   async addComment(taskIdOrScope: string | { kind: string; taskId?: string; sectionId?: string; boardProjectId?: string; dmThreadId?: string }, comment: any): Promise<any> {
-    // Normalize: extract taskId from legacy or new-style call
     const scope = typeof taskIdOrScope === 'string'
       ? { kind: 'task' as const, taskId: taskIdOrScope }
       : taskIdOrScope;
 
-    // For task-scoped comments, write inline on the task (FileStore only supports tasks)
     if (scope.kind === 'task' && scope.taskId) {
-      const store = await this.read();
-      const task = store.tasks.find((t: any) => t.id === scope.taskId);
+      const { root, ws } = this.readEnvelope();
+      const task = ws.tasks.find((t: any) => t.id === scope.taskId);
       if (!task) throw new Error(`Task not found: ${scope.taskId}`);
 
       if (!task.comments) task.comments = [];
@@ -241,12 +327,10 @@ export class FileStoreProvider implements StoreProvider {
       if (!comment.scope) comment.scope = scope;
       task.comments.push(comment);
 
-      await this.write(store);
+      this.writeEnvelope(root);
       return comment;
     }
 
-    // Non-task scopes: FileStoreProvider doesn't have a comments table.
-    // Store in a best-effort in-memory way (not persisted — Postgres is needed for non-task scopes).
     comment.id = comment.id || `comment-${Date.now()}`;
     comment.createdAt = comment.createdAt || Date.now();
     if (!comment.scope) comment.scope = scope;
@@ -254,72 +338,70 @@ export class FileStoreProvider implements StoreProvider {
   }
 
   async updateSettings(updates: Partial<Record<string, any>>): Promise<any> {
-    const store = await this.read();
-    if (!store.settings) store.settings = {};
-    store.settings = { ...store.settings, ...updates };
-    await this.write(store);
-    return store.settings;
+    const { root, ws } = this.readEnvelope();
+    if (!ws.settings) ws.settings = {};
+    ws.settings = { ...ws.settings, ...updates };
+    this.writeEnvelope(root);
+    return ws.settings;
   }
 
   // --- Section CRUD (FileStoreProvider) ---
 
   async addSection(projectId: string, section: { id?: string; name: string; owner: string; outcomes: string; contract: string }): Promise<any> {
-    const store = await this.read();
-    const project = store.projects.find((p: any) => p.id === projectId);
+    const { root, ws } = this.readEnvelope();
+    const project = ws.projects.find((p: any) => p.id === projectId);
     if (!project) throw new Error(`Project not found: ${projectId}`);
     const id = section.id || `sec-${Math.random().toString(36).slice(2, 10)}`;
     const newSection = { ...section, id };
     if (!project.sections) project.sections = [];
     project.sections.push(newSection);
-    await this.write(store);
+    this.writeEnvelope(root);
     return newSection;
   }
 
   async updateSection(projectId: string, sectionId: string, updates: Partial<{ name: string; owner: string; outcomes: string; contract: string }>): Promise<void> {
-    const store = await this.read();
-    const project = store.projects.find((p: any) => p.id === projectId);
+    const { root, ws } = this.readEnvelope();
+    const project = ws.projects.find((p: any) => p.id === projectId);
     if (!project) throw new Error(`Project not found: ${projectId}`);
     const section = (project.sections || []).find((s: any) => s.id === sectionId);
     if (!section) throw new Error(`Section not found: ${sectionId}`);
     Object.assign(section, updates);
-    await this.write(store);
+    this.writeEnvelope(root);
   }
 
   async deleteSection(projectId: string, sectionId: string): Promise<void> {
-    const store = await this.read();
-    const project = store.projects.find((p: any) => p.id === projectId);
+    const { root, ws } = this.readEnvelope();
+    const project = ws.projects.find((p: any) => p.id === projectId);
     if (!project) throw new Error(`Project not found: ${projectId}`);
     const sections = project.sections || [];
     const section = sections.find((s: any) => s.id === sectionId);
     if (!section) throw new Error(`Section not found: ${sectionId}`);
-    // Count non-archived sections
     const activeCount = sections.filter((s: any) => !s.archivedAt).length;
     if (activeCount <= 1 && !section.archivedAt) throw new Error('Cannot delete the last section');
-    // Soft-delete: set archivedAt instead of removing
     section.archivedAt = Date.now();
     section.archivedBy = 'user';
-    await this.write(store);
+    this.writeEnvelope(root);
   }
 
   async purgeSection(projectId: string, sectionId: string): Promise<void> {
-    const store = await this.read();
-    const project = store.projects.find((p: any) => p.id === projectId);
+    const { root, ws } = this.readEnvelope();
+    const project = ws.projects.find((p: any) => p.id === projectId);
     if (!project) throw new Error(`Project not found: ${projectId}`);
     const sections = project.sections || [];
     project.sections = sections.filter((s: any) => s.id !== sectionId);
-    await this.write(store);
+    this.writeEnvelope(root);
   }
 
   async reorderSections(projectId: string, sectionIds: string[]): Promise<void> {
-    const store = await this.read();
-    const project = store.projects.find((p: any) => p.id === projectId);
+    const { root, ws } = this.readEnvelope();
+    const project = ws.projects.find((p: any) => p.id === projectId);
     if (!project) throw new Error(`Project not found: ${projectId}`);
     const current = project.sections || [];
     const map = new Map(current.map((s: any) => [s.id, s]));
     const ordered = sectionIds.filter(id => map.has(id)).map(id => map.get(id)!);
     const rest = current.filter((s: any) => !sectionIds.includes(s.id));
     project.sections = [...ordered, ...rest];
-    await this.write(store);
+    this.writeEnvelope(root);
   }
 
   /** File provider: DM threads are not indexed — return empty array. */
@@ -344,9 +426,11 @@ export class FileStoreProvider implements StoreProvider {
 export class PostgresStoreProvider implements StoreProvider {
   private connectionString: string;
   private pool: any;
+  private workspaceId: string;
 
-  constructor(connectionString: string) {
+  constructor(connectionString: string, workspaceId: string = 'default-workspace') {
     this.connectionString = connectionString;
+    this.workspaceId = workspaceId;
   }
 
   private async getPool() {
@@ -440,14 +524,16 @@ export class PostgresStoreProvider implements StoreProvider {
     const client = await pool.connect();
     try {
       const projectsResult = await client.query(
-        'SELECT * FROM org_studio_projects ORDER BY created_at'
+        'SELECT * FROM org_studio_projects WHERE workspace_id = $1 ORDER BY created_at',
+        [this.workspaceId]
       );
       const tasksResult = await client.query(
-        'SELECT * FROM org_studio_tasks ORDER BY created_at'
+        'SELECT * FROM org_studio_tasks WHERE workspace_id = $1 ORDER BY created_at',
+        [this.workspaceId]
       );
       const settingsResult = await client.query(
-        'SELECT data FROM org_studio_settings WHERE id = $1',
-        ['default']
+        'SELECT data FROM org_studio_settings WHERE id = $1 AND workspace_id = $2',
+        ['default', this.workspaceId]
       );
 
       const projects = projectsResult.rows.map((row: any) => this.reconstructProject(row));
@@ -473,8 +559,8 @@ export class PostgresStoreProvider implements StoreProvider {
     try {
       await client.query('BEGIN');
 
-      // Clear and rewrite projects
-      await client.query('DELETE FROM org_studio_projects');
+      // Clear and rewrite projects (scoped to workspace)
+      await client.query('DELETE FROM org_studio_projects WHERE workspace_id = $1', [this.workspaceId]);
       for (const project of data.projects) {
         const {
           id,
@@ -491,8 +577,8 @@ export class PostgresStoreProvider implements StoreProvider {
 
         await client.query(
           `INSERT INTO org_studio_projects
-           (id, name, description, phase, owner, priority, sort_order, created_at, created_by, data)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+           (id, name, description, phase, owner, priority, sort_order, created_at, created_by, data, workspace_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
           [
             id,
             name || null,
@@ -504,12 +590,13 @@ export class PostgresStoreProvider implements StoreProvider {
             createdAt || null,
             createdBy || null,
             JSON.stringify(overflow),
+            this.workspaceId,
           ]
         );
       }
 
-      // Clear and rewrite tasks
-      await client.query('DELETE FROM org_studio_tasks');
+      // Clear and rewrite tasks (scoped to workspace)
+      await client.query('DELETE FROM org_studio_tasks WHERE workspace_id = $1', [this.workspaceId]);
       for (const task of data.tasks) {
         const {
           id,
@@ -541,8 +628,8 @@ export class PostgresStoreProvider implements StoreProvider {
           `INSERT INTO org_studio_tasks
            (id, ticket_number, title, status, project_id, assignee, priority, test_type, test_assignee,
             initiated_by, description, done_when, constraints, test_plan, review_notes, loop_count,
-            loop_paused_at, loop_pause_reason, last_activity_at, created_at, status_history, comments, data)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
+            loop_paused_at, loop_pause_reason, last_activity_at, created_at, status_history, comments, data, workspace_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
           [
             id,
             ticketNumber || null,
@@ -567,14 +654,15 @@ export class PostgresStoreProvider implements StoreProvider {
             JSON.stringify(statusHistory || []),
             JSON.stringify(comments || []),
             JSON.stringify(overflow),
+            this.workspaceId,
           ]
         );
       }
 
-      // Update settings
+      // Update settings (scoped to workspace)
       await client.query(
-        'INSERT INTO org_studio_settings (id, data) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET data = $2',
-        ['default', JSON.stringify(data.settings || {})]
+        'INSERT INTO org_studio_settings (id, data, workspace_id) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET data = $2',
+        ['default', JSON.stringify(data.settings || {}), this.workspaceId]
       );
 
       await client.query('COMMIT');
@@ -617,8 +705,8 @@ export class PostgresStoreProvider implements StoreProvider {
 
       await client.query(
         `INSERT INTO org_studio_projects
-         (id, name, description, phase, owner, priority, sort_order, created_at, created_by, data)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+         (id, name, description, phase, owner, priority, sort_order, created_at, created_by, data, workspace_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
         [
           id,
           name || null,
@@ -630,6 +718,7 @@ export class PostgresStoreProvider implements StoreProvider {
           createdAt,
           createdBy,
           JSON.stringify(overflow),
+          this.workspaceId,
         ]
       );
 
@@ -655,8 +744,8 @@ export class PostgresStoreProvider implements StoreProvider {
     const client = await pool.connect();
     try {
       const result = await client.query(
-        'SELECT * FROM org_studio_projects WHERE id = $1',
-        [projectId]
+        'SELECT * FROM org_studio_projects WHERE id = $1 AND workspace_id = $2',
+        [projectId, this.workspaceId]
       );
       if (result.rows.length === 0) throw new Error(`Project not found: ${projectId}`);
 
@@ -680,7 +769,7 @@ export class PostgresStoreProvider implements StoreProvider {
         `UPDATE org_studio_projects
          SET name = $1, description = $2, phase = $3, owner = $4, priority = $5,
              sort_order = $6, created_at = $7, created_by = $8, data = $9
-         WHERE id = $10`,
+         WHERE id = $10 AND workspace_id = $11`,
         [
           name || null,
           description || null,
@@ -692,6 +781,7 @@ export class PostgresStoreProvider implements StoreProvider {
           createdBy || null,
           JSON.stringify(overflow),
           id,
+          this.workspaceId,
         ]
       );
 
@@ -709,7 +799,7 @@ export class PostgresStoreProvider implements StoreProvider {
     const pool = await this.getPool();
     const client = await pool.connect();
     try {
-      await client.query('DELETE FROM org_studio_projects WHERE id = $1', [projectId]);
+      await client.query('DELETE FROM org_studio_projects WHERE id = $1 AND workspace_id = $2', [projectId, this.workspaceId]);
     } finally {
       client.release();
     }
@@ -754,8 +844,8 @@ export class PostgresStoreProvider implements StoreProvider {
         `INSERT INTO org_studio_tasks
          (id, ticket_number, title, status, project_id, assignee, priority, test_type, test_assignee,
           initiated_by, description, done_when, constraints, test_plan, review_notes, loop_count,
-          loop_paused_at, loop_pause_reason, last_activity_at, created_at, status_history, comments, data)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
+          loop_paused_at, loop_pause_reason, last_activity_at, created_at, status_history, comments, data, workspace_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
         [
           id,
           ticketNumber || null,
@@ -780,6 +870,7 @@ export class PostgresStoreProvider implements StoreProvider {
           JSON.stringify(statusHistory || []),
           JSON.stringify(comments || []),
           JSON.stringify(overflow),
+          this.workspaceId,
         ]
       );
 
@@ -838,8 +929,8 @@ export class PostgresStoreProvider implements StoreProvider {
     const client = await pool.connect();
     try {
       const result = await client.query(
-        'SELECT * FROM org_studio_tasks WHERE id = $1',
-        [taskId]
+        'SELECT * FROM org_studio_tasks WHERE id = $1 AND workspace_id = $2',
+        [taskId, this.workspaceId]
       );
       if (result.rows.length === 0) throw new Error(`Task not found: ${taskId}`);
 
@@ -880,7 +971,7 @@ export class PostgresStoreProvider implements StoreProvider {
              done_when = $11, constraints = $12, test_plan = $13, review_notes = $14, loop_count = $15,
              loop_paused_at = $16, loop_pause_reason = $17, last_activity_at = $18, created_at = $19,
              version = $20, status_history = $21, comments = $22, data = $23
-         WHERE id = $24`,
+         WHERE id = $24 AND workspace_id = $25`,
         [
           ticketNumber || null,
           title || null,
@@ -906,6 +997,7 @@ export class PostgresStoreProvider implements StoreProvider {
           JSON.stringify(comments || []),
           JSON.stringify(overflow),
           id,
+          this.workspaceId,
         ]
       );
 
@@ -931,7 +1023,7 @@ export class PostgresStoreProvider implements StoreProvider {
     const pool = await this.getPool();
     const client = await pool.connect();
     try {
-      await client.query('DELETE FROM org_studio_tasks WHERE id = $1', [taskId]);
+      await client.query('DELETE FROM org_studio_tasks WHERE id = $1 AND workspace_id = $2', [taskId, this.workspaceId]);
     } finally {
       client.release();
     }
@@ -984,8 +1076,8 @@ export class PostgresStoreProvider implements StoreProvider {
       // 2. For task-scoped comments, also write inline on the task (dual-write)
       if (scope.kind === 'task' && scope.taskId) {
         const result = await client.query(
-          'SELECT * FROM org_studio_tasks WHERE id = $1',
-          [scope.taskId]
+          'SELECT * FROM org_studio_tasks WHERE id = $1 AND workspace_id = $2',
+          [scope.taskId, this.workspaceId]
         );
         if (result.rows.length === 0) throw new Error(`Task not found: ${scope.taskId}`);
 
@@ -1032,6 +1124,7 @@ export class PostgresStoreProvider implements StoreProvider {
       const changePayload = JSON.stringify({
         type: 'comment_added',
         taskId: notifyTaskId,
+        commentId: commentObj.id,
         scopeKind: scope.kind,
         timestamp: Date.now(),
         source: 'postgres',
@@ -1131,8 +1224,8 @@ export class PostgresStoreProvider implements StoreProvider {
     const client = await pool.connect();
     try {
       const result = await client.query(
-        'SELECT data FROM org_studio_settings WHERE id = $1',
-        ['default']
+        'SELECT data FROM org_studio_settings WHERE id = $1 AND workspace_id = $2',
+        ['default', this.workspaceId]
       );
       const rawData = result.rows[0]?.data;
       const current = rawData
@@ -1141,8 +1234,8 @@ export class PostgresStoreProvider implements StoreProvider {
       const updated = { ...current, ...updates };
 
       await client.query(
-        'INSERT INTO org_studio_settings (id, data) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET data = $2',
-        ['default', JSON.stringify(updated)]
+        'INSERT INTO org_studio_settings (id, data, workspace_id) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET data = $2',
+        ['default', JSON.stringify(updated), this.workspaceId]
       );
 
       // Emit NOTIFY event for bidirectional sync
@@ -1168,7 +1261,7 @@ export class PostgresStoreProvider implements StoreProvider {
     const pool = await this.getPool();
     const client = await pool.connect();
     try {
-      const result = await client.query('SELECT * FROM org_studio_projects WHERE id = $1', [projectId]);
+      const result = await client.query('SELECT * FROM org_studio_projects WHERE id = $1 AND workspace_id = $2', [projectId, this.workspaceId]);
       if (result.rows.length === 0) throw new Error(`Project not found: ${projectId}`);
       const current = this.reconstructProject(result.rows[0]);
       const id = section.id || `sec-${Math.random().toString(36).slice(2, 10)}`;
@@ -1186,7 +1279,7 @@ export class PostgresStoreProvider implements StoreProvider {
     const pool = await this.getPool();
     const client = await pool.connect();
     try {
-      const result = await client.query('SELECT * FROM org_studio_projects WHERE id = $1', [projectId]);
+      const result = await client.query('SELECT * FROM org_studio_projects WHERE id = $1 AND workspace_id = $2', [projectId, this.workspaceId]);
       if (result.rows.length === 0) throw new Error(`Project not found: ${projectId}`);
       const current = this.reconstructProject(result.rows[0]);
       const section = (current.sections || []).find((s: any) => s.id === sectionId);
@@ -1202,7 +1295,7 @@ export class PostgresStoreProvider implements StoreProvider {
     const pool = await this.getPool();
     const client = await pool.connect();
     try {
-      const result = await client.query('SELECT * FROM org_studio_projects WHERE id = $1', [projectId]);
+      const result = await client.query('SELECT * FROM org_studio_projects WHERE id = $1 AND workspace_id = $2', [projectId, this.workspaceId]);
       if (result.rows.length === 0) throw new Error(`Project not found: ${projectId}`);
       const current = this.reconstructProject(result.rows[0]);
       const sections = current.sections || [];
@@ -1224,7 +1317,7 @@ export class PostgresStoreProvider implements StoreProvider {
     const pool = await this.getPool();
     const client = await pool.connect();
     try {
-      const result = await client.query('SELECT * FROM org_studio_projects WHERE id = $1', [projectId]);
+      const result = await client.query('SELECT * FROM org_studio_projects WHERE id = $1 AND workspace_id = $2', [projectId, this.workspaceId]);
       if (result.rows.length === 0) throw new Error(`Project not found: ${projectId}`);
       const current = this.reconstructProject(result.rows[0]);
       const sections = current.sections || [];
@@ -1239,7 +1332,7 @@ export class PostgresStoreProvider implements StoreProvider {
     const pool = await this.getPool();
     const client = await pool.connect();
     try {
-      const result = await client.query('SELECT * FROM org_studio_projects WHERE id = $1', [projectId]);
+      const result = await client.query('SELECT * FROM org_studio_projects WHERE id = $1 AND workspace_id = $2', [projectId, this.workspaceId]);
       if (result.rows.length === 0) throw new Error(`Project not found: ${projectId}`);
       const current = this.reconstructProject(result.rows[0]);
       const currentSections = current.sections || [];
@@ -1439,13 +1532,13 @@ export class PostgresStoreProvider implements StoreProvider {
 /**
  * Factory function to create the right provider based on environment
  */
-export function createStoreProvider(): StoreProvider {
+export function createStoreProvider(workspaceId: string = 'default-workspace'): StoreProvider {
   const dbUrl = process.env.DATABASE_URL;
   const storePath = process.env.STORE_PATH || join(process.cwd(), 'data', 'store.json');
 
   if (dbUrl) {
     console.log('Using Postgres store provider');
-    return new PostgresStoreProvider(dbUrl);
+    return new PostgresStoreProvider(dbUrl, workspaceId);
   }
 
   console.log('Using file store provider');

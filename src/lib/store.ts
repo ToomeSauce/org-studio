@@ -21,6 +21,7 @@ export interface Project {
   sortOrder?: number;
   createdAt: number;
   createdBy: string;
+  workspace_id?: string;  // v0.16: multi-workspace support (default: 'default-workspace')
 
   // --- Vision Board fields (Phase 1+) ---
   visionDocPath?: string;       // Path to VISION.md (repo-relative or absolute)
@@ -31,8 +32,10 @@ export interface Project {
   qaOwner?: string;             // Agent/human who runs QA
   currentVersion?: string;      // e.g. "0.3"
   dependsOn?: string[];         // Project IDs this vision depends on
+  state?: 'stopped' | 'started';  // Single source of truth for run-gating (default: 'started')
+
   autonomy?: {
-    enabled: boolean;
+    // enabled: boolean — REMOVED (dead field, replaced by project.state)
     cadence?: 'daily' | 'weekly' | 'biweekly' | 'monthly'; // @deprecated - replaced by approvalMode
     approvalMode?: 'per-version' | 'per-major';
     lastProposedAt?: number;
@@ -70,7 +73,7 @@ export interface Project {
 }
 
 export interface CommentScope {
-  kind: 'task' | 'section' | 'board' | 'dm';
+  kind: 'task' | 'section' | 'board' | 'dm' | 'channel';
   taskId?: string;
   sectionId?: string;
   boardProjectId?: string;
@@ -96,6 +99,7 @@ export interface Task {
   ticketNumber?: number;  // Sequential ticket number (#1, #2, etc.) for easy reference
   title: string;
   description?: string;
+  workspace_id?: string;  // v0.16: multi-workspace support (default: 'default-workspace')
   // Seed task structured fields
   // @deprecated — use description for goals/vision. Kept for backward compat.
   outcome?: string;
@@ -122,6 +126,9 @@ export interface Task {
   loopCount?: number;       // Scheduler loops on this task at same status (resets on status change)
   loopPausedAt?: number;    // Timestamp when loop was paused due to stall detection
   loopPauseReason?: string; // Why the loop was paused
+  inFlightRunId?: string;   // Subagent runId working on this task (observable, not enforced)
+  needsReview?: boolean;    // Agent self-flags: true = must go through review column, false/absent = direct to done
+  reviewReason?: string;    // Why review is needed (e.g. 'irreversible DB migration', 'cross-domain change')
   devHandoff?: {            // Context injection: dev attaches notes when resolving a blocker
     message: string;          // The context/instructions for the agent
     author: string;           // Who wrote it
@@ -426,7 +433,7 @@ export async function permanentlyDeleteTask(id: string): Promise<void> {
  * Returns array of mentioned agent names
  */
 export function extractMentions(content: string): string[] {
-  const regex = /@(\w+)/g;
+  const regex = /(?<![\w.])@(\w+)/g;
   const matches = content.match(regex);
   return matches ? matches.map(m => m.slice(1)) : [];
 }

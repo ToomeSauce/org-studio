@@ -4,6 +4,25 @@ import { watch, readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import next from 'next';
+
+// Load .env.local so server.mjs has the same env vars as Next.js route handlers
+// (notably ORG_STUDIO_API_KEY for self-calls to /api/scheduler)
+const __envDir = dirname(fileURLToPath(import.meta.url));
+try {
+  const envPath = join(__envDir, '.env.local');
+  if (existsSync(envPath)) {
+    const envContent = readFileSync(envPath, 'utf-8');
+    for (const line of envContent.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx < 0) continue;
+      const key = trimmed.slice(0, eqIdx).trim();
+      const val = trimmed.slice(eqIdx + 1).trim();
+      if (!process.env[key]) process.env[key] = val; // don't override existing
+    }
+  }
+} catch {} // best-effort
 import { getRuntimeRegistry } from './lib/runtimes.mjs';
 import { ensureHeartbeatSchema, startLoopWatchdog, logIncident } from './lib/heartbeats.mjs';
 import { ensureOutboxSchema, startOutboxWorker } from './lib/outbox.mjs';
@@ -13,11 +32,18 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const port = parseInt(process.env.PORT || '4501');
 const dev = false;
 
+// --- Telegram comms guard (v0.15) ---
+const ENABLE_TELEGRAM_COMMS = (() => {
+  const val = (process.env.ENABLE_TELEGRAM_COMMS || 'false').toLowerCase().trim();
+  return val === 'true' || val === '1' || val === 'yes';
+})();
+
 // --- Telegram notification helper ---
 const TG_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const TG_CHAT_ID = process.env.TELEGRAM_CHAT_ID || process.env.NOTIFY_CHAT_ID || '';
 
 function sendTelegramNotification(message) {
+  if (!ENABLE_TELEGRAM_COMMS) return; // v0.15: comms relay disabled by default
   if (!TG_BOT_TOKEN || !TG_CHAT_ID) return;
   fetch(`https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage`, {
     method: 'POST',
@@ -104,6 +130,61 @@ const server = createServer((req, res) => {
     res.end(JSON.stringify({ events: feed }));
     return;
   }
+
+  // --- Health-alerts webhook (v0.15) ---
+  if (req.url === '/api/webhooks/health-alerts' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', async () => {
+      try {
+        const data = JSON.parse(body);
+        const { agentId, metric, value, threshold, status } = data;
+        if (!agentId || !metric) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Missing required fields: agentId, metric' }));
+          return;
+        }
+
+        const alertType = `webhook_${metric}_${agentId}`;
+        const emoji = status === 'critical' ? '🚨' : status === 'warning' ? '⚠️' : '📊';
+        const title = `Health Alert: ${metric}`;
+        const context = `Agent: ${agentId} | ${metric}: ${value} (threshold: ${threshold}) | Status: ${status || 'unknown'}`;
+
+        // 1. Forward to external webhook URL if configured
+        const webhookUrl = process.env.TELEGRAM_HEALTH_ALERTS_WEBHOOK_URL;
+        if (webhookUrl) {
+          fetch(webhookUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ agentId, metric, value, threshold, status, timestamp: Date.now() }),
+          }).catch(err => console.error('[HealthWebhook] Forward failed:', err.message));
+        }
+
+        // 2. Forward to Telegram health bot if configured (independent of ENABLE_TELEGRAM_COMMS)
+        const sent = await sendHealthAlert({ type: alertType, emoji, title, context });
+
+        // 3. Add to activity feed
+        const feedApi = globalThis.__orgStudioActivityFeed;
+        if (feedApi?.add) {
+          feedApi.add({
+            type: 'health-alert',
+            emoji,
+            agent: agentId,
+            message: `${emoji} ${title}: ${context}`,
+          });
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, telegramSent: sent, webhookForwarded: !!webhookUrl }));
+      } catch (err) {
+        console.error('[HealthWebhook] Parse error:', err.message);
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid JSON body' }));
+      }
+    });
+    return;
+  }
+
   handle(req, res);
 });
 
@@ -313,16 +394,24 @@ function generateOrgMd(store, forAgentId) {
   lines.push('   - Read the full task description and comments FIRST.');
   lines.push('   - Only move to in-progress AFTER actual work starts. Do NOT claim tasks speculatively.');
   lines.push('3. Before moving any task out of in-progress, check `testType`:');
-  lines.push('   - `self` (default): self-test, write results in reviewNotes, move to review/done.');
+  lines.push('   - `self` (default): self-test, document results in a comment or `reviewNotes`, move to **done** (or **review** if `needsReview: true`).');
   lines.push('   - `qa`: self-test first, write a test plan, move to QA column.');
-  lines.push('4. When complete: update status + always include `reviewNotes`. Clear activity status.');
-  lines.push('5. If more backlog tasks remain, continue with the next one.');
-  lines.push('6. If you run out of time mid-task, leave it where it is.');
+  lines.push('4. **When complete:** move to **done** by default. Move to **review** ONLY when `needsReview: true` — set this flag when the work is:');
+  lines.push('   - **(a) Irreversible** — DB migrations, deletions, money/billing, external API writes with cost');
+  lines.push('   - **(b) Cross-domain** — touching another agent\'s owned code');
+  lines.push('   - **(c) Mission/vision/roadmap** direction changes');
+  lines.push('   - **(d) Security-sensitive**');
+  lines.push('   When in doubt about reversibility, set needsReview=true. Include `reviewReason` when you do.');
+  lines.push('5. `reviewNotes` required ONLY when moving to review. For direct-to-done, the commit message + a final summary comment is sufficient.');
+  lines.push('6. Clear activity status when done. If more backlog tasks remain, continue with the next one. If you run out of time mid-task, leave it where it is.');
   lines.push('');
   lines.push('**Planning column:** You ARE encouraged to pull from planning — scope the task (acceptance criteria, constraints, context), then move to backlog when ready for execution. If the task lacks context to scope, post a comment asking instead of guessing.');
   lines.push('');
-  lines.push('**Task lifecycle:** planning → backlog → in-progress → [qa] → review → done');
-  lines.push('Always include `reviewNotes` when moving to review/done.');
+  lines.push('**Primary directive:** Org Studio exists to unlock continuous agent delivery. After mission/vision/domain/boundaries are set, deliver autonomously. Human involvement is for blockers, irreversible decisions, and cross-domain changes — not routine work in your owned domain.');
+  lines.push('');
+  lines.push('**Default task lifecycle:** `backlog → in-progress → done`');
+  lines.push('**Review lifecycle (opt-in, when `needsReview: true`):** `backlog → in-progress → review → done`');
+  lines.push('**With QA:** insert `qa` after in-progress when `testType: qa`.');
   lines.push('Always include `version` when creating tasks for a sprint.');
   lines.push('');
   lines.push('**Full work contract** (columns, testing details, handoffs, examples) lives in the `org-studio-api` skill at `skills/org-studio-api/SKILL.md`. Read it when in doubt.');
@@ -836,6 +925,15 @@ async function initializePostgresListener() {
         // msg.channel is the event name, msg.payload is the JSON data
         if (msg.channel === 'org_studio_change') {
           const changeEvent = JSON.parse(msg.payload);
+          // Ensure workspace_id is present; default to 'default-workspace' if missing
+          if (!changeEvent.workspace_id) {
+            changeEvent.workspace_id = 'default-workspace';
+            // Only warn once per server lifetime for missing workspace_id
+            if (!globalThis.__wsIdWarnLogged) {
+              console.warn('[LISTEN] Notification missing workspace_id — defaulting to default-workspace');
+              globalThis.__wsIdWarnLogged = true;
+            }
+          }
           console.log(`[LISTEN] Received ${changeEvent.type} event:`, changeEvent.action || '');
           
           // --- Intent Router ---
@@ -845,20 +943,28 @@ async function initializePostgresListener() {
 
           // Process @mentions from comments added via remote (staging) UI
           if (changeEvent.type === 'comment_added' && changeEvent.taskId) {
+            console.log(`[LISTEN] comment_added taskId=${changeEvent.taskId} commentId=${changeEvent.commentId || 'none'}`);
             try {
               const freshStore = await refreshCachedStore();
               if (freshStore) {
                 const task = freshStore.tasks?.find(t => t.id === changeEvent.taskId);
-                const lastComment = task?.comments?.[task.comments.length - 1];
-                if (lastComment?.content && lastComment.mentions?.length > 0) {
+                // Look up by commentId if available, fall back to last comment
+                let comment;
+                if (changeEvent.commentId && task?.comments) {
+                  comment = task.comments.find(c => c.id === changeEvent.commentId);
+                }
+                if (!comment) {
+                  comment = task?.comments?.[task.comments.length - 1];
+                }
+                if (comment?.content && comment.mentions?.length > 0) {
                   const teammates = freshStore.settings?.teammates || [];
-                  for (const mentionName of lastComment.mentions) {
+                  for (const mentionName of comment.mentions) {
                     const tm = teammates.find(t =>
                       t.name?.toLowerCase() === mentionName.toLowerCase() ||
                       t.agentId?.toLowerCase() === mentionName.toLowerCase()
                     );
                     if (tm?.agentId && !tm.isHuman) {
-                      const msg = `\ud83d\udcac **${lastComment.author}** mentioned you on task: **${task.title}**\n\n> ${lastComment.content}\n\nTask ID: ${task.id}`;
+                      const msg = `\ud83d\udcac **${comment.author}** mentioned you on task: **${task.title}**\n\n> ${comment.content}\n\nTask ID: ${task.id}\n\n**Reply on the task, not in chat.** Call \`addComment\` against this task id so ${comment.author} sees your response on the ticket. Include @${comment.author} in your reply to notify them.`;
                       try {
                         // Route based on agent type: Hermes → /v1/runs, OpenClaw → rpc
                         if (tm.agentId.startsWith('hermes-')) {
@@ -890,16 +996,51 @@ async function initializePostgresListener() {
                             }
                           }
                         } else {
-                          // OpenClaw agent — trigger via scheduler API
+                          // OpenClaw agent — inject mention text directly via chat.send so the
+                          // mention content actually lands in the agent's session, not just
+                          // a generic scheduler wake. (The scheduler trigger path dispatches
+                          // task-work prompts that ignore comment content, so mentions on
+                          // paused/blocked tasks were silently dropped before this fix.)
+                          let delivered = false;
+                          try {
+                            const chatRes = await fetch(`http://127.0.0.1:${port}/api/gateway`, {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                method: 'chat.send',
+                                params: {
+                                  sessionKey: `agent:${tm.agentId}:main`,
+                                  message: msg,
+                                  idempotencyKey: `mention-${comment.id}-${tm.agentId}`,
+                                },
+                              }),
+                            });
+                            if (chatRes.ok) {
+                              delivered = true;
+                              console.log(`[LISTEN] Mention delivered via chat.send: recipient=${mentionName} agentId=${tm.agentId} commentId=${comment.id}`);
+                            } else {
+                              console.warn(`[LISTEN] chat.send failed for ${mentionName}: HTTP ${chatRes.status}`);
+                            }
+                          } catch (chatErr) {
+                            console.warn(`[LISTEN] chat.send threw for ${mentionName}:`, chatErr.message);
+                          }
+
+                          // Also nudge the scheduler — harmless if the session is already
+                          // awake from chat.send, and ensures a wake even if chat.send was
+                          // best-effort-lost.
                           const apiKey = process.env.ORG_STUDIO_API_KEY || '';
                           const triggerHeaders = { 'Content-Type': 'application/json' };
                           if (apiKey) triggerHeaders['Authorization'] = `Bearer ${apiKey}`;
-                          await fetch(`http://127.0.0.1:${port}/api/scheduler`, {
-                            method: 'POST',
-                            headers: triggerHeaders,
-                            body: JSON.stringify({ action: 'trigger', agentId: tm.agentId }),
-                          });
-                          console.log(`[LISTEN] Mention triggered OpenClaw ${mentionName}`);
+                          try {
+                            const triggerRes = await fetch(`http://127.0.0.1:${port}/api/scheduler`, {
+                              method: 'POST',
+                              headers: triggerHeaders,
+                              body: JSON.stringify({ action: 'trigger', agentId: tm.agentId }),
+                            });
+                            if (!triggerRes.ok && !delivered) {
+                              console.warn(`[LISTEN] Mention trigger failed for ${mentionName}: HTTP ${triggerRes.status}`);
+                            }
+                          } catch { /* best-effort */ }
                         }
                       } catch (e) {
                         console.warn(`[LISTEN] Mention dispatch failed for ${mentionName}:`, e.message);
@@ -1019,6 +1160,41 @@ if (WORKSPACE_BASE && existsSync(STORE_PATH)) {
     }
   };
   setTimeout(() => seedFromApi(), 10000); // wait for server + Postgres to be fully ready
+
+  // --- Project state migration (idempotent, runs on every startup) ---
+  setTimeout(async () => {
+    try {
+      const { migrateProjectState } = await import('./scripts/migrate-project-state.mjs');
+      await migrateProjectState();
+    } catch (e) {
+      console.warn('[MigrateState] Startup migration failed (non-fatal):', e.message);
+    }
+  }, 12000); // after Postgres is ready
+
+  // --- Startup reconcile: warn if recent task status transitions disagree ---
+  setTimeout(async () => {
+    try {
+      const store = cachedStore || await refreshCachedStore();
+      if (!store?.tasks?.length) return;
+      const now = Date.now();
+      const RECENT_MS = 30 * 60 * 1000; // 30 minutes
+      for (const task of store.tasks) {
+        if (task.isArchived) continue;
+        const lastEntry = (task.statusHistory || []).at(-1);
+        if (!lastEntry) continue;
+        if (now - lastEntry.timestamp > RECENT_MS) continue;
+        if (lastEntry.status !== task.status) {
+          console.warn(
+            `[Reconcile] Task ${task.id} (#${task.ticketNumber || '?'}): ` +
+            `statusHistory says '${lastEntry.status}' but current status is '${task.status}'. ` +
+            `Possible lost write. Last transition at ${new Date(lastEntry.timestamp).toISOString()}`
+          );
+        }
+      }
+    } catch (e) {
+      console.warn('[Reconcile] Startup reconcile failed (non-fatal):', e.message);
+    }
+  }, 15000);
 }
 
 // --- Gateway polling (server-side, pushes to WS clients) with exponential backoff ---
@@ -2023,7 +2199,8 @@ async function checkDeadLetterBacklog() {
     await client.connect();
     try {
       const { rows } = await client.query(
-        `SELECT count(*)::int AS cnt FROM org_studio_outbox WHERE status = 'dead_letter'`
+        `SELECT count(*)::int AS cnt FROM org_studio_outbox WHERE status = 'dead_letter' AND workspace_id = $1`,
+        ['default-workspace'] // TODO(v0.17-multi-workspace): aggregate across all workspaces or scope per-request
       );
       const count = rows[0]?.cnt || 0;
       if (count > 10) {
@@ -2153,8 +2330,66 @@ server.listen(port, async () => {
   // Initialize health alerts (startup log)
   initHealthAlerts();
 
+  // --- Telegram comms deprecation notice (v0.15) ---
+  if (!ENABLE_TELEGRAM_COMMS) {
+    console.log('[Telegram] Comms relay DISABLED (v0.15 default). Set ENABLE_TELEGRAM_COMMS=true to re-enable.');
+  } else {
+    console.log('[Telegram] Comms relay ENABLED (ENABLE_TELEGRAM_COMMS=true)');
+  }
+  // Send deprecation notice to Telegram once on startup (best-effort)
+  if (TG_BOT_TOKEN && TG_CHAT_ID) {
+    const deprecationSent = globalThis.__tgDeprecationSent;
+    if (!deprecationSent) {
+      globalThis.__tgDeprecationSent = true;
+      const deprecationMsg = [
+        '📢 *Org Studio v0.15 — Telegram Transition Notice*',
+        '',
+        "We're transitioning to in-app notifications. Task updates and mentions will no longer be sent to Telegram in v0.16.",
+        '',
+        'Please enable in-app push notifications in Settings → Notifications.',
+        '',
+        'Health alerts will continue via this channel for now.',
+        '',
+        '→ Settings: ' + (process.env.ORG_STUDIO_PUBLIC_URL || 'http://localhost:4501') + '/settings',
+      ].join('\n');
+      fetch(`https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: TG_CHAT_ID, text: deprecationMsg, parse_mode: 'Markdown', disable_web_page_preview: true }),
+      }).then(() => console.log('[Telegram] Deprecation notice sent'))
+        .catch(err => console.error('[Telegram] Deprecation notice failed:', err.message));
+    }
+  }
+
   // Initialize PostgreSQL LISTEN for bidirectional sync
   await initializePostgresListener();
+
+  // Roadmap reconcile: startup (30s delay so Next.js route is warm) + every 10 minutes.
+  // Heals any item-done drift caused by missed sync calls or past races.
+  const safeRoadmapReconcile = async () => {
+    try {
+      const port = process.env.PORT || 4501;
+      const apiKey = process.env.ORG_STUDIO_API_KEY || '';
+      const res = await fetch(`http://127.0.0.1:${port}/api/roadmap/reconcile`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        },
+        body: '{}',
+      });
+      if (!res.ok) {
+        console.warn(`[RoadmapReconcile] API returned HTTP ${res.status}`);
+      }
+    } catch (e) {
+      console.error('[RoadmapReconcile] self-call failed (non-fatal):', e.message);
+    }
+  };
+  setTimeout(() => {
+    safeRoadmapReconcile();
+    setInterval(safeRoadmapReconcile, 10 * 60_000);
+    console.log('[RoadmapReconcile] Scheduled: startup + every 10 min');
+  }, 30_000);
 
   // Daily metrics computation — runs at startup (15s delay) + daily at midnight
   setTimeout(async () => {

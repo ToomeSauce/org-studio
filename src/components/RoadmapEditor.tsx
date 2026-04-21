@@ -3,6 +3,7 @@
 import { useState, useCallback } from 'react';
 import { Pencil, Trash2, X, Plus, Check, ChevronRight } from 'lucide-react';
 import { clsx } from 'clsx';
+import { compareVersions } from '@/lib/version-utils';
 
 interface RoadmapItem {
   title: string;
@@ -59,9 +60,10 @@ export function RoadmapEditor({ projectId, versions, onVersionsChange }: Roadmap
 
   const sortVersions = (versionList: RoadmapVersion[]) => {
     return [...versionList].sort((a, b) => {
-      const aOrder = a.sort_order ?? parseFloat(a.version);
-      const bOrder = b.sort_order ?? parseFloat(b.version);
-      return aOrder - bOrder;
+      if (a.sort_order != null && b.sort_order != null) return a.sort_order - b.sort_order;
+      if (a.sort_order != null) return -1;
+      if (b.sort_order != null) return 1;
+      return compareVersions(a.version, b.version);
     });
   };
 

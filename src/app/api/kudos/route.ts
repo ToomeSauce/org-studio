@@ -64,7 +64,8 @@ async function loadKudosFromDB(): Promise<Kudos[]> {
     const { Pool } = require('pg');
     const pool = new Pool({ connectionString: process.env.DATABASE_URL });
     const result = await pool.query(
-      'SELECT id, agent_id as "agentId", given_by as "givenBy", task_id as "taskId", project_id as "projectId", value_tags as "valueTags", note, type, auto_detected as "autoDetected", confirmed, created_at as "createdAt" FROM org_studio_kudos ORDER BY created_at DESC'
+      'SELECT id, agent_id as "agentId", given_by as "givenBy", task_id as "taskId", project_id as "projectId", value_tags as "valueTags", note, type, auto_detected as "autoDetected", confirmed, created_at as "createdAt" FROM org_studio_kudos WHERE workspace_id = $1 ORDER BY created_at DESC',
+      ['default-workspace'] // TODO(v0.17-multi-workspace): resolve from request context
     );
     await pool.end();
 
@@ -94,8 +95,8 @@ async function saveKudosToDB(kudos: Kudos): Promise<void> {
     const pool = new Pool({ connectionString: process.env.DATABASE_URL });
     await pool.query(
       `INSERT INTO org_studio_kudos 
-        (id, agent_id, given_by, task_id, project_id, value_tags, note, type, auto_detected, confirmed, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        (id, agent_id, given_by, task_id, project_id, value_tags, note, type, auto_detected, confirmed, created_at, workspace_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
       [
         kudos.id,
         kudos.agentId,
@@ -108,6 +109,7 @@ async function saveKudosToDB(kudos: Kudos): Promise<void> {
         kudos.autoDetected,
         kudos.confirmed,
         kudos.createdAt,
+        'default-workspace', // TODO(v0.17-multi-workspace): resolve from request context
       ]
     );
     await pool.end();
@@ -184,7 +186,7 @@ async function handlePOST(req: NextRequest) {
     try {
       const { Pool } = require('pg');
       const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-      await pool.query('DELETE FROM org_studio_kudos WHERE id = $1', [id]);
+      await pool.query('DELETE FROM org_studio_kudos WHERE id = $1 AND workspace_id = $2', [id, 'default-workspace']);
       await pool.end();
       return NextResponse.json({ ok: true });
     } catch (err) {
@@ -222,8 +224,8 @@ async function handlePOST(req: NextRequest) {
       const { Pool } = require('pg');
       const pool = new Pool({ connectionString: process.env.DATABASE_URL });
       await pool.query(
-        'UPDATE org_studio_kudos SET note = $1, value_tags = $2 WHERE id = $3',
-        [note, JSON.stringify(values), id]
+        'UPDATE org_studio_kudos SET note = $1, value_tags = $2 WHERE id = $3 AND workspace_id = $4',
+        [note, JSON.stringify(values), id, 'default-workspace']
       );
       await pool.end();
       // Fetch updated kudos

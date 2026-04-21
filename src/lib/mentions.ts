@@ -29,7 +29,7 @@ export interface MentionMatch {
 export function parseMentions(text: string, teammates: Teammate[]): MentionMatch[] {
   if (!text || !teammates?.length) return [];
 
-  const mentionPattern = /@([\w][\w-]*)/g;
+  const mentionPattern = /(?<![\w.])@([\w][\w-]*)/g;
   const matches: MentionMatch[] = [];
   const seen = new Set<string>();
   let match;

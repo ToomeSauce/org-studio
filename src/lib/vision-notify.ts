@@ -36,7 +36,7 @@ export async function sendVersionProposal(project: Project, versionPlan: Version
       )
       .join('\n');
 
-    const message = `🔮 **Version Proposal: ${project.name} v${versionPlan.version}**
+    const message = `🔮 **Version Proposal: ${project.name} ${versionPlan.version}**
 
 **Proposed by:** ${devOwner} (auto)
 **Impact:** ${versionPlan.rationale}
@@ -71,7 +71,7 @@ export async function sendVersionComplete(
       .map((t, i) => `${i + 1}. ${t}`)
       .join('\n');
 
-    let message = `✅ **Version Complete: ${project.name} v${summary.version}**
+    let message = `✅ **Version Complete: ${project.name} ${summary.version}**
 
 **Shipped:**
 ${shippedList}`;

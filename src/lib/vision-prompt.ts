@@ -39,8 +39,8 @@ async function readVisionDoc(project: Project): Promise<string | null> {
       await client.connect();
       try {
         const result = await client.query(
-          'SELECT content FROM org_studio_vision_docs WHERE project_id = $1',
-          [project.id]
+          'SELECT content FROM org_studio_vision_docs WHERE project_id = $1 AND workspace_id = $2',
+          [project.id, 'default-workspace'] // TODO(v0.17-multi-workspace): resolve from caller context
         );
         if (result.rows.length > 0) {
           return result.rows[0].content;
@@ -193,7 +193,7 @@ async function parseRoadmapStructured(projectId: string, fallbackContent: string
     for (const version of roadmapVersions) {
       const vt = version.version_type || 'outcome';
       const typeEmoji = vt === 'foundation' ? '🏗️' : vt === 'chore' ? '🧹' : '🎯';
-      const header = `### v${version.version}: ${version.title} [${typeEmoji} ${vt}]`;
+      const header = `### ${version.version}: ${version.title} [${typeEmoji} ${vt}]`;
       const isShipped = version.status === 'shipped';
       
       if (isShipped) {
@@ -416,7 +416,7 @@ ${boundaries.map(b => `- ${b}`).join('\n') || '(none defined)'}
 ${
   outcomeVersions.length === 0
     ? '(no outcome-type versions defined)'
-    : outcomeVersions.map(v => `- [${v.status === 'shipped' ? 'x' : ' '}] v${v.version}: ${v.title}`).join('\n')
+    : outcomeVersions.map(v => `- [${v.status === 'shipped' ? 'x' : ' '}] ${v.version}: ${v.title}`).join('\n')
 }
 
 ### Guardrails (boundaries + contribution criteria)

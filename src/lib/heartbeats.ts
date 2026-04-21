@@ -47,15 +47,17 @@ export async function writeHeartbeat({
   if (!pool) return;
 
   try {
+    // TODO(v0.17-multi-workspace): resolve workspace from agent context when available
+    const workspaceId = 'default-workspace';
     await pool.query(
-      `INSERT INTO org_studio_heartbeats (agent_id, loop_id, last_heartbeat, last_status, updated_at)
-       VALUES ($1, $2, NOW(), $3, NOW())
+      `INSERT INTO org_studio_heartbeats (agent_id, loop_id, last_heartbeat, last_status, updated_at, workspace_id)
+       VALUES ($1, $2, NOW(), $3, NOW(), $4)
        ON CONFLICT (agent_id) DO UPDATE SET
          loop_id = EXCLUDED.loop_id,
          last_heartbeat = NOW(),
          last_status = EXCLUDED.last_status,
          updated_at = NOW()`,
-      [agentId, loopId || null, status || null]
+      [agentId, loopId || null, status || null, workspaceId]
     );
   } catch (e: any) {
     // Swallow — heartbeat failures must never break the scheduler

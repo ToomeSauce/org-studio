@@ -6,9 +6,11 @@ import { useWSData } from '@/lib/ws';
 import { useMemo, useState, useCallback, useRef, useEffect } from 'react';
 import { Rocket, Settings, Pencil, Loader, ChevronDown, ChevronRight, CheckCircle2, Plus, X } from 'lucide-react';
 import { clsx } from 'clsx';
-import ReactMarkdown from 'react-markdown';
+import dynamic from 'next/dynamic';
 import remarkGfm from 'remark-gfm';
 import RoadmapTaskCreator from '@/components/RoadmapTaskCreator';
+
+const ReactMarkdown = dynamic(() => import('react-markdown'), { ssr: false });
 
 // --- Section Parsing Helpers ---
 
@@ -171,7 +173,7 @@ function PillSelector({
 // --- Status Strip ---
 
 function StatusStrip({ project }: { project: ProjectWithVision }) {
-  const versionText = project.currentVersion ? `v${project.currentVersion}` : 'no version';
+  const versionText = project.currentVersion ? `${project.currentVersion}` : 'no version';
   const pending = project.autonomy?.pendingVersion;
 
   let statusText: string;
@@ -1282,7 +1284,6 @@ export default function VisionPage() {
     await updateProject(selectedProject.id, {
       autonomy: {
         ...(selectedProject.autonomy || {}),
-        enabled: selectedProject.autonomy?.enabled ?? false,
         approvalMode: mode,
       },
     });
@@ -1300,7 +1301,6 @@ export default function VisionPage() {
     const updates = {
       autonomy: {
         ...(selectedProject.autonomy || {}),
-        enabled: selectedProject.autonomy?.enabled ?? false,
         pendingVersion: null as any,
       },
     };

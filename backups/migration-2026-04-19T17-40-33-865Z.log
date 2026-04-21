@@ -1,0 +1,28 @@
+[2026-04-19T17:40:33.869Z] 
+╔════════════════════════════════════════════════════════════════╗
+[2026-04-19T17:40:33.869Z] ║             SEMVER MIGRATION (Atomic Transaction)             ║
+[2026-04-19T17:40:33.869Z] ╚════════════════════════════════════════════════════════════════╝
+
+[2026-04-19T17:40:33.869Z] Dry-run: false
+[2026-04-19T17:40:33.869Z] Backup directory: /home/openclaw_user/org-studio/backups
+
+[2026-04-19T17:40:33.870Z] [1/5] Fetching store data...
+[2026-04-19T17:40:35.517Z] ✅ Loaded 20 projects, 728 tasks
+[2026-04-19T17:40:35.518Z] 
+[2/5] Creating pre-migration backup...
+[2026-04-19T17:40:35.551Z] ✅ Backup saved: /home/openclaw_user/org-studio/backups/pre-semver-2026-04-19T17-40-33-865Z.json
+[2026-04-19T17:40:35.551Z] 
+[3/5] Building migration plan...
+[2026-04-19T17:40:35.552Z] ✅ Migration plan built:
+[2026-04-19T17:40:35.552Z]    Projects with changes: 15
+[2026-04-19T17:40:35.552Z]    Tasks migrated: 453
+[2026-04-19T17:40:35.552Z]    Orphaned refs cleared: 0
+[2026-04-19T17:40:35.552Z] 
+[4/5] Validating migrated data...
+[2026-04-19T17:40:35.553Z] ✅ Version sortability: 46 unique versions
+[2026-04-19T17:40:35.553Z]    Sample order: 0.1.0 < 0.2.0 < 0.3.0 < 0.4.0 < 0.5.0 < ...
+[2026-04-19T17:40:35.553Z] 
+[5/5] Committing changes...
+[2026-04-19T17:40:35.967Z] ❌ FATAL ERROR: Failed to commit store: 400
+[2026-04-19T17:40:35.967Z] 
+⚠️ Migration may have partially completed. Check backup: /home/openclaw_user/org-studio/backups/pre-semver-2026-04-19T17-40-33-865Z.json

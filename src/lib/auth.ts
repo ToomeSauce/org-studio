@@ -96,8 +96,8 @@ export async function getSession(sessionToken: string): Promise<{ userId: string
       await client.connect();
       try {
         const result = await client.query(
-          'SELECT user_id, expires_at FROM org_studio_sessions WHERE token = $1',
-          [sessionToken]
+          'SELECT user_id, expires_at FROM org_studio_sessions WHERE token = $1 AND workspace_id = $2',
+          [sessionToken, 'default-workspace'] // TODO(v0.17-multi-workspace): sessions are workspace-scoped
         );
         if (result.rows.length === 0) return null;
 
@@ -108,7 +108,7 @@ export async function getSession(sessionToken: string): Promise<{ userId: string
         
         if (expiresAt < Date.now()) {
           // Session expired — delete it
-          await client.query('DELETE FROM org_studio_sessions WHERE token = $1', [sessionToken]);
+          await client.query('DELETE FROM org_studio_sessions WHERE token = $1 AND workspace_id = $2', [sessionToken, 'default-workspace']);
           return null;
         }
 
@@ -152,8 +152,8 @@ export async function createSession(
       await client.connect();
       try {
         await client.query(
-          'INSERT INTO org_studio_sessions (token, user_id, expires_at) VALUES ($1, $2, $3)',
-          [token, userId, expiresAt]
+          'INSERT INTO org_studio_sessions (token, user_id, expires_at, workspace_id) VALUES ($1, $2, $3, $4)',
+          [token, userId, expiresAt, 'default-workspace'] // TODO(v0.17-multi-workspace): sessions are workspace-scoped
         );
         return token;
       } finally {
@@ -183,7 +183,7 @@ export async function destroySession(sessionToken: string): Promise<void> {
       const client = new pg.Client(process.env.DATABASE_URL);
       await client.connect();
       try {
-        await client.query('DELETE FROM org_studio_sessions WHERE token = $1', [sessionToken]);
+        await client.query('DELETE FROM org_studio_sessions WHERE token = $1 AND workspace_id = $2', [sessionToken, 'default-workspace']);
         return;
       } finally {
         await client.end();
@@ -207,6 +207,50 @@ export function getSessionTokenFromCookie(cookieHeader: string | null): string |
   if (!cookieHeader) return null;
   const match = cookieHeader.match(/session_token=([a-f0-9]+)/);
   return match ? match[1] : null;
+}
+
+// ── User ID Resolution ─────────────────────────────────────────────────
+// Browser sessions created before the login fix store auto-generated ids
+// (user-{timestamp}) which don't match workspace membership user_ids
+// (teammate usernames like 'basil'). This resolver maps them back.
+
+let _userIdMap: Map<string, string> | null = null;
+let _userIdMapTs = 0;
+const USER_ID_MAP_TTL = 60_000; // 1 minute
+
+export async function resolveSessionUserId(rawUserId: string): Promise<string> {
+  // Only resolve auto-generated ids; usernames pass through
+  if (!rawUserId.startsWith('user-')) return rawUserId;
+
+  if (!_userIdMap || Date.now() - _userIdMapTs > USER_ID_MAP_TTL) {
+    try {
+      const { getStoreProvider } = await import('@/lib/store-provider');
+      const store = await getStoreProvider().read();
+      const users = store.settings?.users || [];
+      _userIdMap = new Map();
+      for (const u of users as any[]) {
+        if (u.id && u.username) {
+          _userIdMap.set(u.id, u.username);
+        }
+      }
+      _userIdMapTs = Date.now();
+    } catch {
+      return rawUserId;
+    }
+  }
+  return _userIdMap.get(rawUserId) || rawUserId;
+}
+
+/** Bust user ID resolution cache (call after user settings change) */
+export function invalidateUserIdCache(): void {
+  _userIdMap = null;
+  _userIdMapTs = 0;
+}
+
+/** Result of authenticateRequestWithContext — includes userId and auth method */
+export interface AuthContext {
+  userId: string;
+  method: 'session' | 'apikey' | 'noauth';
 }
 
 /**
@@ -243,6 +287,45 @@ export async function authenticateRequest(req: NextRequest): Promise<NextRespons
 
   // No auth configured — allow localhost dev mode
   return null;
+}
+
+/**
+ * Authenticate a request and return full auth context (userId + method).
+ * Used by workspace enforcement to know WHO is making the request.
+ *
+ * @returns { error: NextResponse } on 401, or { context: AuthContext } on success
+ */
+export async function authenticateRequestWithContext(
+  req: NextRequest,
+): Promise<{ context: AuthContext; error?: never } | { context?: never; error: NextResponse }> {
+  // Try session cookie first
+  const cookieHeader = req.headers.get('cookie');
+  const sessionToken = getSessionTokenFromCookie(cookieHeader);
+
+  if (sessionToken) {
+    const session = await getSession(sessionToken);
+    if (session) {
+      // Resolve legacy auto-generated ids (user-*) back to username
+      // so session userId matches workspace membership user_id
+      const userId = await resolveSessionUserId(session.userId);
+      return { context: { userId, method: 'session' } };
+    }
+  }
+
+  // Try API key
+  const apiKey = process.env.ORG_STUDIO_API_KEY;
+  if (apiKey) {
+    const authHeader = req.headers.get('authorization') || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    if (token === apiKey) {
+      // Global API key maps to the legacy owner (basil)
+      return { context: { userId: 'basil', method: 'apikey' } };
+    }
+    return { error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) };
+  }
+
+  // No auth configured — allow localhost dev mode (treat as basil for workspace purposes)
+  return { context: { userId: 'basil', method: 'noauth' } };
 }
 
 /**

@@ -1,11 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticateRequest } from '@/lib/auth';
+import { authenticateRequest, authenticateRequestWithContext, getSession, getSessionTokenFromCookie } from '@/lib/auth';
 import { rpc } from '@/lib/gateway-rpc';
 import { getStoreProvider, type StoreData } from '@/lib/store-provider';
 import { parseMentions } from '@/lib/mention-notifier';
 import { routeCommentNotifications } from '@/lib/notification-router';
 import { syncRoadmapItemForTask } from '@/lib/roadmap-sync';
 import { checkArchivedProject } from '@/lib/archived-project-compat';
+import { isTelegramCommsEnabled } from '@/lib/telegram-guard';
+import {
+  resolveWorkspaceContext,
+  filterByWorkspace,
+  stampWorkspace,
+  belongsToWorkspace,
+  DEFAULT_WORKSPACE_ID,
+  type WorkspaceContext,
+} from '@/lib/workspace-auth';
 
 const SCHEDULER_URL = 'http://localhost:4501/api/scheduler';
 
@@ -221,6 +230,7 @@ function triggerAgentLoop(assignee: string, store: StoreData) {
 /** Send task status notification via Telegram. Best-effort, non-blocking. */
 function notifyTaskStatusChange(task: any, newStatus: string, store: StoreData) {
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
+  if (!isTelegramCommsEnabled()) return; // v0.15: comms relay disabled by default
   
   // Notify on all significant status transitions (user needs to see these)
   // All statuses go to the activity feed, but only high-signal ones go to Telegram
@@ -353,11 +363,41 @@ function piggybackStuckCheck(store: any) {
   }
 }
 
-export async function GET() {
+/**
+ * Helper: resolve workspace from request, returning DEFAULT_WORKSPACE_ID
+ * for unauthenticated / internal callers (backward-compat).
+ *
+ * Uses authenticateRequestWithContext to get userId from both session cookies
+ * AND Bearer API keys (resolves ORG_STUDIO_API_KEY → basil).
+ */
+async function resolveRequestWorkspace(req: NextRequest): Promise<WorkspaceContext | NextResponse> {
+  try {
+    // Get auth context (includes userId for both session and Bearer)
+    const authResult = await authenticateRequestWithContext(req);
+    const userId = authResult.context?.userId;
+    const wsResult = await resolveWorkspaceContext(req, userId);
+    if (wsResult.error) return wsResult.error;
+    if (wsResult.context) return wsResult.context;
+  } catch {}
+  return { id: DEFAULT_WORKSPACE_ID, name: 'Default Workspace' };
+}
+
+export async function GET(req: NextRequest) {
   try {
     const data = await readStore();
     piggybackStuckCheck(data);
-    return NextResponse.json(data);
+
+    // Workspace filtering — transparent: single-workspace users see everything
+    const wsOrError = await resolveRequestWorkspace(req);
+    if (wsOrError instanceof NextResponse) return wsOrError;
+    const workspace = wsOrError;
+    const filteredData = {
+      ...data,
+      projects: filterByWorkspace(data.projects, workspace.id),
+      tasks: filterByWorkspace(data.tasks, workspace.id),
+    };
+
+    return NextResponse.json(filteredData);
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
@@ -367,6 +407,18 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const authError = await authenticateRequest(req);
   if (authError) return authError;
+
+  // Resolve userId for this request (used to rewrite placeholder comment authors)
+  let requestUserId: string | undefined;
+  try {
+    const authCtx = await authenticateRequestWithContext(req);
+    requestUserId = authCtx.context?.userId;
+  } catch { /* best-effort */ }
+
+  // Resolve workspace context for this request
+  const wsOrError = await resolveRequestWorkspace(req);
+  if (wsOrError instanceof NextResponse) return wsOrError;
+  const workspace = wsOrError;
 
   try {
     const body = await req.json();
@@ -410,8 +462,8 @@ export async function POST(req: NextRequest) {
                 const { Pool } = await import('pg');
                 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
                 const result = await pool.query(
-                  `SELECT id, items FROM org_studio_roadmap_versions WHERE project_id = $1 AND version = $2 LIMIT 1`,
-                  [roadmapProjectId, taskVersion]
+                  `SELECT id, items FROM org_studio_roadmap_versions WHERE project_id = $1 AND version = $2 AND workspace_id = $3 LIMIT 1`,
+                  [roadmapProjectId, taskVersion, workspace.id]
                 );
                 await pool.end();
                 if (result.rows.length > 0) {
@@ -496,6 +548,7 @@ export async function POST(req: NextRequest) {
           ticketNumber,
           createdAt: now,
           ...payload.task,
+          workspace_id: payload.task?.workspace_id || workspace.id,
           statusHistory: [{ status: initialStatus, timestamp: now }],
           initiatedBy: payload.task?.initiatedBy || 'unknown',
         };
@@ -510,8 +563,8 @@ export async function POST(req: NextRequest) {
                 const { Pool } = await import('pg');
                 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
                 const result = await pool.query(
-                  `SELECT id, items FROM org_studio_roadmap_versions WHERE project_id = $1 AND version = $2 LIMIT 1`,
-                  [task.projectId, task.version]
+                  `SELECT id, items FROM org_studio_roadmap_versions WHERE project_id = $1 AND version = $2 AND workspace_id = $3 LIMIT 1`,
+                  [task.projectId, task.version, workspace.id]
                 );
                 if (result.rows.length > 0) {
                   const items = result.rows[0].items || [];
@@ -568,11 +621,17 @@ export async function POST(req: NextRequest) {
 
       case 'updateTask': {
         let triggeredAssignee: string | null = null;
-        let versionCompletionTriggered: { projectId: string; project: any } | null = null;
+        let versionCompletionTriggered: { projectId: string; project: any; version?: string } | null = null;
 
         for (let i = 0; i < store.tasks.length; i++) {
           const t = store.tasks[i];
           if (t.id !== payload.id) continue;
+
+          // Workspace guard: reject cross-workspace mutations
+          if (!belongsToWorkspace(t, workspace.id)) {
+            return NextResponse.json({ error: 'Forbidden — task belongs to another workspace' }, { status: 403 });
+          }
+
           const updates = { ...payload.updates };
 
           // Guard: only the assignee can move a task to done
@@ -585,6 +644,11 @@ export async function POST(req: NextRequest) {
                 { status: 403 }
               );
             }
+          }
+
+          // Soft warning: needsReview flagged but going straight to done
+          if (updates.status === 'done' && t.needsReview) {
+            console.warn(`[TaskGuard] Task ${t.id} (#${t.ticketNumber || '?'}) has needsReview=true but moved to done directly. reviewReason: ${t.reviewReason || '(none)'}`);
           }
 
           if (updates.status && updates.status !== t.status) {
@@ -626,10 +690,19 @@ export async function POST(req: NextRequest) {
             }
 
             // **NEW: Check for version completion when task moves to done**
-            if (updates.status === 'done' && t.projectId) {
+            if (updates.status === 'done' && t.projectId && t.version) {
               const project = store.projects.find((p: any) => p.id === t.projectId);
-              if (project?.autonomy?.enabled && project.autonomy.pendingVersion) {
-                versionCompletionTriggered = { projectId: t.projectId, project };
+              if (project) {
+                // Check if ALL tasks for this version are now done
+                const versionTasks = store.tasks.filter((task: any) => 
+                  task.projectId === t.projectId && task.version === t.version && !task.isArchived
+                );
+                const allDone = versionTasks.every((task: any) => 
+                  task.id === t.id ? true : task.status === 'done'
+                );
+                if (allDone && versionTasks.length > 0) {
+                  versionCompletionTriggered = { projectId: t.projectId, project, version: t.version };
+                }
               }
             }
           }
@@ -711,34 +784,34 @@ export async function POST(req: NextRequest) {
         if (versionCompletionTriggered) {
           (async () => {
             try {
-              const { checkVersionCompletion } = await import('@/lib/vision-completion');
-              const summary = checkVersionCompletion(
-                versionCompletionTriggered.project,
-                store.tasks
-              );
-              if (summary.isComplete) {
+              const completedVersion = (versionCompletionTriggered as any).version;
+              
+              if (completedVersion) {
                 console.log(
-                  `[Vision Autonomy] Version complete for project ${versionCompletionTriggered.projectId}`
+                  `[Version Dispatch] All tasks for ${completedVersion} in project ${versionCompletionTriggered.projectId} are done`
                 );
-                // Clear pendingVersion
-                versionCompletionTriggered.project.autonomy.pendingVersion = undefined;
-                // PERF: Use targeted provider.updateProject() instead of full store write
-                await getStoreProvider().updateProject(versionCompletionTriggered.projectId, {
-                  autonomy: versionCompletionTriggered.project.autonomy,
-                });
 
-                // Version complete — auto-pause. Human must explicitly launch next version.
-                console.log(`[Vision Autonomy] Version complete for ${versionCompletionTriggered.projectId} — pausing. Launch next version manually.`);
-                await getStoreProvider().updateProject(versionCompletionTriggered.projectId, {
-                  currentVersion: null,
-                  autonomy: {
-                    ...versionCompletionTriggered.project.autonomy,
-                    autoAdvance: false,
-                  },
-                });
+                // Update the version record: status = 'shipped', set approvedAt
+                // Do NOT bump approvedThrough automatically — humans explicitly move the
+                // approval horizon. Auto-advancing past what the human approved violates
+                // the autonomy-within-guardrails contract.
+                const updates: any = {
+                  currentVersion: completedVersion,
+                };
+
+                const versions = versionCompletionTriggered.project.versions || [];
+                const completedVersionRecord = versions.find((v: any) => v.label === completedVersion);
+                if (completedVersionRecord) {
+                  completedVersionRecord.status = 'shipped';
+                  completedVersionRecord.approvedAt = new Date().toISOString();
+                  updates.versions = versions;
+                }
+
+                // Persist all updates
+                await getStoreProvider().updateProject(versionCompletionTriggered.projectId, updates);
               }
             } catch (e) {
-              console.error('[Vision Autonomy] Completion check error:', e);
+              console.error('[Version Dispatch] Completion error:', e);
             }
           })();
         }
@@ -747,6 +820,11 @@ export async function POST(req: NextRequest) {
       }
 
       case 'deleteTask': {
+        // Workspace guard
+        const delTask = store.tasks.find((t: any) => t.id === payload.id);
+        if (delTask && !belongsToWorkspace(delTask, workspace.id)) {
+          return NextResponse.json({ error: 'Forbidden — task belongs to another workspace' }, { status: 403 });
+        }
         // Changed to archive instead of delete
         // PERF: Use targeted provider.updateTask() instead of full store write
         await getStoreProvider().updateTask(payload.id, {
@@ -775,7 +853,7 @@ export async function POST(req: NextRequest) {
 
       case 'addProject': {
         const id = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-        const project = { id, createdAt: Date.now(), ...payload.project };
+        const project = { id, createdAt: Date.now(), ...payload.project, workspace_id: payload.project?.workspace_id || workspace.id };
 
         // --- Integrity guard: auto-scaffold missing defaults (#697) ---
         if (!project.versions || !Array.isArray(project.versions) || project.versions.length === 0) {
@@ -790,11 +868,9 @@ export async function POST(req: NextRequest) {
             version_type: 'outcome',
           }];
         }
-        if (project.autoAdvance === undefined || project.autoAdvance === null) {
-          project.autoAdvance = true;
-        }
-        if (project.approvedThrough === undefined) {
-          project.approvedThrough = null;
+        if (!project.autonomy) project.autonomy = {};
+        if (project.autonomy.approvedThrough === undefined) {
+          project.autonomy.approvedThrough = null;
         }
         // --- End integrity guard ---
 
@@ -808,12 +884,23 @@ export async function POST(req: NextRequest) {
         
         // Check if devOwner is changing
         const oldProject = store.projects.find((p: any) => p.id === payload.id);
+
+        // Workspace guard
+        if (oldProject && !belongsToWorkspace(oldProject, workspace.id)) {
+          return NextResponse.json({ error: 'Forbidden — project belongs to another workspace' }, { status: 403 });
+        }
+
         const newDevOwner = payload.updates?.devOwner;
         const devOwnerChanged = newDevOwner && oldProject?.devOwner && newDevOwner !== oldProject.devOwner;
 
         // PERF: Use targeted provider.updateProject() instead of full store write
         await getStoreProvider().updateProject(payload.id, payload.updates);
         console.log('[API:store:updateProject] completed for', payload.id);
+
+        // Log project state changes
+        if (payload.updates?.state && payload.updates.state !== oldProject?.state) {
+          console.log(`[ProjectState] ${payload.id}: ${oldProject?.state || 'undefined'} → ${payload.updates.state}`);
+        }
 
         // Note: Vision cron management has been replaced by the Launch model
         // No auto-create/update/delete cron logic needed here anymore
@@ -838,6 +925,11 @@ export async function POST(req: NextRequest) {
       }
 
       case 'deleteProject': {
+        // Workspace guard
+        const delProj = store.projects.find((p: any) => p.id === payload.id);
+        if (delProj && !belongsToWorkspace(delProj, workspace.id)) {
+          return NextResponse.json({ error: 'Forbidden — project belongs to another workspace' }, { status: 403 });
+        }
         // PERF: Use targeted provider.deleteProject() instead of full store write
         await getStoreProvider().deleteProject(payload.id);
         return NextResponse.json({ ok: true });
@@ -857,14 +949,44 @@ export async function POST(req: NextRequest) {
         if (commentScope.kind === 'task' && commentScope.taskId) {
           task = store.tasks.find((t: any) => t.id === commentScope.taskId);
           if (!task) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+          // Workspace guard
+          if (!belongsToWorkspace(task, workspace.id)) {
+            return NextResponse.json({ error: 'Forbidden — task belongs to another workspace' }, { status: 403 });
+          }
         }
 
         const commentId = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
         const model = await resolveAgentModel(payload.comment?.author, store);
+
+        // Resolve placeholder author 'You' to the actual teammate name for the
+        // logged-in user. Otherwise mentions render as "💬 **You** mentioned you",
+        // which agents interpret as a self-test instead of a real user message.
+        // Multi-human-safe: always goes through session->teammate lookup, never
+        // hardcodes a name.
+        let resolvedAuthor = payload.comment?.author;
+        if (resolvedAuthor === 'You' || !resolvedAuthor) {
+          const teammates = store.settings?.teammates || [];
+          let matchedName: string | undefined;
+          if (requestUserId) {
+            const match = teammates.find((t: any) =>
+              t.id === requestUserId ||
+              t.agentId === requestUserId ||
+              t.name?.toLowerCase() === String(requestUserId).toLowerCase() ||
+              t.email?.toLowerCase() === String(requestUserId).toLowerCase()
+            );
+            if (match?.name) matchedName = match.name;
+          }
+          // Last resort: keep whatever userId the session gave us (better than
+          // 'You'). Only hits if the user is logged in but has no teammate
+          // record — they get labeled with their raw userId instead of a generic.
+          resolvedAuthor = matchedName || requestUserId || 'Unknown';
+        }
+
         const comment = {
           id: commentId,
           createdAt: Date.now(),
           ...payload.comment,
+          author: resolvedAuthor,
           model: payload.comment?.model || model, // explicit > resolved
         };
         // PERF: Use targeted provider.addComment() instead of full store write
@@ -937,7 +1059,7 @@ export async function POST(req: NextRequest) {
           const isAgentComment = teammates.some((t: any) => 
             !t.isHuman && (t.name?.toLowerCase() === commentAuthor || t.agentId?.toLowerCase() === commentAuthor)
           );
-          if (isAgentComment && TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID) {
+          if (isAgentComment && TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID && isTelegramCommsEnabled()) {
             const projectName = store.projects?.find((p: any) => p.id === task.projectId)?.name || '';
             const truncContent = comment.content?.length > 200 ? comment.content.slice(0, 200) + '…' : comment.content;
             const tgMsg = `💬 *${comment.author}* commented on "${task.title}"${projectName ? ` · ${projectName}` : ''}\n\n${truncContent}`;
@@ -1185,6 +1307,43 @@ export async function POST(req: NextRequest) {
         await getStoreProvider().updateProject(payload.projectId, { guardrails });
         const updatedProject = { ...project, guardrails };
         return NextResponse.json({ ok: true, project: updatedProject });
+      }
+
+      case 'promoteVersion': {
+        // Consolidated promote: UI Start button + auto-advance funnel through here.
+        // Wraps promoteProjectToNextVersion from project-state.ts.
+        const { promoteProjectToNextVersion } = await import('@/lib/project-state');
+        const promoteProjectId = payload.projectId;
+        const targetVersion = payload.targetVersion; // optional: explicit version for manual launch
+        if (!promoteProjectId) {
+          return NextResponse.json({ error: 'Missing projectId' }, { status: 400 });
+        }
+
+        // Need a Postgres client for the promote util
+        if (!process.env.DATABASE_URL) {
+          return NextResponse.json({ error: 'promoteVersion requires Postgres' }, { status: 501 });
+        }
+        const { Pool: PgPool } = await import('pg');
+        const pool = new PgPool({ connectionString: process.env.DATABASE_URL });
+        const pgClient = await pool.connect();
+        try {
+          const result = await promoteProjectToNextVersion(promoteProjectId, pgClient, {
+            targetVersion,
+            workspaceId: workspace.id,
+          });
+          if (!result.promoted) {
+            return NextResponse.json({ ok: false, reason: result.reason });
+          }
+          // Trigger the dev agent to pick up the new backlog tasks
+          const project = store.projects.find((p: any) => p.id === promoteProjectId);
+          if (project?.devOwner) {
+            triggerAgentLoop(project.devOwner, store);
+          }
+          return NextResponse.json({ ok: true, ...result });
+        } finally {
+          pgClient.release();
+          await pool.end();
+        }
       }
 
       // --- Section CRUD ---

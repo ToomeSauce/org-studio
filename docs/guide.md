@@ -93,22 +93,27 @@ This replaces the need for a separate AGENTS.md for Org Studio concerns. Your ag
 
 ### Columns
 
-Tasks flow through six columns:
+Tasks flow through a simple kanban. The default path is **backlog → in-progress → done**. Review, Planning, and QA are optional lanes used only when the work warrants them.
 
 | Column | Owner | Purpose |
 |--------|-------|---------|
-| **Planning** | Humans | Scoping and spec work. Agents never touch this. |
+| **Planning** | Agents + Humans | Scoping and spec work. Agents ARE encouraged to pull from planning, scope the task, and move it to backlog. |
 | **Backlog** | Agents | Ready for pickup. Agent intake queue. |
 | **In Progress** | Agents | Actively being worked. |
-| **QA** | QA Agent | End-to-end user-facing test validation. |
-| **Review** | Humans | Done but needs human sign-off. |
-| **Done** | — | Complete and verified. |
+| **QA** | QA Agent | Optional. For tasks with `testType: qa` — end-to-end user-facing test validation. |
+| **Review** | Humans | **OPT-IN ONLY.** For irreversible, cross-domain, mission-level, or security-sensitive work. Agent sets `needsReview: true` + writes `reviewNotes`. |
+| **Done** | — | **Default destination for finished work.** |
 
 ### Key Rules
-- **Planning is human-owned.** Agents never pull from planning.
-- **Backlog is the intake queue.** Agents pick from the top of backlog first.
-- **QA column** is for tasks requiring dedicated testing by a QA agent.
+- **Default path is backlog → in-progress → done.** Review is opt-in.
+- **Planning is agent-encouraged.** Agents pull from planning, flesh out acceptance criteria, then move to backlog.
+- **Backlog is the intake queue.** Agents pick from the top first.
+- **QA column** is opt-in via `testType: qa` on a task.
+- **Review is triggered only by `needsReview: true`.** Set it when work is (a) irreversible, (b) cross-domain, (c) mission/vision/roadmap-level, (d) security-sensitive.
 - Task order determines priority within a column.
+
+### Primary Directive
+Org Studio exists to unlock continuous agent delivery. After mission, vision, domain ownership, and boundaries are set, agents deliver autonomously. Human involvement is for blockers, irreversible decisions, and cross-domain changes — not routine work in an agent's owned domain.
 
 ---
 

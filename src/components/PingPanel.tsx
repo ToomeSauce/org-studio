@@ -123,6 +123,16 @@ export function PingPanel({ open, onClose }: { open: boolean; onClose: () => voi
     }
   }, [open]);
 
+  // Close on Escape
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [open, onClose]);
+
   const handleSend = async () => {
     if (!chatMsg.trim() || sending || !selectedAgentId) return;
     const text = chatMsg.trim();
@@ -160,7 +170,7 @@ export function PingPanel({ open, onClose }: { open: boolean; onClose: () => voi
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label={selectedAgent ? `Message ${selectedAgent.name}` : 'Message Team'} onClick={onClose}>
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
       <div
         className="relative w-full max-w-md h-full bg-[var(--bg-primary)] border-l border-[var(--border-default)] shadow-[var(--shadow-lg)] flex flex-col"
@@ -177,7 +187,8 @@ export function PingPanel({ open, onClose }: { open: boolean; onClose: () => voi
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)]"
+            aria-label="Close ping panel"
+            className="p-1.5 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]"
           >
             <X size={18} />
           </button>
@@ -212,8 +223,11 @@ export function PingPanel({ open, onClose }: { open: boolean; onClose: () => voi
                   <button
                     key={agent.id}
                     onClick={() => setSelectedAgentId(agent.agentId)}
+                    aria-label={`Select agent ${agent.name}`}
+                    aria-pressed={isSelected}
                     className={clsx(
-                      'flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[var(--text-xs)] font-medium whitespace-nowrap transition-all shrink-0',
+                      'flex items-center gap-1.5 px-3 py-1.5 min-h-[44px] rounded-full text-[var(--text-xs)] font-medium whitespace-nowrap transition-all shrink-0',
+                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]',
                       isSelected
                         ? 'text-white shadow-sm'
                         : 'hover:opacity-80'
@@ -280,7 +294,7 @@ export function PingPanel({ open, onClose }: { open: boolean; onClose: () => voi
 
             {/* Error toast */}
             {error && (
-              <div className="mx-5 mb-2 px-4 py-2 rounded-[var(--radius-md)] bg-[var(--error-subtle)] border border-[var(--error)] text-[var(--error)] text-[var(--text-xs)]">
+              <div role="alert" aria-live="assertive" className="mx-5 mb-2 px-4 py-2 rounded-[var(--radius-md)] bg-[var(--error-subtle)] border border-[var(--error)] text-[var(--error)] text-[var(--text-xs)]">
                 {error}
               </div>
             )}
@@ -293,8 +307,9 @@ export function PingPanel({ open, onClose }: { open: boolean; onClose: () => voi
                   value={chatMsg}
                   onChange={(e) => setChatMsg(e.target.value)}
                   placeholder={selectedAgent ? `Message ${selectedAgent.name}...` : 'Type a message...'}
+                  aria-label={selectedAgent ? `Message ${selectedAgent.name}` : 'Type a message'}
                   rows={2}
-                  className="flex-1 px-4 py-3 text-[var(--text-base)] bg-[var(--bg-secondary)] border border-[var(--border-strong)] rounded-[var(--radius-md)] text-[var(--text-primary)] placeholder-[var(--text-muted)] resize-none outline-none focus:border-[var(--accent-primary)] transition-colors"
+                  className="flex-1 px-4 py-3 text-[var(--text-base)] bg-[var(--bg-secondary)] border border-[var(--border-strong)] rounded-[var(--radius-md)] text-[var(--text-primary)] placeholder-[var(--text-muted)] resize-none outline-none focus:border-[var(--accent-primary)] focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] transition-colors"
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleSend();
                   }}
@@ -302,7 +317,8 @@ export function PingPanel({ open, onClose }: { open: boolean; onClose: () => voi
                 <button
                   onClick={handleSend}
                   disabled={!chatMsg.trim() || sending || !selectedAgentId}
-                  className="self-end p-3 bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)] text-white rounded-[var(--radius-md)] disabled:opacity-50 transition-all"
+                  aria-label="Send message"
+                  className="self-end p-3 min-h-[44px] min-w-[44px] flex items-center justify-center bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)] text-white rounded-[var(--radius-md)] disabled:opacity-50 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]"
                 >
                   {sending ? (
                     <Loader2 size={18} className="animate-spin" />

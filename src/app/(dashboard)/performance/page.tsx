@@ -3,13 +3,31 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useWSData } from '@/lib/ws';
 import { clsx } from 'clsx';
-import TeamHealthSection from '@/components/TeamHealthSection';
-import QualityScorecardSection from '@/components/QualityScorecardSection';
-import CulturalAlignmentSection from '@/components/CulturalAlignmentSection';
-import AgentComparisonSection from '@/components/AgentComparisonSection';
-import WeeklyDigestSection from '@/components/WeeklyDigestSection';
+import dynamic from 'next/dynamic';
 import { CoachingInsight } from '@/lib/coaching-insights';
 import { agentOwnedSections } from '@/lib/section-access';
+import { compareVersions } from '@/lib/version-utils';
+
+const TeamHealthSection = dynamic(() => import('@/components/TeamHealthSection'), {
+  ssr: false,
+  loading: () => <div className="h-32 animate-pulse bg-[var(--bg-secondary)] rounded-[var(--radius-md)]" />,
+});
+const QualityScorecardSection = dynamic(() => import('@/components/QualityScorecardSection'), {
+  ssr: false,
+  loading: () => <div className="h-32 animate-pulse bg-[var(--bg-secondary)] rounded-[var(--radius-md)]" />,
+});
+const CulturalAlignmentSection = dynamic(() => import('@/components/CulturalAlignmentSection'), {
+  ssr: false,
+  loading: () => <div className="h-32 animate-pulse bg-[var(--bg-secondary)] rounded-[var(--radius-md)]" />,
+});
+const AgentComparisonSection = dynamic(() => import('@/components/AgentComparisonSection'), {
+  ssr: false,
+  loading: () => <div className="h-32 animate-pulse bg-[var(--bg-secondary)] rounded-[var(--radius-md)]" />,
+});
+const WeeklyDigestSection = dynamic(() => import('@/components/WeeklyDigestSection'), {
+  ssr: false,
+  loading: () => <div className="h-32 animate-pulse bg-[var(--bg-secondary)] rounded-[var(--radius-md)]" />,
+});
 
 interface Teammate {
   agentId?: string;
@@ -166,7 +184,7 @@ export default function PerformancePage() {
 
     return results.sort((a, b) => {
       if (a.projectId !== b.projectId) return a.projectName.localeCompare(b.projectName);
-      return parseFloat(a.version) - parseFloat(b.version);
+      return compareVersions(a.version, b.version);
     });
   }, [storeData, selectedProject]);
 
@@ -326,7 +344,7 @@ export default function PerformancePage() {
                         className="border-b border-[var(--border-subtle)] hover:bg-[var(--bg-secondary)] transition-colors"
                       >
                         <td className="px-4 py-3 text-[var(--text-secondary)]">{v.projectName}</td>
-                        <td className="px-4 py-3 font-medium text-[var(--text-primary)]">v{v.version}</td>
+                        <td className="px-4 py-3 font-medium text-[var(--text-primary)]">{v.version}</td>
                         <td className="px-4 py-3 text-right text-[var(--text-secondary)]">{v.doneTasks}/{v.totalTasks}</td>
                         <td className="px-4 py-3 text-right text-[var(--text-secondary)] tabular-nums">{durationStr}</td>
                         <td className="px-4 py-3">

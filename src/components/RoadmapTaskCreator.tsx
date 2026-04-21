@@ -88,7 +88,7 @@ function CreateTaskDialog({ item, version, projectId, teammates, onCreated, onCa
             <div>
               <label className="text-xs font-semibold text-[var(--text-muted)] mb-1 block">Version</label>
               <input
-                value={`v${version}`}
+                value={`${version}`}
                 readOnly
                 className="w-full px-3 py-2 bg-[var(--bg-tertiary)] border border-[var(--border-default)] rounded-md text-sm text-[var(--text-muted)] cursor-not-allowed"
               />

@@ -8,10 +8,15 @@ import { ArrowLeft, Loader, Pencil, X, Archive, ChevronRight, Plus } from 'lucid
 import { useWSData } from '@/lib/ws';
 import { getProjectStatusLabel } from '@/lib/vision-status';
 import { TaskDetailPanel } from '@/components/TaskDetailPanel';
-import { RoadmapWithApprovalHorizon } from '@/components/RoadmapWithApprovalHorizon';
-import { ProjectChat } from '@/components/ProjectChat';
 import { updateTask, addComment as addTaskComment, deleteTask } from '@/lib/store';
-import ReactMarkdown from 'react-markdown';
+import { isVersionInHorizon, formatVersion } from '@/lib/version-utils';
+import dynamic from 'next/dynamic';
+
+const RoadmapWithApprovalHorizon = dynamic(
+  () => import('@/components/RoadmapWithApprovalHorizon').then(mod => mod.RoadmapWithApprovalHorizon),
+  { ssr: false, loading: () => <div className="p-8 text-center text-[var(--text-muted)]">Loading roadmap…</div> }
+);
+const ReactMarkdown = dynamic(() => import('react-markdown'), { ssr: false });
 import remarkGfm from 'remark-gfm';
 
 // Type definitions
@@ -23,9 +28,8 @@ interface Project {
   qaOwner?: string;
   currentVersion?: string;
   autonomy?: {
-    approvedThrough?: string | null; // New: version string up to which versions auto-advance
+    approvedThrough?: string | null; // version string up to which the agent may execute
     cadence?: string;
-    autoAdvance?: boolean;
     lastApprovedAt?: number;
     lastProposal?: any;
   };
@@ -125,7 +129,7 @@ function getProjectState(
         label: 'Sprint Complete',
         emoji: '🎉',
         color: 'green',
-        detail: `v${currentVersion} done — ready for v${nextVersion.version}`,
+        detail: `${currentVersion} done — ready for ${nextVersion.version}`,
       };
     }
     return {
@@ -145,7 +149,7 @@ function getProjectState(
     label: 'Running',
     emoji: '⚙️',
     color: 'blue',
-    detail: `v${currentVersion} — ${doneTasks.length}/${sprintTasks.length} tasks done`,
+    detail: `${currentVersion} — ${doneTasks.length}/${sprintTasks.length} tasks done`,
   };
 }
 
@@ -160,10 +164,6 @@ export default function ProjectDetailPage() {
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [showDetailPanel, setShowDetailPanel] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'chat'>(() => {
-    if (typeof window !== 'undefined' && window.location.hash.startsWith('#chat')) return 'chat';
-    return 'overview';
-  });
   const [editProject, setEditProject] = useState({ name: '', lifecycle: '', devOwner: '', visionOwner: '', qaOwner: '' });
   const [editLoading, setEditLoading] = useState(false);
   const [editingVision, setEditingVision] = useState(false);
@@ -420,85 +420,42 @@ export default function ProjectDetailPage() {
       // Find the first unshipped version that's within the approval horizon
       const nextVersion = roadmapVersions.find((v) => {
         if (v.status === 'shipped') return false;
-        if (!approvedThrough) return false; // Nothing approved
-        return parseFloat(v.version) <= parseFloat(approvedThrough);
+        if (!approvedThrough) return false;
+        return isVersionInHorizon(v.version, approvedThrough);
       });
-      if (!nextVersion) return; // No approved unshipped versions
+      if (!nextVersion) return;
 
       // Gate: block launch if any items are missing planning tickets
       const draftItems = nextVersion.items?.filter((item: any) => !item.taskId) || [];
       if (draftItems.length > 0) {
-        alert(`Cannot launch v${nextVersion.version}: ${draftItems.length} item(s) need planning tickets before launch.`);
+        alert(`Cannot start ${nextVersion.version}: ${draftItems.length} item(s) need planning tickets before launch.`);
         return;
       }
 
-      // 1. Set it as current
-      await fetch(`/api/roadmap/${projectId}`, {
+      // Use consolidated promoteVersion action
+      const resp = await fetch('/api/store', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          action: 'upsert',
-          version: nextVersion.version,
-          title: nextVersion.title,
-          status: 'current',
-          items: nextVersion.items,
+          action: 'promoteVersion',
+          projectId,
+          targetVersion: nextVersion.version,
         }),
       });
-
-      // 2. Move planning tickets to backlog (no create fallback)
-      if (nextVersion.items?.length > 0) {
-        for (const item of nextVersion.items) {
-          if (item.taskId) {
-            // Move linked ticket to backlog
-            await fetch('/api/store', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                action: 'updateTask',
-                id: item.taskId,
-                updates: {
-                  status: 'backlog',
-                  assignee: project.devOwner || '',
-                  version: nextVersion.version,
-                },
-              }),
-            });
-          }
-          // No fallback — items without taskId should have been caught by approval gate
-        }
+      const result = await resp.json();
+      if (!result.ok && result.reason) {
+        alert(`Cannot start: ${result.reason}`);
+        return;
       }
 
-      // 3. Update project — set currentVersion + approvedThrough
-      const currentApproved = project.autonomy?.approvedThrough;
-      const approvedNum = currentApproved ? parseFloat(currentApproved) : 0;
-      const launchedNum = parseFloat(nextVersion.version);
-      const newApprovedThrough = launchedNum > approvedNum ? nextVersion.version : currentApproved;
-
-      await fetch('/api/store', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'updateProject',
-          id: projectId,
-          updates: {
-            currentVersion: nextVersion.version,
-            autonomy: {
-              ...project.autonomy,
-              approvedThrough: newApprovedThrough,
-              autoAdvance: !!newApprovedThrough,
-            },
-          },
-        }),
-      });
-
-      // 4. Refresh roadmap
+      // Refresh roadmap
       const roadmapRes = await fetch(`/api/roadmap/${projectId}`);
       if (roadmapRes.ok) {
         const roadmapData = await roadmapRes.json();
         setRoadmap(roadmapData.versions || []);
       }
     } catch (e) {
-      console.error('Launch failed:', e);
+      console.error('Start failed:', e);
     } finally {
       setLaunching(false);
     }
@@ -548,22 +505,94 @@ export default function ProjectDetailPage() {
 
             {/* Action buttons — inline with title on desktop, wrap on mobile */}
             <div className="flex items-center gap-2 ml-auto flex-shrink-0">
-              {/* Launch button */}
-              {roadmapVersions.length > 0 && !currentVersion && (() => {
+              {/* Start button — shown when project is stopped */}
+              {(project as any).state === 'stopped' && (() => {
                 const approvedThrough = project.autonomy?.approvedThrough;
                 const hasApprovedUnshipped = approvedThrough && roadmapVersions.some(v =>
-                  v.status !== 'shipped' && parseFloat(v.version) <= parseFloat(approvedThrough)
+                  v.status !== 'shipped' && isVersionInHorizon(v.version, approvedThrough)
+                );
+                // If no currentVersion and no approved unshipped versions, disable start
+                if (!currentVersion && (!hasApprovedUnshipped)) {
+                  return (
+                    <div className="flex items-center gap-2">
+                      <button
+                        disabled
+                        title="Approve versions on the roadmap below to enable start"
+                        className="px-4 py-2 bg-[var(--bg-tertiary)] text-[var(--text-muted)] rounded-lg font-medium text-sm cursor-not-allowed flex items-center gap-2 opacity-60"
+                      >
+                        <span>▶️</span>
+                        Start
+                      </button>
+                      <span className="text-[var(--text-xs)] text-[var(--text-muted)]">✅ All approved versions shipped</span>
+                    </div>
+                  );
+                }
+                return (
+                  <button
+                    onClick={async () => {
+                      try {
+                        // If there's a currentVersion already, just flip state
+                        // Otherwise, also run handleLaunch to pick next version
+                        if (currentVersion) {
+                          await fetch('/api/store', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              action: 'updateProject',
+                              id: projectId,
+                              updates: { state: 'started' },
+                            }),
+                          });
+                        } else {
+                          // Set started + launch next version
+                          await fetch('/api/store', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              action: 'updateProject',
+                              id: projectId,
+                              updates: { state: 'started' },
+                            }),
+                          });
+                          await handleLaunch();
+                        }
+                      } catch (e) {
+                        console.error('Failed to start project:', e);
+                      }
+                    }}
+                    disabled={launching}
+                    className="px-4 py-2 bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)] text-white rounded-lg font-medium text-sm transition-all disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {launching ? (
+                      <>
+                        <Loader className="w-4 h-4 animate-spin" />
+                        Starting...
+                      </>
+                    ) : (
+                      <>
+                        <span>▶️</span>
+                        Start
+                      </>
+                    )}
+                  </button>
+                );
+              })()}
+              {/* Start button for projects without explicit state (legacy/running) that have no currentVersion */}
+              {(project as any).state !== 'stopped' && !currentVersion && roadmapVersions.length > 0 && (() => {
+                const approvedThrough = project.autonomy?.approvedThrough;
+                const hasApprovedUnshipped = approvedThrough && roadmapVersions.some(v =>
+                  v.status !== 'shipped' && isVersionInHorizon(v.version, approvedThrough)
                 );
                 if (!hasApprovedUnshipped) {
                   return (
                     <div className="flex items-center gap-2">
                       <button
                         disabled
-                        title="Approve more versions on the roadmap below to re-enable launch"
+                        title="Approve more versions on the roadmap below to re-enable start"
                         className="px-4 py-2 bg-[var(--bg-tertiary)] text-[var(--text-muted)] rounded-lg font-medium text-sm cursor-not-allowed flex items-center gap-2 opacity-60"
                       >
-                        <span>🚀</span>
-                        Launch
+                        <span>▶️</span>
+                        Start
                       </button>
                       <span className="text-[var(--text-xs)] text-[var(--text-muted)]">✅ All approved versions shipped</span>
                     </div>
@@ -575,22 +604,22 @@ export default function ProjectDetailPage() {
                     disabled={launching}
                     className="px-4 py-2 bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)] text-white rounded-lg font-medium text-sm transition-all disabled:opacity-50 flex items-center gap-2"
                   >
-                  {launching ? (
-                    <>
-                      <Loader className="w-4 h-4 animate-spin" />
-                      Launching...
-                    </>
-                  ) : (
-                    <>
-                      <span>🚀</span>
-                      Launch
-                    </>
-                  )}
-                </button>
+                    {launching ? (
+                      <>
+                        <Loader className="w-4 h-4 animate-spin" />
+                        Starting...
+                      </>
+                    ) : (
+                      <>
+                        <span>▶️</span>
+                        Start
+                      </>
+                    )}
+                  </button>
                 );
               })()}
-              {/* Pause button */}
-              {currentVersion && (
+              {/* Stop button — shown when project is running (state !== 'stopped') and has currentVersion */}
+              {(project as any).state !== 'stopped' && currentVersion && (
                 <button
                   onClick={async () => {
                     try {
@@ -601,22 +630,19 @@ export default function ProjectDetailPage() {
                           action: 'updateProject',
                           id: projectId,
                           updates: {
-                            autonomy: {
-                              ...project.autonomy,
-                              autoAdvance: false,
-                            },
-                            currentVersion: null,
+                            state: 'stopped',
+                            // Preserve currentVersion — it's just "which version was in flight"
                           },
                         }),
                       });
                     } catch (e) {
-                      console.error('Failed to pause project:', e);
+                      console.error('Failed to stop project:', e);
                     }
                   }}
                   className="px-4 py-2 border border-red-200 dark:border-red-800/50 text-red-600 dark:text-red-400 rounded-lg font-medium hover:bg-red-50 dark:hover:bg-red-950/20 transition-all text-sm flex items-center gap-2"
                 >
-                  <span>⏸</span>
-                  Pause
+                  <span>⏹</span>
+                  Stop
                 </button>
               )}
             </div>
@@ -641,36 +667,6 @@ export default function ProjectDetailPage() {
             )}
           </div>
         </div>
-
-        {/* Tab strip: Overview | Chat */}
-        <div className="flex items-center gap-1 border-b border-[var(--border-color)] -mb-2">
-          {([
-            { id: 'overview' as const, label: 'Overview' },
-            { id: 'chat' as const, label: '💬 Chat' },
-          ]).map(t => (
-            <button
-              key={t.id}
-              onClick={() => {
-                setActiveTab(t.id);
-                if (t.id === 'chat' && !window.location.hash.startsWith('#chat')) {
-                  history.replaceState(null, '', '#chat-general');
-                } else if (t.id === 'overview' && window.location.hash.startsWith('#chat')) {
-                  history.replaceState(null, '', window.location.pathname);
-                }
-              }}
-              className={clsx(
-                'px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px',
-                activeTab === t.id
-                  ? 'border-[var(--accent-primary)] text-[var(--text-primary)]'
-                  : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
-              )}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-
-        {activeTab === 'overview' && (<>
 
         {/* No Roadmap Banner (#697) */}
         {!roadmapLoading && roadmapVersions.length === 0 && (
@@ -984,20 +980,6 @@ What makes a good proposal?
             )}
           </div>
         </details>
-
-        </>)}
-
-        {activeTab === 'chat' && (
-          <div className="rounded-2xl border border-[var(--border-color)] overflow-hidden bg-[var(--bg-primary)]" style={{ minHeight: '70vh' }}>
-            <ProjectChat
-              project={project}
-              tasks={allTasks}
-              agents={storeData?.settings?.teammates?.map((t: any) => t.name) || []}
-              nameColors={{}}
-              currentAuthor="You"
-            />
-          </div>
-        )}
 
         {/* Danger Zone */}
         <div className="rounded-2xl border border-red-200/50 dark:border-red-800/30 overflow-hidden">

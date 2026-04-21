@@ -60,8 +60,7 @@ export function VisionDetailPanel({
   const [autonomyOpen, setAutonomyOpen] = useState(false);
   const [sectionsOpen, setSectionsOpen] = useState(false);
 
-  // Autonomy state
-  const [autonomyEnabled, setAutonomyEnabled] = useState(project.autonomy?.enabled || false);
+  // Autonomy state (enabled toggle removed — replaced by project.state)
   const [autonomyCadence, setAutonomyCadence] = useState<'daily' | 'weekly' | 'biweekly' | 'monthly'>(
     (project.autonomy?.cadence as any) || 'weekly'
   );
@@ -133,17 +132,8 @@ export function VisionDetailPanel({
   };
 
   const handleToggleAutonomy = async () => {
-    const newEnabled = !autonomyEnabled;
-    setAutonomyEnabled(newEnabled);
-    await updateProject(project.id, {
-      autonomy: {
-        enabled: newEnabled,
-        cadence: autonomyCadence,
-        lastProposedAt: project.autonomy?.lastProposedAt,
-        lastApprovedAt: project.autonomy?.lastApprovedAt,
-        pendingVersion: project.autonomy?.pendingVersion,
-      },
-    });
+    // autonomy.enabled removed — project.state is the new run-gate.
+    // This toggle is now a no-op placeholder; may be re-purposed.
   };
 
   const handleCadenceChange = async (cadence: string) => {
@@ -151,7 +141,6 @@ export function VisionDetailPanel({
     setAutonomyCadence(validated);
     await updateProject(project.id, {
       autonomy: {
-        enabled: autonomyEnabled,
         cadence: validated,
         lastProposedAt: project.autonomy?.lastProposedAt,
         lastApprovedAt: project.autonomy?.lastApprovedAt,
@@ -570,29 +559,15 @@ export function VisionDetailPanel({
             {autonomyOpen && (
               <div className="space-y-3 pb-4 pl-5">
                 <div className="flex items-center justify-between">
-                  <span className="text-[var(--text-xs)] text-[var(--text-muted)]">Enabled</span>
-                  <button
-                    onClick={handleToggleAutonomy}
-                    className={clsx(
-                      'relative inline-flex h-5 w-9 items-center rounded-full transition-colors',
-                      autonomyEnabled ? 'bg-[var(--success)]' : 'bg-[var(--bg-tertiary)]'
-                    )}
-                  >
-                    <span className={clsx(
-                      'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
-                      autonomyEnabled ? 'translate-x-4' : 'translate-x-0.5'
-                    )} />
-                  </button>
+                  <span className="text-[var(--text-xs)] text-[var(--text-muted)]">Run-gating is now controlled by the project Start/Stop button.</span>
                 </div>
-                {autonomyEnabled && (
-                  <>
-                    <div className="flex items-center justify-between">
-                      <span className="text-[var(--text-xs)] text-[var(--text-muted)]">Cadence</span>
-                      <select
-                        value={autonomyCadence}
-                        onChange={e => handleCadenceChange(e.target.value)}
-                        className="bg-[var(--bg-tertiary)] border border-[var(--border-strong)] rounded px-2 py-1 text-[var(--text-xs)] text-[var(--text-primary)] cursor-pointer"
-                      >
+                <div className="flex items-center justify-between">
+                  <span className="text-[var(--text-xs)] text-[var(--text-muted)]">Cadence</span>
+                  <select
+                    value={autonomyCadence}
+                    onChange={e => handleCadenceChange(e.target.value)}
+                    className="bg-[var(--bg-tertiary)] border border-[var(--border-strong)] rounded px-2 py-1 text-[var(--text-xs)] text-[var(--text-primary)] cursor-pointer"
+                  >
                         <option value="daily">Daily</option>
                         <option value="weekly">Weekly</option>
                         <option value="biweekly">Biweekly</option>
@@ -609,8 +584,6 @@ export function VisionDetailPanel({
                         <span className="text-[var(--text-tertiary)]">{formatTimestamp(project.autonomy?.lastApprovedAt)}</span>
                       </div>
                     </div>
-                  </>
-                )}
               </div>
             )}
 

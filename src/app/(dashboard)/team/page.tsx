@@ -2,10 +2,14 @@
 
 import { Pencil, Check, X, Trash2, Unplug, RefreshCw } from 'lucide-react';
 import { clsx } from 'clsx';
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef, Suspense } from 'react';
 import { useWSData } from '@/lib/ws';
+import dynamic from 'next/dynamic';
 
-import { ForceGraph } from '@/components/ForceGraph';
+const ForceGraph = dynamic(
+  () => import('@/components/ForceGraph').then(mod => mod.ForceGraph),
+  { ssr: false, loading: () => <div className="h-[420px] flex items-center justify-center text-[var(--text-muted)]">Loading graph…</div> }
+);
 import { Teammate, resolveColor } from '@/lib/teammates';
 import { EmojiAvatarPicker, AddTeammateCard } from '@/components/TeammateEditor';
 import { mergeTeammates, hasGateway } from '@/lib/teammate-sync';
@@ -13,7 +17,6 @@ import TeammateDetailPanel from '@/components/TeammateDetailPanel';
 import { GiveKudosModal } from '@/components/GiveKudosModal';
 import { KudosBoard } from '@/components/KudosBoard';
 import { KudosLeaderboard } from '@/components/KudosLeaderboard';
-import { NewDmButton } from '@/components/NewDmButton';
 import { CURRENT_USER_ID } from '@/lib/dm';
 
 function PersonCard({ person, isActive, activityStatus, overrides, onSave, onUpdateTeammate, onRemove, taskCount, projectCount, isDisconnected, isGatewayAgent, onClick }: {
@@ -123,10 +126,7 @@ function PersonCard({ person, isActive, activityStatus, overrides, onSave, onUpd
             {person.isHuman && <span className="ml-auto" />}
             {!editing && !confirmingRemove && (
               <>
-                {/* DM button — skip if self */}
-                {person.id !== CURRENT_USER_ID && person.agentId !== CURRENT_USER_ID && (
-                  <NewDmButton participantId={person.agentId || person.id} participantName={person.name} />
-                )}
+                {/* DM button removed with Messages cleanup — threads coming back via v0.14 Mobile-First IA */}
                 <button onClick={(e) => { e.stopPropagation(); startEdit(); }} className="text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors" title="Edit">
                   <Pencil size={12} />
                 </button>

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyPassword, createSession, getSessionTokenFromCookie } from '@/lib/auth';
 import { getStoreProvider } from '@/lib/store-provider';
+import { lookupUserWorkspace, WORKSPACE_COOKIE_KEY } from '@/lib/workspace-auth';
 
 /**
  * POST /api/auth/login
@@ -48,24 +49,44 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Create session
-    const sessionToken = await createSession(user.id, 24 * 60 * 60 * 1000); // 24-hour session
+    // Create session (30-day expiry to match workspace cookie)
+    // Use username (not auto-generated user.id) so session.userId matches
+    // teammate.id and workspace membership user_id (e.g. 'basil', not 'user-1713...')
+    const SESSION_EXPIRY_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+    const sessionToken = await createSession(user.username, SESSION_EXPIRY_MS);
 
-    // Return response with session cookie
+    // Resolve workspace via membership lookup (use username to match membership user_id)
+    const workspaceId = await lookupUserWorkspace(user.username);
+
+    // Return response with session cookie + workspace_id cookie
     const response = NextResponse.json({
       ok: true,
       message: 'Logged in',
       sessionToken,
+      workspaceId,
     });
 
-    // Set secure httpOnly cookie
+    const isProduction = process.env.NODE_ENV === 'production';
+    const maxAge = 30 * 24 * 60 * 60; // 30 days in seconds
+
+    // Set secure httpOnly session cookie
     response.cookies.set({
       name: 'session_token',
       value: sessionToken,
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: isProduction,
       sameSite: 'lax',
-      maxAge: 24 * 60 * 60, // 24 hours
+      maxAge,
+    });
+
+    // Set workspace_id cookie (HttpOnly, Secure-in-prod, SameSite=Lax, 30-day)
+    response.cookies.set({
+      name: WORKSPACE_COOKIE_KEY,
+      value: workspaceId,
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: 'lax',
+      maxAge,
     });
 
     return response;

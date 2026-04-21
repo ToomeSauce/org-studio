@@ -1,16 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { clsx } from 'clsx';
 import {
-  LayoutDashboard, FolderKanban, Layers, Settings, ChevronLeft, ChevronRight, Atom,
-  LogOut, X, Menu, Lock, ChevronDown, Users, BarChart3, Activity, MessageCircle,
+  LayoutDashboard, FolderKanban, Layers, ChevronLeft, ChevronRight, Atom,
+  X, Users, BarChart3, Activity,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
-import { useGateway } from '@/lib/hooks';
-import { useWSConnected } from '@/lib/ws';
-import { useWSData } from '@/lib/ws';
 import { useMobileMenu } from '@/lib/mobile-menu-context';
 
 // New 5-item navigation structure
@@ -19,26 +16,18 @@ const mainNav = [
   { name: 'Projects', href: '/projects', icon: FolderKanban, emoji: '📋' },
   { name: 'Context', href: '/context', icon: Layers, emoji: '📊' },
   { name: 'Team', href: '/team', icon: Users, emoji: '👥' },
-  { name: 'Messages', href: '/dms', icon: MessageCircle, emoji: '💬' },
   { name: 'Performance', href: '/performance', icon: BarChart3, emoji: '📊' },
 ];
 
 const bottomNav = [
   { name: 'Health', href: '/health', icon: Activity, emoji: '🩺' },
-  { name: 'Settings', href: '/settings', icon: Settings, emoji: '⚙️' },
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
-  const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
-  const [loggingOut, setLoggingOut] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
-  const { state } = useGateway();
-  const wsConnected = useWSConnected();
   const { mobileOpen, setMobileOpen } = useMobileMenu();
-  const storeData = useWSData('store');
-  const projects = storeData?.projects || [];
 
   // Close mobile menu when pathname changes
   useEffect(() => {
@@ -56,17 +45,6 @@ export function Sidebar() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  const handleLogout = async () => {
-    setLoggingOut(true);
-    try {
-      await fetch('/api/auth/logout', { method: 'POST' });
-      router.push('/login');
-    } catch (e) {
-      console.error('Logout error:', e);
-      setLoggingOut(false);
-    }
-  };
-
   const SidebarContent = () => (
     <>
       {/* Header */}
@@ -81,8 +59,9 @@ export function Sidebar() {
         )}
         <button
           onClick={() => collapsed ? setCollapsed(false) : setCollapsed(true)}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           className={clsx(
-            'p-1.5 rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)] transition-colors',
+            'p-1.5 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]',
             collapsed ? 'mx-auto' : 'ml-auto hidden md:flex'
           )}
         >
@@ -92,7 +71,8 @@ export function Sidebar() {
         {isMobile && mobileOpen && (
           <button
             onClick={() => setMobileOpen(false)}
-            className="p-1.5 rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)] ml-auto md:hidden"
+            aria-label="Close sidebar"
+            className="p-1.5 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)] ml-auto md:hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]"
           >
             <X size={18} />
           </button>
@@ -100,7 +80,7 @@ export function Sidebar() {
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 px-2.5 py-3 space-y-0.5 overflow-y-auto">
+      <nav aria-label="Main navigation" className="flex-1 px-2.5 py-3 space-y-0.5 overflow-y-auto">
         {mainNav.map((item) => {
           const isActive = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href));
           
@@ -108,12 +88,14 @@ export function Sidebar() {
             <Link key={item.name} href={item.href}
               className={clsx(
                 'flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] text-[var(--text-sm)] font-medium transition-all duration-100 min-h-[44px] md:min-h-auto',
+                'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]',
                 isActive
                   ? 'bg-[var(--accent-muted)] text-[var(--accent-primary)]'
                   : 'text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]',
                 collapsed && 'justify-center px-0'
               )}
               title={collapsed ? item.name : undefined}
+              aria-current={isActive ? 'page' : undefined}
             >
               <item.icon size={17} className={clsx('shrink-0', isActive ? 'opacity-100' : 'opacity-70')} />
               {!collapsed && <span className="truncate">{item.name}</span>}
@@ -130,34 +112,20 @@ export function Sidebar() {
             <Link key={item.name} href={item.href}
               className={clsx(
                 'flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] text-[var(--text-sm)] font-medium transition-all duration-100 min-h-[44px] md:min-h-auto',
+                'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]',
                 isActive
                   ? 'bg-[var(--accent-muted)] text-[var(--accent-primary)]'
                   : 'text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]',
                 collapsed && 'justify-center px-0'
               )}
               title={collapsed ? item.name : undefined}
+              aria-current={isActive ? 'page' : undefined}
             >
               <item.icon size={17} className="shrink-0 opacity-70" />
               {!collapsed && <span className="truncate">{item.name}</span>}
             </Link>
           );
         })}
-
-        {/* Logout Button */}
-        <button
-          onClick={handleLogout}
-          disabled={loggingOut}
-          className={clsx(
-            'w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] text-[var(--text-sm)] font-medium transition-all duration-100 min-h-[44px] md:min-h-auto',
-            'text-red-500 hover:bg-red-50 dark:hover:bg-red-900 dark:hover:bg-opacity-20 hover:text-red-600',
-            'disabled:opacity-50 disabled:cursor-not-allowed',
-            collapsed && 'justify-center px-0'
-          )}
-          title={collapsed ? 'Logout' : undefined}
-        >
-          <LogOut size={17} className="shrink-0 opacity-70" />
-          {!collapsed && <span className="truncate">{loggingOut ? 'Logging out...' : 'Logout'}</span>}
-        </button>
       </div>
     </>
   );

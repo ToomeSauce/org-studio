@@ -5,6 +5,7 @@ import { AgentLoop } from '@/lib/store';
 import type { PromptSection } from '@/lib/store';
 import { getStoreProvider } from './store-provider';
 import { agentOwnedSections, agentHasTaskAccess, isDefaultMainSection } from './section-access';
+import { isVersionInHorizon } from './version-utils';
 
 // Re-export for convenience
 export type { PromptSection };
@@ -32,8 +33,11 @@ export const DEFAULT_SECTIONS: PromptSection[] = [
   backlog     → Ready for an agent to pick up. This is YOUR intake queue.
   in-progress → Actively being worked. Resume these first.
   qa          → QA validation in progress. Test assignee is running the test plan. If you're the test assignee, follow the test plan.
-  review      → Work is done but needs human eyes. Move here when you're not 100% confident.
-  done        → Complete and verified. No further action needed.`,
+  review      → Work is done but needs human review. OPT-IN ONLY — see review guidance below.
+  done        → Complete and verified. DEFAULT destination for finished work.
+
+DEFAULT AGENT PATH: backlog → in-progress → done.
+Review is opt-in. Ship directly to done for reversible work in your owned domain.`,
     enabled: true,
     order: 20,
     builtIn: true,
@@ -41,20 +45,23 @@ export const DEFAULT_SECTIONS: PromptSection[] = [
   {
     id: 'review-guidance',
     label: 'Review Guidance',
-    content: `WHEN TO USE "review" vs "done":
-  → done:    Task is self-contained AND you can verify it yourself (tests pass, build clean, output matches spec).
-  → review:  Task touches shared code, involves subjective quality, changes user-facing behavior,
-             or you're not fully confident in the result. When in doubt, use review.
+    content: `WHEN TO USE "review" (opt-in — use ONLY when mandatory):
+  → done (DEFAULT): Task is in your owned domain AND the changes are reversible (can be reverted via git revert, config rollback, or similar). Ship it.
+  → review (OPT-IN): Use ONLY when:
+    (a) Irreversible changes — DB migrations, deletions, money/billing, external API writes with cost
+    (b) Cross-domain changes — touching another agent's owned code/section
+    (c) Mission/vision/roadmap direction changes
+    (d) Security-sensitive changes
+    When in doubt about reversibility, use review.
 
-REVIEW NOTES — when moving a task to "review" or "done", ALWAYS write a reviewNotes summary:
-  curl -s http://localhost:4501/api/store -X POST -H "Content-Type: application/json" \\
-    -d '{"action":"updateTask","id":"<id>","updates":{"status":"review","reviewNotes":"<summary>"}}'
+SELF-FLAGGING: At task start (or mid-work if scope changes), decide if the task needs review.
+  If yes: set needsReview=true and reviewReason="<why>" via updateTask.
+  If needsReview is true, move to "review" instead of "done" when complete.
+  If needsReview is false or unset, move directly to "done".
 
-  The reviewNotes field should include:
-  - What was completed
-  - What was NOT completed (and why)
-  - Any blockers or follow-ups needed
-  This is how the human knows what happened without reading code diffs.
+REVIEW NOTES — REQUIRED when moving to "review". NOT required for direct-to-done:
+  When moving to review, include reviewNotes explaining what was done, what wasn't, and why review is needed.
+  For direct-to-done: the commit message + final task comment is the record. No ceremony.
 
 COMMENTS — use task comments to communicate about a task:
   - When you encounter something noteworthy while working, leave a comment explaining what you found
@@ -65,12 +72,11 @@ TESTING — every task must be tested before moving out of in-progress:
   Every task has a testType field: "self" (default) or "qa".
 
   SELF TEST (testType = "self"):
-  → Before moving to review/done, you MUST:
+  → Before moving to done, you MUST:
     1. Write a test plan in the testPlan field (what you'll verify and how)
     2. Execute the test plan yourself (curl endpoints, check build, verify DB, etc.)
-    3. Document results in reviewNotes (what passed, what failed, what you verified)
-  → Then move to review or done.
-  → If you skip self-testing, QA will bounce it back.
+    3. Document results in a task comment or reviewNotes (what passed, what failed, what you verified)
+  → Then move to done (or review if needsReview=true).
 
   QA TEST (testType = "qa"):
   → Before moving out of in-progress, you MUST:
@@ -80,7 +86,7 @@ TESTING — every task must be tested before moving out of in-progress:
   → QA agent picks it up and runs the user-facing test plan
   → If QA finds basic failures (500 errors, broken builds), they'll bounce it back — self-test better.
 
-  IF testPlan IS EMPTY when you try to move to review/done/qa:
+  IF testPlan IS EMPTY when you try to move to done/review/qa:
   → Write one first. No exceptions.`,
     enabled: true,
     order: 30,
@@ -96,11 +102,11 @@ TESTING — every task must be tested before moving out of in-progress:
      - Only move it to "in-progress" AFTER you have started actual work (opened a file, ran a command, made a change).
      - Do NOT move to "in-progress" just to claim it. The status must reflect reality — if you haven't started working, leave it in backlog.
   3. Before moving any task out of in-progress: check testType.
-     - If "self" (default): self-test (write test plan, execute it, document results in reviewNotes), then move to review/done.
+     - If "self" (default): self-test (write test plan, execute it, document results in a comment or reviewNotes), then move to done (or review if needsReview=true).
      - If "qa": self-test first, write a test plan for end-user verification, then move to "qa" column (NOT review).
   4. When a task is complete:
      - If testPlan is empty, write one first — no exceptions.
-     - Then move to "done", "review", or "qa" per the testType rules above.
+     - Default: move to "done" directly. Use "review" ONLY if needsReview=true.
      Then go back to step 1.
   5. Repeat until there are NO remaining tasks assigned to you in "in-progress" or "backlog".
   6. If you discover new work, improvements, or follow-up tasks in your domain while working, create them in "backlog" and continue working through the queue.
@@ -174,6 +180,8 @@ PLANNING COLUMN — you can both add tasks to planning AND pull tasks from it. W
 - When you see opportunities to improve your domain, create new tasks and work them.
 - Clear your activity status when all work is done.
 - Every task must be tested. Check testType: "self" = self-test and document; "qa" = self-test then move to qa column.
+- DEFAULT path: backlog → in-progress → done. Ship directly to done for reversible work in your owned domain.
+- Use "review" ONLY for: irreversible changes, cross-domain work, mission/vision changes, or security-sensitive changes. Set needsReview=true when starting such tasks.
 - When writing a test plan, cover the acceptance criteria: what to verify, what actions to take, expected results.`,
     enabled: true,
     order: 60,
@@ -596,7 +604,23 @@ export async function buildDispatchMessage(
   });
 
   const inProgress = agentTasks.filter((t: any) => t.status === 'in-progress');
-  const backlog = agentTasks.filter((t: any) => t.status === 'backlog');
+
+  // Approval horizon + project-state filter for backlog only. In-progress and QA tasks keep going —
+  // they were already approved when the agent picked them up. Only NEW work pulls
+  // need to respect the current approval horizon and project run-state.
+  const backlog = agentTasks.filter((t: any) => {
+    if (t.status !== 'backlog') return false;
+    // Project state gate: stopped projects don't dispatch new work
+    if (t.projectId) {
+      const proj = (store.projects || []).find((p: any) => p.id === t.projectId);
+      if (proj?.state === 'stopped') return false;
+    }
+    if (!t.projectId || !t.version) return true; // no version → not version-gated
+    const proj = (store.projects || []).find((p: any) => p.id === t.projectId);
+    const approvedThrough = proj?.autonomy?.approvedThrough;
+    if (!approvedThrough) return false; // no horizon set → hold off on all backlog
+    return isVersionInHorizon(t.version, approvedThrough);
+  });
   const inQA = agentTasks.filter((t: any) => t.status === 'qa');
 
   // Nothing to do
@@ -626,7 +650,7 @@ export async function buildDispatchMessage(
     for (const t of inProgress) {
       const proj = projects.find((p: any) => p.id === t.projectId);
       lines.push(`- **${t.title}** ${t.ticketNumber ? `(#${t.ticketNumber})` : ''}`);
-      if (proj) lines.push(` Project: ${proj.name}${t.version ? ` v${t.version}` : ''}`);
+      if (proj) lines.push(` Project: ${proj.name}${t.version ? ` ${t.version}` : ''}`);
       if (t.sectionId && proj && !isDefaultMainSection(t.sectionId, proj.id)) {
         const sec = (proj.sections || []).find((s: any) => s.id === t.sectionId);
         if (sec) lines.push(` Section: ${sec.name}`);
@@ -662,7 +686,7 @@ export async function buildDispatchMessage(
     const proj = projects.find((p: any) => p.id === next.projectId);
     lines.push(`**Next from backlog:**`);
     lines.push(`- **${next.title}** ${next.ticketNumber ? `(#${next.ticketNumber})` : ''}`);
-    if (proj) lines.push(` Project: ${proj.name}${next.version ? ` v${next.version}` : ''}`);
+    if (proj) lines.push(` Project: ${proj.name}${next.version ? ` ${next.version}` : ''}`);
     if (next.sectionId && proj && !isDefaultMainSection(next.sectionId, proj.id)) {
       const sec = (proj.sections || []).find((s: any) => s.id === next.sectionId);
       if (sec) lines.push(` Section: ${sec.name}`);

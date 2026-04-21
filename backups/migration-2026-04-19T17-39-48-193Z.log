@@ -1,0 +1,37 @@
+[2026-04-19T17:39:48.197Z] 
+╔════════════════════════════════════════════════════════════════╗
+[2026-04-19T17:39:48.197Z] ║             SEMVER MIGRATION (Atomic Transaction)             ║
+[2026-04-19T17:39:48.197Z] ╚════════════════════════════════════════════════════════════════╝
+
+[2026-04-19T17:39:48.197Z] Dry-run: true
+[2026-04-19T17:39:48.198Z] Backup directory: /home/openclaw_user/org-studio/backups
+
+[2026-04-19T17:39:48.198Z] [1/5] Fetching store data...
+[2026-04-19T17:39:50.245Z] ✅ Loaded 20 projects, 728 tasks
+[2026-04-19T17:39:50.245Z] 
+[2/5] DRY-RUN: Skipping backup
+[2026-04-19T17:39:50.245Z] 
+[3/5] Building migration plan...
+[2026-04-19T17:39:50.247Z] ✅ Migration plan built:
+[2026-04-19T17:39:50.247Z]    Projects with changes: 15
+[2026-04-19T17:39:50.247Z]    Tasks migrated: 453
+[2026-04-19T17:39:50.247Z]    Orphaned refs cleared: 0
+[2026-04-19T17:39:50.247Z] 
+[4/5] Validating migrated data...
+[2026-04-19T17:39:50.248Z] ✅ Version sortability: 46 unique versions
+[2026-04-19T17:39:50.248Z]    Sample order: 0.1.0 < 0.2.0 < 0.3.0 < 0.4.0 < 0.5.0 < ...
+[2026-04-19T17:39:50.248Z] 
+[5/5] Committing changes...
+[2026-04-19T17:39:50.248Z] ⏭️ DRY-RUN: No changes committed
+[2026-04-19T17:39:50.248Z] 
+╔════════ MIGRATION COMPLETE ════════╗
+
+[2026-04-19T17:39:50.248Z] DRY-RUN SUMMARY:
+[2026-04-19T17:39:50.248Z]   Backup: /home/openclaw_user/org-studio/backups/pre-semver-2026-04-19T17-39-48-193Z.json
+[2026-04-19T17:39:50.248Z]   Changes: 15 projects, 453 tasks
+[2026-04-19T17:39:50.248Z]   Orphaned refs: 0 cleared
+
+[2026-04-19T17:39:50.248Z] Next steps:
+[2026-04-19T17:39:50.248Z]   1. Review dry-run output
+[2026-04-19T17:39:50.248Z]   2. Run without --dry-run to commit: node scripts/migrate-semver.mjs
+[2026-04-19T17:39:50.248Z]   3. Update codebase to use semver lib for version comparisons

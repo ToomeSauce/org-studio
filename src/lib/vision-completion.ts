@@ -111,25 +111,26 @@ export function updateVisionDoc(project: Project, completedVersion: string): voi
 
   let content = readFileSync(docPath, 'utf-8');
 
-  // Update roadmap: change "### v{version} (current)" to "### v{version} (shipped ...)"
-  const versionRegex = new RegExp(`### v${completedVersion.replace(/\./g, '\\.')}\\s+\\(current\\)`);
+  // Update roadmap: change "### {version} (current)" to "### {version} (shipped ...)".
+  // The leading `v` is optional to remain backward-compatible with older VISION.md files
+  // that used the `v` prefix; new headers are emitted without it.
+  const versionRegex = new RegExp(`### v?${completedVersion.replace(/\./g, '\\.')}\\s+\\(current\\)`);
   if (versionRegex.test(content)) {
     const today = new Date().toISOString().split('T')[0];
     content = content.replace(
       versionRegex,
-      `### v${completedVersion} (shipped ${today})`
+      `### ${completedVersion} (shipped ${today})`
     );
 
     // Check off all items in that section
-    // This is a bit tricky — find the section and check all its items
     const versionSectionRegex = new RegExp(
-      `### v${completedVersion.replace(/\./g, '\\.')}\\s+\\(shipped[^)]*\\)\\n([\\s\\S]*?)(?=###\\s+v|##\\s+|$)`
+      `### v?${completedVersion.replace(/\./g, '\\.')}\\s+\\(shipped[^)]*\\)\\n([\\s\\S]*?)(?=###\\s+v?\\d|##\\s+|$)`
     );
     const match = content.match(versionSectionRegex);
     if (match) {
       const section = match[1];
       const updatedSection = section.replace(/^-\s+\[\s*\]\s+/gm, '- [x] ');
-      content = content.replace(versionSectionRegex, `### v${completedVersion} (shipped ${today})\n${updatedSection}`);
+      content = content.replace(versionSectionRegex, `### ${completedVersion} (shipped ${today})\n${updatedSection}`);
     }
   }
 
@@ -146,7 +147,7 @@ export function updateVisionDoc(project: Project, completedVersion: string): voi
 
   // Write back
   writeFileSync(docPath, content, 'utf-8');
-  console.log(`[Vision Completion] Updated VISION.md for v${completedVersion} at ${docPath}`);
+  console.log(`[Vision Completion] Updated VISION.md for ${completedVersion} at ${docPath}`);
 
   // Auto-commit + push to git (fire-and-forget, same as PUT /api/vision/[id]/doc)
   const cwd = process.cwd();

@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { ChevronRight, Plus, Pencil, Trash2, X, Check, GripVertical } from 'lucide-react';
 import { clsx } from 'clsx';
+import { compareVersions } from '@/lib/version-utils';
 
 /**
  * RoadmapWithApprovalHorizon
@@ -140,9 +141,11 @@ export function RoadmapWithApprovalHorizon({
 
   const sortVersions = (versionList: RoadmapVersion[]) => {
     return [...versionList].sort((a, b) => {
-      const aOrder = a.sort_order ?? parseFloat(a.version);
-      const bOrder = b.sort_order ?? parseFloat(b.version);
-      return aOrder - bOrder;
+      // Prefer explicit sort_order; otherwise semver-compare versions.
+      if (a.sort_order != null && b.sort_order != null) return a.sort_order - b.sort_order;
+      if (a.sort_order != null) return -1;
+      if (b.sort_order != null) return 1;
+      return compareVersions(a.version, b.version);
     });
   };
 
@@ -246,7 +249,6 @@ export function RoadmapWithApprovalHorizon({
           autonomy: {
             ...project.autonomy,
             approvedThrough: versionNum,
-            autoAdvance: !!versionNum,
           },
         },
       }),
@@ -291,11 +293,11 @@ export function RoadmapWithApprovalHorizon({
     // 0 means after first version (first version approved)
     // n-1 means after last (all approved)
     if (!approvedThrough) return -1;
-    
-    const approvedNum = parseFloat(approvedThrough);
+
     let lastApprovedIdx = -1;
     for (let i = 0; i < plannedVersions.length; i++) {
-      if (parseFloat(plannedVersions[i].version) <= approvedNum) {
+      // <= via semver: returns -1 if v < approvedThrough, 0 if equal, 1 if greater
+      if (compareVersions(plannedVersions[i].version, approvedThrough) <= 0) {
         lastApprovedIdx = i;
       }
     }
@@ -399,7 +401,7 @@ export function RoadmapWithApprovalHorizon({
               />
             )}
             <span title={`Version type: ${versionType}`}>{typeBadge}</span>
-            <span className="font-medium">v{version.version}</span>
+            <span className="font-medium">{version.version}</span>
             <span className="text-sm text-[var(--text-secondary)]">— {version.title}</span>
           </div>
 

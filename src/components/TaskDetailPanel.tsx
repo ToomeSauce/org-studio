@@ -57,7 +57,7 @@ function formatFullDate(ts: number): string {
 function renderCommentWithMentions(content: string): React.ReactNode {
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
-  const regex = /(@\w+)/g;
+  const regex = /(?<![\w.])(@\w+)/g;
   let match;
 
   while ((match = regex.exec(content)) !== null) {
@@ -208,7 +208,10 @@ export function TaskDetailPanel({
     try {
       const mentions = extractMentions(commentText);
       await onAddComment(task.id, {
-        author: 'You',
+        // Send undefined; server will fill in the authenticated user's display
+        // name. Using a literal like 'You' produced mention envelopes such as
+        // "💬 **You** mentioned you" which agents misread as self-tests.
+        author: undefined as any,
         content: commentText.trim(),
         type: 'comment',
         mentions: mentions.length > 0 ? mentions : undefined,

@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getStoreProvider } from '@/lib/store-provider';
 import { authenticateRequest } from '@/lib/auth';
 import { checkArchivedProject } from '@/lib/archived-project-compat';
+import { versionSortKey, compareVersions } from '@/lib/version-utils';
+import semver from 'semver';
 
 export const dynamic = 'force-dynamic';
 
@@ -54,9 +56,9 @@ export async function GET(
         const result = await client.query(
           `SELECT id, version, title, status, items, shipped_at, sort_order, version_type
            FROM org_studio_roadmap_versions
-           WHERE project_id = $1
+           WHERE project_id = $1 AND workspace_id = $2
            ORDER BY sort_order ASC, version ASC`,
-          [projectId]
+          [projectId, 'default-workspace'] // TODO(v0.17-multi-workspace): resolve from request context
         );
 
         const versions: RoadmapVersion[] = result.rows.map((row: any) => ({
@@ -119,6 +121,27 @@ export async function POST(
     const body = await req.json();
     const { action, version, title, status, items, order, versionType } = body;
 
+    // Validate version semver on any action that takes one (upsert/delete).
+    // Per docs/decisions/2026-04-19-version-numbering-convention.md the API
+    // refuses non-semver inputs. Strict check: must be 3-part semver, no `v`
+    // prefix, no coercion. Callers must send canonical form.
+    if ((action === 'upsert' || action === 'delete') && version !== undefined) {
+      const isStrictSemver =
+        typeof version === 'string' &&
+        !version.startsWith('v') &&
+        /^\d+\.\d+\.\d+$/.test(version) &&
+        !!semver.valid(version);
+      if (!isStrictSemver) {
+        return NextResponse.json(
+          {
+            error: 'invalid_version',
+            message: `Version "${version}" is not valid semver. Use 3-part semver: MAJOR.MINOR.PATCH (e.g. 0.15.0). No "v" prefix, no 2-part shortcuts.`,
+          },
+          { status: 400 },
+        );
+      }
+    }
+
     // Authenticate request (supports both session cookies and API keys)
     const authError = await authenticateRequest(req);
     if (authError) {
@@ -144,13 +167,25 @@ export async function POST(
       try {
         if (action === 'upsert') {
           const versionId = `rv-${projectId}-${version.replace(/\./g, '-')}`;
-          const sortOrder = parseFloat(version);
+          const sortOrder = versionSortKey(version);
+
+          // Ensure every item has an id. Older items were stored as {title, done, taskId}
+          // with no id field; agents hitting the API couldn't create versioned tasks against
+          // them (403 roadmapItemId required). Auto-mint here is safe: the UI's lazy-mint
+          // flow uses the same id shape, and ids are only added, never changed.
+          const itemsWithIds = (items || []).map((it: any) => {
+            if (it && typeof it === 'object' && !it.id) {
+              const newId = `item-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`;
+              return { ...it, id: newId };
+            }
+            return it;
+          });
 
           const resolvedVersionType = versionType || 'outcome';
           await client.query(
             `INSERT INTO org_studio_roadmap_versions 
-              (id, project_id, version, title, status, items, sort_order, created_at, version_type)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+              (id, project_id, version, title, status, items, sort_order, created_at, version_type, workspace_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
              ON CONFLICT (project_id, version) DO UPDATE SET
               title = EXCLUDED.title,
               status = EXCLUDED.status,
@@ -163,10 +198,11 @@ export async function POST(
               version,
               title,
               status,
-              JSON.stringify(items || []),
+              JSON.stringify(itemsWithIds),
               sortOrder,
               Date.now(),
               resolvedVersionType,
+              'default-workspace', // TODO(v0.17-multi-workspace): resolve from request context
             ]
           );
 
@@ -200,8 +236,8 @@ export async function POST(
           });
         } else if (action === 'delete') {
           await client.query(
-            'DELETE FROM org_studio_roadmap_versions WHERE project_id = $1 AND version = $2',
-            [projectId, version]
+            'DELETE FROM org_studio_roadmap_versions WHERE project_id = $1 AND version = $2 AND workspace_id = $3',
+            [projectId, version, 'default-workspace']
           );
 
           return NextResponse.json({ action: 'deleted', version });
@@ -210,8 +246,8 @@ export async function POST(
           // sort_order ASC = first in array appears first
           for (let i = 0; i < order.length; i++) {
             await client.query(
-              'UPDATE org_studio_roadmap_versions SET sort_order = $1 WHERE project_id = $2 AND version = $3',
-              [i + 1, projectId, order[i]]
+              'UPDATE org_studio_roadmap_versions SET sort_order = $1 WHERE project_id = $2 AND version = $3 AND workspace_id = $4',
+              [i + 1, projectId, order[i], 'default-workspace']
             );
           }
 
@@ -248,11 +284,12 @@ function readRoadmapsFromFile(projectId: string): RoadmapVersion[] {
       const content = fs.readFileSync(roadmapPath, 'utf-8');
       const data = JSON.parse(content);
       const versions = data.versions || [];
-      // Sort ascending by sort_order then version
+      // Sort ascending by explicit sort_order when present, else by semver
       versions.sort((a: RoadmapVersion, b: RoadmapVersion) => {
-        const aOrder = a.sort_order ?? parseFloat(a.version);
-        const bOrder = b.sort_order ?? parseFloat(b.version);
-        return aOrder - bOrder;
+        if (a.sort_order != null && b.sort_order != null) return a.sort_order - b.sort_order;
+        if (a.sort_order != null) return -1;
+        if (b.sort_order != null) return 1;
+        return compareVersions(a.version, b.version);
       });
       return versions.map((v: any) => ({
         ...v,
@@ -292,13 +329,22 @@ function handleFileBasedRoadmap(
       const { version, title, status, items, versionType } = payload;
       const idx = data.versions.findIndex((v: any) => v.version === version);
 
+      // Mirror the Postgres path: auto-mint ids for items that don't have one.
+      const itemsWithIds = (items || []).map((it: any) => {
+        if (it && typeof it === 'object' && !it.id) {
+          const newId = `item-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`;
+          return { ...it, id: newId };
+        }
+        return it;
+      });
+
       const newVersion = {
         id: `rv-${projectId}-${version.replace(/\./g, '-')}`,
         version,
         title,
         status,
-        items,
-        sort_order: parseFloat(version),
+        items: itemsWithIds,
+        sort_order: versionSortKey(version),
         version_type: versionType || 'outcome',
       };
 
@@ -308,7 +354,12 @@ function handleFileBasedRoadmap(
         data.versions.push(newVersion);
       }
 
-      data.versions.sort((a: any, b: any) => (a.sort_order ?? parseFloat(a.version)) - (b.sort_order ?? parseFloat(b.version)));
+      data.versions.sort((a: any, b: any) => {
+        if (a.sort_order != null && b.sort_order != null) return a.sort_order - b.sort_order;
+        if (a.sort_order != null) return -1;
+        if (b.sort_order != null) return 1;
+        return compareVersions(a.version, b.version);
+      });
       fs.writeFileSync(roadmapPath, JSON.stringify(data, null, 2));
 
       return NextResponse.json({ action: 'upserted', version });

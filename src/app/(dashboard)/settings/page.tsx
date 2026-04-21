@@ -4,8 +4,9 @@ import { PageHeader } from '@/components/PageHeader';
 import { useWSData } from '@/lib/ws';
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import Link from 'next/link';
-import { Save, RefreshCw, ChevronDown, ChevronUp, WifiOff, RotateCcw, History, Eye, AlertTriangle, X, Database, Cloud, HardDrive, CheckCircle2 } from 'lucide-react';
+import { Save, RefreshCw, ChevronDown, ChevronUp, WifiOff, RotateCcw, History, Eye, AlertTriangle, X, Database, Cloud, HardDrive, CheckCircle2, Building2 } from 'lucide-react';
 import { clsx } from 'clsx';
+import { WorkspaceInfoCard, WorkspaceSwitcher } from '@/components/WorkspaceSwitcher';
 
 function ResetOnboardingSection() {
   const [resetting, setResetting] = useState(false);
@@ -34,7 +35,7 @@ function ResetOnboardingSection() {
       <button
         onClick={resetOnboarding}
         disabled={resetting || resetDone}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-md)] text-[var(--text-xs)] font-medium border transition-all disabled:opacity-50 disabled:cursor-not-allowed bg-[var(--bg-tertiary)] border-[var(--border-default)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-hover)]"
+        className="flex items-center gap-1.5 px-3 py-1.5 min-h-[44px] rounded-[var(--radius-md)] text-[var(--text-xs)] font-medium border transition-all disabled:opacity-50 disabled:cursor-not-allowed bg-[var(--bg-tertiary)] border-[var(--border-default)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]"
       >
         <RotateCcw size={13} />
         {resetDone ? 'Reset — reload to see wizard' : resetting ? 'Resetting...' : 'Reset Onboarding'}
@@ -174,7 +175,8 @@ function BackupHistorySection() {
         </div>
         <button
           onClick={fetchBackups}
-          className="p-1.5 rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)] transition-colors"
+          aria-label="Refresh backups"
+          className="p-1.5 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]"
         >
           <RefreshCw size={14} />
         </button>
@@ -188,14 +190,14 @@ function BackupHistorySection() {
       )}
 
       {restoreResult && (
-        <div className={clsx(
+        <div role="status" aria-live="polite" className={clsx(
           'flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-[var(--text-xs)]',
           restoreResult.startsWith('Error')
             ? 'bg-[color-mix(in_srgb,var(--error)_10%,transparent)] text-[var(--error)] border border-[color-mix(in_srgb,var(--error)_20%,transparent)]'
             : 'bg-[color-mix(in_srgb,var(--success)_10%,transparent)] text-[var(--success)] border border-[color-mix(in_srgb,var(--success)_20%,transparent)]'
         )}>
           <span>{restoreResult}</span>
-          <button onClick={() => setRestoreResult(null)} className="ml-auto hover:opacity-70">
+          <button onClick={() => setRestoreResult(null)} aria-label="Dismiss" className="ml-auto hover:opacity-70 p-1 min-h-[44px] min-w-[44px] flex items-center justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] rounded-[var(--radius-md)]">
             <X size={12} />
           </button>
         </div>
@@ -235,8 +237,9 @@ function BackupHistorySection() {
                 <div className="flex items-center gap-1.5">
                   <button
                     onClick={() => handlePreview(b.filename)}
+                    aria-label={`Preview backup from ${formatRelativeTime(b.timestamp)}`}
                     className={clsx(
-                      'flex items-center gap-1 px-2.5 py-1.5 rounded-[var(--radius-md)] text-[var(--text-xs)] font-medium border transition-all',
+                      'flex items-center gap-1 px-2.5 py-1.5 min-h-[44px] rounded-[var(--radius-md)] text-[var(--text-xs)] font-medium border transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]',
                       previewFilename === b.filename
                         ? 'bg-[var(--accent-primary)] text-white border-[var(--accent-primary)]'
                         : 'bg-[var(--bg-tertiary)] border-[var(--border-default)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-hover)]'
@@ -246,7 +249,8 @@ function BackupHistorySection() {
                   </button>
                   <button
                     onClick={() => setConfirmRestore(b.filename)}
-                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-[var(--radius-md)] text-[var(--text-xs)] font-medium border transition-all bg-[var(--bg-tertiary)] border-[var(--border-default)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-hover)]"
+                    aria-label={`Restore backup from ${formatRelativeTime(b.timestamp)}`}
+                    className="flex items-center gap-1 px-2.5 py-1.5 min-h-[44px] rounded-[var(--radius-md)] text-[var(--text-xs)] font-medium border transition-all bg-[var(--bg-tertiary)] border-[var(--border-default)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]"
                   >
                     <RotateCcw size={12} /> Restore
                   </button>
@@ -297,13 +301,13 @@ function BackupHistorySection() {
                         <button
                           onClick={() => handleRestore(b.filename)}
                           disabled={restoring}
-                          className="flex items-center gap-1 px-2.5 py-1.5 rounded-[var(--radius-md)] text-[var(--text-xs)] font-medium border transition-all disabled:opacity-50 disabled:cursor-not-allowed bg-[var(--error)] text-white border-[var(--error)] hover:opacity-90"
+                          className="flex items-center gap-1 px-2.5 py-1.5 min-h-[44px] rounded-[var(--radius-md)] text-[var(--text-xs)] font-medium border transition-all disabled:opacity-50 disabled:cursor-not-allowed bg-[var(--error)] text-white border-[var(--error)] hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]"
                         >
                           <RotateCcw size={12} /> {restoring ? 'Restoring...' : 'Confirm Restore'}
                         </button>
                         <button
                           onClick={() => setConfirmRestore(null)}
-                          className="px-2.5 py-1.5 rounded-[var(--radius-md)] text-[var(--text-xs)] font-medium border transition-all bg-[var(--bg-tertiary)] border-[var(--border-default)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-hover)]"
+                          className="px-2.5 py-1.5 min-h-[44px] rounded-[var(--radius-md)] text-[var(--text-xs)] font-medium border transition-all bg-[var(--bg-tertiary)] border-[var(--border-default)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]"
                         >
                           Cancel
                         </button>
@@ -437,7 +441,7 @@ function RuntimeStatusSection() {
         <button
           onClick={pollRuntimes}
           disabled={loading}
-          className="flex items-center gap-1.5 px-2 py-1 rounded text-[var(--text-xs)] font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] disabled:opacity-50"
+          className="flex items-center gap-1.5 px-2 py-1 min-h-[44px] rounded text-[var(--text-xs)] font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]"
         >
           <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
           {loading ? 'Checking...' : 'Check'}
@@ -540,6 +544,19 @@ export default function SettingsPage() {
     <div className="space-y-6 max-w-2xl">
       <PageHeader title="Settings" description="Storage, runtime, and system configuration" />
 
+      {/* Current Workspace */}
+      <section className="bg-[var(--card)] border border-[var(--border-default)] rounded-[var(--radius-lg)] p-5 space-y-4 shadow-[var(--shadow-sm),inset_0_1px_0_var(--card-highlight)]">
+        <div className="flex items-center gap-2">
+          <Building2 size={15} className="text-[var(--text-secondary)]" />
+          <h2 className="text-[var(--text-sm)] font-semibold text-[var(--text-primary)]">Workspace</h2>
+        </div>
+        <p className="text-[var(--text-xs)] text-[var(--text-tertiary)]">
+          Your active workspace determines which projects, tasks, and teammates you see.
+          All data is scoped to the current workspace.
+        </p>
+        <WorkspaceInfoCard />
+      </section>
+
       {/* Agent Runtimes */}
       <RuntimeStatusSection />
 
@@ -593,18 +610,20 @@ export default function SettingsPage() {
           <button
             onClick={savePreamble}
             disabled={!preambleDirty || preambleSaving}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-md)] text-[var(--text-xs)] font-medium border transition-all disabled:opacity-40 disabled:cursor-not-allowed bg-[var(--accent-primary)] text-white border-[var(--accent-primary)] hover:bg-[var(--accent-hover)]"
+            className="flex items-center gap-1.5 px-3 py-1.5 min-h-[44px] rounded-[var(--radius-md)] text-[var(--text-xs)] font-medium border transition-all disabled:opacity-40 disabled:cursor-not-allowed bg-[var(--accent-primary)] text-white border-[var(--accent-primary)] hover:bg-[var(--accent-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]"
           >
             <Save size={13} /> {preambleSaving ? 'Saving...' : 'Save'}
           </button>
         </div>
 
+        <label htmlFor="scheduler-preamble" className="sr-only">Scheduler preamble instructions</label>
         <textarea
+          id="scheduler-preamble"
           value={preamble}
           onChange={e => { setPreamble(e.target.value); setPreambleDirty(true); }}
           rows={4}
           placeholder="e.g. Always check for PR review comments before starting new work. Prefer small, focused commits."
-          className="w-full bg-[var(--bg-primary)] border border-[var(--border-default)] rounded-[var(--radius-md)] px-4 py-3 text-[var(--text-sm)] text-[var(--text-primary)] placeholder:text-[var(--text-muted)] resize-y focus:outline-none focus:border-[var(--accent-primary)] transition-colors font-mono leading-relaxed min-h-[100px]"
+          className="w-full bg-[var(--bg-primary)] border border-[var(--border-default)] rounded-[var(--radius-md)] px-4 py-3 text-[var(--text-sm)] text-[var(--text-primary)] placeholder:text-[var(--text-muted)] resize-y focus:outline-none focus:border-[var(--accent-primary)] focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] transition-colors font-mono leading-relaxed min-h-[100px]"
         />
       </section>
 
@@ -613,6 +632,7 @@ export default function SettingsPage() {
 
       {/* Backup History */}
       <BackupHistorySection />
+
 
       {/* Advanced Section */}
       <section className="bg-[var(--card)] border border-[var(--border-default)] rounded-[var(--radius-lg)] p-5 space-y-3 shadow-[var(--shadow-sm),inset_0_1px_0_var(--card-highlight)]">
