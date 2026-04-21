@@ -107,14 +107,14 @@ export interface Task {
   constraints?: string;  // Boundaries / what NOT to do
   context?: string;      // Links, files, prior art
   testPlan?: string;     // Test plan — dev writes it, self-executes or QA-executes depending on testType
-  testType?: 'self' | 'qa';   // Testing type: 'self' (default) = dev self-tests; 'qa' = dev self-tests then QA agent runs e2e
-  testAssignee?: string;       // Who runs QA — explicit > team default > self (only relevant when testType: 'qa')
+  testType?: 'self' | 'qa';   // DEPRECATED post-#862: tasks route by assignee only. Field retained for historical tasks.
+  testAssignee?: string;       // DEPRECATED post-#862: QA-component owner uses standard assignee field. Retained for history.
   reviewNotes?: string;   // Agent writes summary when moving to review/done
   outcomeIds?: string[];  // Which outcomes this task serves
   isArchived?: boolean;   // Archive flag — tasks are archived instead of deleted
   archivedAt?: number;    // When task was archived
   archivedBy?: string;    // Who archived it
-  status: 'planning' | 'backlog' | 'in-progress' | 'qa' | 'review' | 'done';
+  status: 'planning' | 'backlog' | 'in-progress' | 'review' | 'done' | 'blocked';
   projectId: string;
   assignee: string;
   priority?: 'high' | 'medium' | 'low';
@@ -315,14 +315,13 @@ export type TaskActivityStatus = 'active' | 'idle' | 'stalled';
 
 const STALL_THRESHOLDS = {
   'in-progress': 4 * 60 * 60 * 1000,  // 4 hours for in-progress
-  'qa': 6 * 60 * 60 * 1000,            // 6 hours for QA
   'review': 8 * 60 * 60 * 1000,        // 8 hours for review
 };
 
 const IDLE_THRESHOLD = 2 * 60 * 60 * 1000;  // 2 hours = idle, 4+ = stalled
 
 export function getTaskActivityStatus(task: Task): TaskActivityStatus {
-  if (!['in-progress', 'qa', 'review'].includes(task.status)) {
+  if (!['in-progress', 'review'].includes(task.status)) {
     return 'active';  // Only track these statuses
   }
 

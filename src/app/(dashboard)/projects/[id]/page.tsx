@@ -39,7 +39,7 @@ interface Project {
 interface Task {
   id: string;
   title: string;
-  status: 'planning' | 'backlog' | 'in-progress' | 'qa' | 'review' | 'done';
+  status: 'planning' | 'backlog' | 'in-progress' | 'review' | 'done' | 'blocked';
   projectId: string;
   assignee: string;  // Required
   version?: string;
@@ -282,7 +282,7 @@ export default function ProjectDetailPage() {
 
   const doneTasks = currentSprintTasks.filter((t) => t.status === 'done');
   const inProgressTasks = currentSprintTasks.filter(
-    (t) => t.status === 'in-progress' || t.status === 'qa'
+    (t) => t.status === 'in-progress'
   );
   const backlogTasks = currentSprintTasks.filter((t) => t.status === 'backlog');
 

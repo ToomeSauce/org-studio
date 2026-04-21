@@ -19,24 +19,24 @@ const BASE_COLUMNS: { key: Task['status']; label: string; color: string }[] = [
   { key: 'done', label: 'Done', color: 'bg-[var(--success)]' },
 ];
 
-const QA_COLUMN = { key: 'qa' as Task['status'], label: 'QA', color: 'bg-teal-500' };
+const QA_COLUMN_LEGACY_SENTINEL = null; // #862: QA is a component, not a column. Sentinel kept so grep catches any regressions.
 
 const COLUMN_TOOLTIPS: Record<Task['status'], string> = {
   'planning': 'Scoping column. Humans and agents can add/refine tasks here. Move to Backlog when ready for execution.',
   'backlog': 'Agent intake queue — ready to be picked up. Top = highest priority.',
   'in-progress': 'Actively being worked by agents or humans.',
-  'qa': 'QA validation — end-user testing before human review.',
-  'review': 'Waiting for human review and sign-off.',
+  'review': 'Opt-in human sign-off for irreversible or security-sensitive work.',
   'done': 'Completed and verified.',
+  'blocked': 'Waiting on an external answer or dependency. Add a comment explaining the block.',
 };
 
 const COLUMN_EMPTY: Record<Task['status'], { emoji: string; heading: string; text: string }> = {
   'planning': { emoji: '📝', heading: 'Scoping zone', text: 'Add and refine tasks here. Move to Backlog when fully scoped and ready for an agent to pick up.' },
   'backlog': { emoji: '📥', heading: 'Agent intake', text: 'Ready tasks land here. Agents pull from the top — highest priority first.' },
   'in-progress': { emoji: '⚡', heading: 'Where the work happens', text: 'Agents pull from Backlog and work here. Tasks show up automatically.' },
-  'qa': { emoji: '🧪', heading: 'QA queue', text: 'Tasks requiring end-user testing land here. Test assignee validates against the test plan.' },
-  'review': { emoji: '👀', heading: 'Awaiting sign-off', text: 'Agents park finished work here for human review.' },
+  'review': { emoji: '👀', heading: 'Awaiting sign-off', text: 'Opt-in: agents park irreversible or security-sensitive work here for human review.' },
   'done': { emoji: '✅', heading: 'Shipped', text: 'Completed and verified. Nice work, team.' },
+  'blocked': { emoji: '🚫', heading: 'Blocked', text: 'Work that\'s waiting on something external. Unblock, then return to in-progress.' },
 };
 
 import { Teammate, resolveColor, buildAgentMap, buildNameColorMap } from '@/lib/teammates';
@@ -141,7 +141,7 @@ function TaskCard({ task, projects, onDelete, onSelect, agents, nameColors }: {
               💬 {commentCount}
             </span>
           )}
-          {['in-progress', 'qa', 'review'].includes(task.status) && (() => {
+          {['in-progress', 'review'].includes(task.status) && (() => {
             const activityStatus = getTaskActivityStatus(task);
             const display = getActivityStatusDisplay(activityStatus);
             return (
@@ -352,8 +352,9 @@ function TasksPageInner() {
   const [newDoneWhen, setNewDoneWhen] = useState('');
   const [newConstraints, setNewConstraints] = useState('');
   const [newContext, setNewContext] = useState('');
-  const [newTestType, setNewTestType] = useState<'self' | 'qa'>('self');
-  const [newTestAssignee, setNewTestAssignee] = useState('');
+  // #862: testType / testAssignee UI removed — state kept briefly for any legacy refs, but defaults are no-ops.
+  const [newTestType] = useState<'self' | 'qa'>('self');
+  const [newTestAssignee] = useState('');
   const [newTaskType, setNewTaskType] = useState<'bug' | 'chore' | 'followup' | 'spike'>('followup');
   const [criteriaOpen, setCriteriaOpen] = useState(false);
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
@@ -444,20 +445,13 @@ function TasksPageInner() {
     return [...new Set(versions)].sort();
   }, [tasks]);
 
-  // Derive columns based on qaLead setting
-  const qaLead = storeData?.settings?.qaLead;
-  const columns = useMemo(() => {
-    if (qaLead) {
-      return [...BASE_COLUMNS.slice(0, 3), QA_COLUMN, ...BASE_COLUMNS.slice(3)];
-    }
-    return BASE_COLUMNS;
-  }, [qaLead]);
+  // #862: board always renders 5 base columns; QA is a component, not a column.
+  const columns = BASE_COLUMNS;
 
   const now = Date.now();
   const weekAgo = now - 7 * 86400000;
   const thisWeek = filteredTasks.filter(t => t.createdAt >= weekAgo).length;
   const inProgress = filteredTasks.filter(t => t.status === 'in-progress').length;
-  const inQA = filteredTasks.filter(t => t.status === 'qa').length;
   const total = filteredTasks.length;
   const done = filteredTasks.filter(t => t.status === 'done').length;
   const completionRate = total > 0 ? Math.round((done / total) * 100) : 0;
@@ -530,8 +524,7 @@ function TasksPageInner() {
     setNewDoneWhen('');
     setNewConstraints('');
     setNewContext('');
-    setNewTestType('self');
-    setNewTestAssignee('');
+    // #862: test-type state is read-only now; no reset needed.
     setNewTaskType('followup');
     setCriteriaOpen(false);
     setAddingTo(null);
@@ -565,8 +558,7 @@ function TasksPageInner() {
       description: desc,
       priority: 'medium',
       taskType: newTaskType,  // #698: adhoc task type
-      testType: newTestType,
-      testAssignee: newTestType === 'qa' ? (newTestAssignee || undefined) : undefined,
+      // #862: testType / testAssignee no longer sent from UI — QA routes via standard assignee.
       ...(newSectionId ? { sectionId: newSectionId } : {}),
       ...seedFields,
     });
@@ -589,7 +581,6 @@ function TasksPageInner() {
           {[
             { label: 'This Week', value: thisWeek, color: 'text-[var(--info)]' },
             { label: 'In Progress', value: inProgress, color: 'text-[var(--warning)]' },
-            ...(qaLead ? [{ label: 'In QA', value: inQA, color: 'text-teal-400' }] : []),
             { label: 'Total', value: total, color: 'text-[var(--text-primary)]' },
             { label: 'Completion', value: `${completionRate}%`, color: 'text-[var(--success)]' },
           ].map(stat => (
@@ -1052,30 +1043,7 @@ function TasksPageInner() {
                           </select>
                         </div>
 
-                        {/* Test type options — only show when QA lead is set */}
-                        {qaLead && (
-                        <div className="flex items-center gap-3 mb-2">
-                          <label className="text-[var(--text-xs)] text-[var(--text-muted)]">Test Type</label>
-                          <select
-                            value={newTestType}
-                            onChange={e => setNewTestType(e.target.value as 'self' | 'qa')}
-                            className="text-[var(--text-xs)] bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-sm)] px-2 py-1 text-[var(--text-secondary)] outline-none"
-                          >
-                            <option value="self">Self Test</option>
-                            <option value="qa">QA Test</option>
-                          </select>
-                          {newTestType === 'qa' && (
-                            <select
-                              value={newTestAssignee}
-                              onChange={e => setNewTestAssignee(e.target.value)}
-                              className="text-[var(--text-xs)] bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-sm)] px-2 py-1 text-[var(--text-secondary)] outline-none"
-                            >
-                              <option value="">Auto (default QA)</option>
-                              {agents.map(a => <option key={a} value={a}>{a}</option>)}
-                            </select>
-                          )}
-                        </div>
-                        )}
+                        {/* #862: removed Test Type picker — QA runs as a component with its own owner; test routing is just assignee now. */}
 
                         <button
                           type="button"
@@ -1158,7 +1126,7 @@ function TasksPageInner() {
           projects={projects}
           agents={agents}
           nameColors={nameColors}
-          qaLead={qaLead || null}
+          qaLead={null}
           onUpdate={handlePanelUpdate}
           onDelete={handlePanelDelete}
           onAddComment={handlePanelAddComment}

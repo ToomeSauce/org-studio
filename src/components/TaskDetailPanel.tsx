@@ -12,15 +12,17 @@ import { extractMentions } from '@/lib/store';
 import { toast } from 'react-toastify';
 
 // --- Status config ---
-const ALL_STATUS_ORDER: Task['status'][] = ['planning', 'backlog', 'in-progress', 'qa', 'review', 'done'];
+// #862: 5-column board (QA is a component, not a column). Keeping both constants for backward compat;
+// both now resolve to the same order.
+const ALL_STATUS_ORDER: Task['status'][] = ['planning', 'backlog', 'in-progress', 'review', 'done'];
 const NO_QA_STATUS_ORDER: Task['status'][] = ['planning', 'backlog', 'in-progress', 'review', 'done'];
 const STATUS_LABELS: Record<Task['status'], string> = {
   'planning': 'Planning',
   'backlog': 'Backlog',
   'in-progress': 'In Progress',
-  'qa': 'QA',
   'review': 'Review',
   'done': 'Done',
+  'blocked': 'Blocked',
 };
 
 
@@ -174,7 +176,7 @@ export function TaskDetailPanel({
     if (newStatus === status) return;
 
     // Soft gate: warn if testType is set but testPlan is empty
-    if ((newStatus === 'review' || newStatus === 'done' || newStatus === 'qa') && testType) {
+    if ((newStatus === 'review' || newStatus === 'done') && testType) {
       const currentTestPlan = task.testPlan?.trim();
       if (!currentTestPlan) {
         toast.warn('⚠️ This task has no test plan. A test plan ensures proper verification before completion.', { autoClose: 5000 });
