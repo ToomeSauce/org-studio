@@ -200,10 +200,15 @@ export function generateOrgMd(ctx: OrgContext, forAgentId?: string): string {
   // API Reference
   lines.push('## API Reference');
   lines.push('Run this at the start of every session to ensure you have the latest Org Studio skill:');
+  lines.push('```bash');
+  const agentIdForPing = forAgentId || 'unknown';
+  lines.push(`npx skills add ToomeSauce/org-studio --yes && \\`);
+  lines.push(`  SKILL_SHA=$(cd ~/.skills/ToomeSauce/org-studio 2>/dev/null && git rev-parse --short HEAD 2>/dev/null || echo unknown) && \\`);
+  lines.push(`  curl -s -m 3 "\${ORG_STUDIO_URL:-http://localhost:4501}/api/skill-install-ping" \\`);
+  lines.push(`    -X POST -H 'content-type: application/json' \\`);
+  lines.push(`    -d "{\\"agentId\\":\\"${agentIdForPing}\\",\\"skill\\":\\"org-studio\\",\\"commitHash\\":\\"$SKILL_SHA\\"}" >/dev/null 2>&1 || true`);
   lines.push('```');
-  lines.push('npx skills add ToomeSauce/org-studio --yes');
-  lines.push('```');
-  lines.push('This is fast and idempotent — if nothing changed, it\'s a no-op. See `references/api-reference.md` for endpoint schemas.');
+  lines.push('This is fast and idempotent — if nothing changed, it\'s a no-op. The trailing `curl` pings Org Studio so we can verify skill freshness across the team; failures are silent and never block your session. See `references/api-reference.md` for endpoint schemas.');
   lines.push('');
 
   // Team roster

@@ -26,6 +26,7 @@ try {
 import { getRuntimeRegistry } from './lib/runtimes.mjs';
 import { ensureHeartbeatSchema, startLoopWatchdog, logIncident } from './lib/heartbeats.mjs';
 import { ensureOutboxSchema, startOutboxWorker } from './lib/outbox.mjs';
+import { ensureSkillInstallsSchema, runDriftCheck } from './lib/skill-installs.mjs';
 import { initHealthAlerts, sendHealthAlert, isHealthAlertsEnabled } from './lib/health-alerts.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -2323,6 +2324,25 @@ server.listen(port, async () => {
   } catch (e) {
     console.error(`[Outbox] Schema creation failed (non-fatal):`, e.message);
   }
+  try {
+    await ensureSkillInstallsSchema();
+  } catch (e) {
+    console.error(`[SkillInstalls] Schema creation failed (non-fatal):`, e.message);
+  }
+
+  // #861: periodic drift check — active agents with no install-ping in 24h.
+  // Runs every hour; cooldown inside runDriftCheck prevents incident spam.
+  setInterval(async () => {
+    try {
+      const store = cachedStore || await refreshCachedStore();
+      await runDriftCheck({
+        tasks: store?.tasks || [],
+        teammates: store?.settings?.teammates || store?.teammates || [],
+      });
+    } catch (e) {
+      console.error('[SkillInstalls] Drift check failed:', e?.message || e);
+    }
+  }, 60 * 60 * 1000).unref?.();
 
   // Start outbox worker (drains outbox → /api/outbox/drain)
   startOutboxWorker();

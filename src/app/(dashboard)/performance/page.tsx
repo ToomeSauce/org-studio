@@ -12,6 +12,10 @@ const TeamHealthSection = dynamic(() => import('@/components/TeamHealthSection')
   ssr: false,
   loading: () => <div className="h-32 animate-pulse bg-[var(--bg-secondary)] rounded-[var(--radius-md)]" />,
 });
+const SkillFreshnessSection = dynamic(() => import('@/components/SkillFreshnessSection'), {
+  ssr: false,
+  loading: () => <div className="h-24 animate-pulse bg-[var(--bg-secondary)] rounded-[var(--radius-md)]" />,
+});
 const QualityScorecardSection = dynamic(() => import('@/components/QualityScorecardSection'), {
   ssr: false,
   loading: () => <div className="h-32 animate-pulse bg-[var(--bg-secondary)] rounded-[var(--radius-md)]" />,
@@ -238,6 +242,9 @@ export default function PerformancePage() {
 
         {/* Team Health Section */}
         <TeamHealthSection />
+
+        {/* Skill Freshness (#861) */}
+        <SkillFreshnessSection />
 
         {/* Quality Scorecard */}
         <QualityScorecardSection />
