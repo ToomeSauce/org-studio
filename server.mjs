@@ -1152,6 +1152,41 @@ if (WORKSPACE_BASE && existsSync(STORE_PATH)) {
     }
   };
   setTimeout(() => seedFromApi(), 10000); // wait for server + Postgres to be fully ready
+
+  // --- Project state migration (idempotent, runs on every startup) ---
+  setTimeout(async () => {
+    try {
+      const { migrateProjectState } = await import('./scripts/migrate-project-state.mjs');
+      await migrateProjectState();
+    } catch (e) {
+      console.warn('[MigrateState] Startup migration failed (non-fatal):', e.message);
+    }
+  }, 12000); // after Postgres is ready
+
+  // --- Startup reconcile: warn if recent task status transitions disagree ---
+  setTimeout(async () => {
+    try {
+      const store = cachedStore || await refreshCachedStore();
+      if (!store?.tasks?.length) return;
+      const now = Date.now();
+      const RECENT_MS = 30 * 60 * 1000; // 30 minutes
+      for (const task of store.tasks) {
+        if (task.isArchived) continue;
+        const lastEntry = (task.statusHistory || []).at(-1);
+        if (!lastEntry) continue;
+        if (now - lastEntry.timestamp > RECENT_MS) continue;
+        if (lastEntry.status !== task.status) {
+          console.warn(
+            `[Reconcile] Task ${task.id} (#${task.ticketNumber || '?'}): ` +
+            `statusHistory says '${lastEntry.status}' but current status is '${task.status}'. ` +
+            `Possible lost write. Last transition at ${new Date(lastEntry.timestamp).toISOString()}`
+          );
+        }
+      }
+    } catch (e) {
+      console.warn('[Reconcile] Startup reconcile failed (non-fatal):', e.message);
+    }
+  }, 15000);
 }
 
 // --- Gateway polling (server-side, pushes to WS clients) with exponential backoff ---
