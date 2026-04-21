@@ -127,6 +127,8 @@ export interface Task {
   loopPausedAt?: number;    // Timestamp when loop was paused due to stall detection
   loopPauseReason?: string; // Why the loop was paused
   inFlightRunId?: string;   // Subagent runId working on this task (observable, not enforced)
+  needsReview?: boolean;    // Agent self-flags: true = must go through review column, false/absent = direct to done
+  reviewReason?: string;    // Why review is needed (e.g. 'irreversible DB migration', 'cross-domain change')
   devHandoff?: {            // Context injection: dev attaches notes when resolving a blocker
     message: string;          // The context/instructions for the agent
     author: string;           // Who wrote it

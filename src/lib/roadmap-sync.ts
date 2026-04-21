@@ -195,9 +195,18 @@ export async function checkAndAutoAdvance(
 
     const approvedThrough: string | undefined = projData.autonomy?.approvedThrough;
 
-    // 3b. Paused-project gate: if currentVersion is explicitly null, the human has
+    // 3b. Project state gate: if project is explicitly stopped, the human has
     // paused auto-advance. Reconcile still ships the completed version (done flags
     // + status='shipped' are factual), but we do NOT promote a next version.
+    if (projData.state === 'stopped') {
+      console.log(
+        `[AutoAdvance] ${projectId}: project stopped (state=stopped) — shipped ${current.version} but skipping auto-advance`,
+      );
+      (checkAndAutoAdvance as any)._lastSkipReason = 'stopped';
+      return;
+    }
+
+    // Legacy compat: also check currentVersion === null for un-migrated projects
     if (projData.currentVersion === null || projData.currentVersion === undefined) {
       console.log(
         `[AutoAdvance] ${projectId}: project paused (currentVersion=null) — shipped ${current.version} but skipping auto-advance`,
@@ -441,11 +450,11 @@ export async function reconcileRoadmapItemDone(
               : typeof projRes.rows[0].data === 'string'
                 ? JSON.parse(projRes.rows[0].data)
                 : projRes.rows[0].data || {};
-          const wasPaused = projData.currentVersion === null || projData.currentVersion === undefined;
+          const wasStopped = projData.state === 'stopped' || projData.currentVersion === null || projData.currentVersion === undefined;
 
-          if (wasPaused) {
+          if (wasStopped) {
             console.log(
-              `[AutoAdvance] ${pid}: project paused (currentVersion=null) — shipped via reconcile but skipping auto-advance`,
+              `[AutoAdvance] ${pid}: project stopped/paused — shipped via reconcile but skipping auto-advance`,
             );
             summary.skippedAdvance++;
             continue;

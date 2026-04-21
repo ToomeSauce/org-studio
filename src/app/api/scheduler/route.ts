@@ -18,6 +18,7 @@ import { authenticateRequest } from '@/lib/auth';
 import { writeHeartbeat } from '@/lib/heartbeats';
 import { getStoreProvider, type StoreData } from '@/lib/store-provider';
 import { isVersionInHorizon } from '@/lib/version-utils';
+import { isProjectRunning } from '@/lib/project-state';
 const DEFAULT_MODEL = 'foundry-openai-chat/gpt-5.4';
 
 // Minimum seconds between event-driven triggers for the same agent (debounce)
@@ -200,13 +201,17 @@ function getActionableWork(store: StoreData, agentId: string): { hasWork: boolea
       continue;
     }
 
-    // Backlog: new work to pick up — but only if the task's version is
-    // within the project's approval horizon. Versions above the horizon stay
-    // invisible to the agent until a human explicitly advances approvedThrough.
+    // Backlog: new work to pick up — but only if the task's project is running
+    // AND its version is within the project's approval horizon.
     if (isAssigned && status === 'backlog') {
       let gated = false;
-      if (t.projectId && t.version) {
-        const proj = (store.projects || []).find((p: any) => p.id === t.projectId);
+      const proj = t.projectId ? (store.projects || []).find((p: any) => p.id === t.projectId) : null;
+      // Project state gate: stopped projects don't dispatch
+      if (proj && !isProjectRunning(proj)) {
+        gated = true;
+      }
+      // Approval horizon gate
+      if (!gated && t.projectId && t.version) {
         const approvedThrough = proj?.autonomy?.approvedThrough;
         if (!approvedThrough || !isVersionInHorizon(t.version, approvedThrough)) {
           gated = true;
@@ -269,7 +274,22 @@ async function fireOneShot(store: StoreData, loop: AgentLoop): Promise<string | 
 
   // Prevent duplicate dispatch if agent is already in-flight
   if (isInFlight(loop.agentId)) {
-    console.log(`fireOneShot: skipping ${agentName} — already in-flight`);
+    console.log(`[Dispatch] skipping ${agentName} — already in-flight`);
+    return undefined;
+  }
+
+  // Per-agent concurrency gate: if the agent already has an in-progress task, skip.
+  // The agent is already working — re-dispatching just causes duplicate work.
+  const agentNameLower = agentName.toLowerCase();
+  const hasInProgressTask = store.tasks.some(t => {
+    const assignee = (t.assignee || '').toLowerCase();
+    return (assignee === agentNameLower || assignee === loop.agentId)
+      && t.status === 'in-progress'
+      && !t.isArchived
+      && !t.loopPausedAt;
+  });
+  if (hasInProgressTask) {
+    console.log(`[Dispatch] skipping ${agentName} — has in-progress task (concurrency gate)`);
     return undefined;
   }
 

@@ -598,11 +598,16 @@ export async function buildDispatchMessage(
 
   const inProgress = agentTasks.filter((t: any) => t.status === 'in-progress');
 
-  // Approval horizon filter for backlog only. In-progress and QA tasks keep going —
+  // Approval horizon + project-state filter for backlog only. In-progress and QA tasks keep going —
   // they were already approved when the agent picked them up. Only NEW work pulls
-  // need to respect the current approval horizon.
+  // need to respect the current approval horizon and project run-state.
   const backlog = agentTasks.filter((t: any) => {
     if (t.status !== 'backlog') return false;
+    // Project state gate: stopped projects don't dispatch new work
+    if (t.projectId) {
+      const proj = (store.projects || []).find((p: any) => p.id === t.projectId);
+      if (proj?.state === 'stopped') return false;
+    }
     if (!t.projectId || !t.version) return true; // no version → not version-gated
     const proj = (store.projects || []).find((p: any) => p.id === t.projectId);
     const approvedThrough = proj?.autonomy?.approvedThrough;
