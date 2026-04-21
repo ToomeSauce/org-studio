@@ -956,7 +956,7 @@ async function initializePostgresListener() {
                       t.agentId?.toLowerCase() === mentionName.toLowerCase()
                     );
                     if (tm?.agentId && !tm.isHuman) {
-                      const msg = `\ud83d\udcac **${comment.author}** mentioned you on task: **${task.title}**\n\n> ${comment.content}\n\nTask ID: ${task.id}`;
+                      const msg = `\ud83d\udcac **${comment.author}** mentioned you on task: **${task.title}**\n\n> ${comment.content}\n\nTask ID: ${task.id}\n\n**Reply on the task, not in chat.** Call `addComment` against this task id so ${comment.author} sees your response on the ticket. Include @${comment.author} in your reply to notify them.`;
                       try {
                         // Route based on agent type: Hermes → /v1/runs, OpenClaw → rpc
                         if (tm.agentId.startsWith('hermes-')) {

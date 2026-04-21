@@ -408,6 +408,13 @@ export async function POST(req: NextRequest) {
   const authError = await authenticateRequest(req);
   if (authError) return authError;
 
+  // Resolve userId for this request (used to rewrite placeholder comment authors)
+  let requestUserId: string | undefined;
+  try {
+    const authCtx = await authenticateRequestWithContext(req);
+    requestUserId = authCtx.context?.userId;
+  } catch { /* best-effort */ }
+
   // Resolve workspace context for this request
   const wsOrError = await resolveRequestWorkspace(req);
   if (wsOrError instanceof NextResponse) return wsOrError;
@@ -940,10 +947,32 @@ export async function POST(req: NextRequest) {
 
         const commentId = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
         const model = await resolveAgentModel(payload.comment?.author, store);
+
+        // Resolve placeholder author 'You' to the actual teammate name for the
+        // logged-in user. Otherwise mentions render as "💬 **You** mentioned you",
+        // which agents interpret as a self-test instead of a real user message.
+        let resolvedAuthor = payload.comment?.author;
+        if (resolvedAuthor === 'You' || !resolvedAuthor) {
+          const teammates = store.settings?.teammates || [];
+          if (requestUserId) {
+            const match = teammates.find((t: any) =>
+              t.id === requestUserId ||
+              t.agentId === requestUserId ||
+              t.name?.toLowerCase() === String(requestUserId).toLowerCase() ||
+              t.email?.toLowerCase() === String(requestUserId).toLowerCase()
+            );
+            if (match?.name) resolvedAuthor = match.name;
+          }
+          // Still unresolved? Fall back to 'Basil' (single-workspace dev default)
+          // rather than leaving 'You' which breaks downstream mention envelopes.
+          if (resolvedAuthor === 'You' || !resolvedAuthor) resolvedAuthor = 'Basil';
+        }
+
         const comment = {
           id: commentId,
           createdAt: Date.now(),
           ...payload.comment,
+          author: resolvedAuthor,
           model: payload.comment?.model || model, // explicit > resolved
         };
         // PERF: Use targeted provider.addComment() instead of full store write
