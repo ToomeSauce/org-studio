@@ -32,8 +32,10 @@ export interface Project {
   qaOwner?: string;             // Agent/human who runs QA
   currentVersion?: string;      // e.g. "0.3"
   dependsOn?: string[];         // Project IDs this vision depends on
+  state?: 'stopped' | 'started';  // Single source of truth for run-gating (default: 'started')
+
   autonomy?: {
-    enabled: boolean;
+    // enabled: boolean — REMOVED (dead field, replaced by project.state)
     cadence?: 'daily' | 'weekly' | 'biweekly' | 'monthly'; // @deprecated - replaced by approvalMode
     approvalMode?: 'per-version' | 'per-major';
     lastProposedAt?: number;
@@ -124,6 +126,7 @@ export interface Task {
   loopCount?: number;       // Scheduler loops on this task at same status (resets on status change)
   loopPausedAt?: number;    // Timestamp when loop was paused due to stall detection
   loopPauseReason?: string; // Why the loop was paused
+  inFlightRunId?: string;   // Subagent runId working on this task (observable, not enforced)
   devHandoff?: {            // Context injection: dev attaches notes when resolving a blocker
     message: string;          // The context/instructions for the agent
     author: string;           // Who wrote it

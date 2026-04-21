@@ -1284,7 +1284,6 @@ export default function VisionPage() {
     await updateProject(selectedProject.id, {
       autonomy: {
         ...(selectedProject.autonomy || {}),
-        enabled: selectedProject.autonomy?.enabled ?? false,
         approvalMode: mode,
       },
     });
@@ -1302,7 +1301,6 @@ export default function VisionPage() {
     const updates = {
       autonomy: {
         ...(selectedProject.autonomy || {}),
-        enabled: selectedProject.autonomy?.enabled ?? false,
         pendingVersion: null as any,
       },
     };
