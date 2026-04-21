@@ -546,8 +546,80 @@ export default function ProjectDetailPage() {
 
             {/* Action buttons — inline with title on desktop, wrap on mobile */}
             <div className="flex items-center gap-2 ml-auto flex-shrink-0">
-              {/* Launch button */}
-              {roadmapVersions.length > 0 && !currentVersion && (() => {
+              {/* Start button — shown when project is stopped */}
+              {(project as any).state === 'stopped' && (() => {
+                const approvedThrough = project.autonomy?.approvedThrough;
+                const hasApprovedUnshipped = approvedThrough && roadmapVersions.some(v =>
+                  v.status !== 'shipped' && isVersionInHorizon(v.version, approvedThrough)
+                );
+                // If no currentVersion and no approved unshipped versions, disable start
+                if (!currentVersion && (!hasApprovedUnshipped)) {
+                  return (
+                    <div className="flex items-center gap-2">
+                      <button
+                        disabled
+                        title="Approve versions on the roadmap below to enable start"
+                        className="px-4 py-2 bg-[var(--bg-tertiary)] text-[var(--text-muted)] rounded-lg font-medium text-sm cursor-not-allowed flex items-center gap-2 opacity-60"
+                      >
+                        <span>▶️</span>
+                        Start
+                      </button>
+                      <span className="text-[var(--text-xs)] text-[var(--text-muted)]">✅ All approved versions shipped</span>
+                    </div>
+                  );
+                }
+                return (
+                  <button
+                    onClick={async () => {
+                      try {
+                        // If there's a currentVersion already, just flip state
+                        // Otherwise, also run handleLaunch to pick next version
+                        if (currentVersion) {
+                          await fetch('/api/store', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              action: 'updateProject',
+                              id: projectId,
+                              updates: { state: 'started' },
+                            }),
+                          });
+                        } else {
+                          // Set started + launch next version
+                          await fetch('/api/store', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              action: 'updateProject',
+                              id: projectId,
+                              updates: { state: 'started' },
+                            }),
+                          });
+                          await handleLaunch();
+                        }
+                      } catch (e) {
+                        console.error('Failed to start project:', e);
+                      }
+                    }}
+                    disabled={launching}
+                    className="px-4 py-2 bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)] text-white rounded-lg font-medium text-sm transition-all disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {launching ? (
+                      <>
+                        <Loader className="w-4 h-4 animate-spin" />
+                        Starting...
+                      </>
+                    ) : (
+                      <>
+                        <span>▶️</span>
+                        Start
+                      </>
+                    )}
+                  </button>
+                );
+              })()}
+              {/* Start button for projects without explicit state (legacy/running) that have no currentVersion */}
+              {(project as any).state !== 'stopped' && !currentVersion && roadmapVersions.length > 0 && (() => {
                 const approvedThrough = project.autonomy?.approvedThrough;
                 const hasApprovedUnshipped = approvedThrough && roadmapVersions.some(v =>
                   v.status !== 'shipped' && isVersionInHorizon(v.version, approvedThrough)
@@ -557,11 +629,11 @@ export default function ProjectDetailPage() {
                     <div className="flex items-center gap-2">
                       <button
                         disabled
-                        title="Approve more versions on the roadmap below to re-enable launch"
+                        title="Approve more versions on the roadmap below to re-enable start"
                         className="px-4 py-2 bg-[var(--bg-tertiary)] text-[var(--text-muted)] rounded-lg font-medium text-sm cursor-not-allowed flex items-center gap-2 opacity-60"
                       >
-                        <span>🚀</span>
-                        Launch
+                        <span>▶️</span>
+                        Start
                       </button>
                       <span className="text-[var(--text-xs)] text-[var(--text-muted)]">✅ All approved versions shipped</span>
                     </div>
@@ -573,22 +645,22 @@ export default function ProjectDetailPage() {
                     disabled={launching}
                     className="px-4 py-2 bg-[var(--accent-primary)] hover:bg-[var(--accent-hover)] text-white rounded-lg font-medium text-sm transition-all disabled:opacity-50 flex items-center gap-2"
                   >
-                  {launching ? (
-                    <>
-                      <Loader className="w-4 h-4 animate-spin" />
-                      Launching...
-                    </>
-                  ) : (
-                    <>
-                      <span>🚀</span>
-                      Launch
-                    </>
-                  )}
-                </button>
+                    {launching ? (
+                      <>
+                        <Loader className="w-4 h-4 animate-spin" />
+                        Starting...
+                      </>
+                    ) : (
+                      <>
+                        <span>▶️</span>
+                        Start
+                      </>
+                    )}
+                  </button>
                 );
               })()}
-              {/* Pause button */}
-              {currentVersion && (
+              {/* Stop button — shown when project is running (state !== 'stopped') and has currentVersion */}
+              {(project as any).state !== 'stopped' && currentVersion && (
                 <button
                   onClick={async () => {
                     try {
@@ -599,21 +671,19 @@ export default function ProjectDetailPage() {
                           action: 'updateProject',
                           id: projectId,
                           updates: {
-                            autonomy: {
-                              ...project.autonomy,
-                            },
-                            currentVersion: null,
+                            state: 'stopped',
+                            // Preserve currentVersion — it's just "which version was in flight"
                           },
                         }),
                       });
                     } catch (e) {
-                      console.error('Failed to pause project:', e);
+                      console.error('Failed to stop project:', e);
                     }
                   }}
                   className="px-4 py-2 border border-red-200 dark:border-red-800/50 text-red-600 dark:text-red-400 rounded-lg font-medium hover:bg-red-50 dark:hover:bg-red-950/20 transition-all text-sm flex items-center gap-2"
                 >
-                  <span>⏸</span>
-                  Pause
+                  <span>⏹</span>
+                  Stop
                 </button>
               )}
             </div>

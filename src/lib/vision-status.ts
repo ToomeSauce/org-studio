@@ -6,6 +6,7 @@
 export interface Project {
   id: string;
   name: string;
+  state?: 'stopped' | 'started';
   currentVersion?: string;
   autonomy?: {
     pendingVersion?: string | null;
@@ -30,6 +31,15 @@ export interface StatusLabel {
  * @returns StatusLabel with label, color (tailwind), and emoji
  */
 export function getProjectStatusLabel(project: Project, tasks: any[] = []): StatusLabel {
+  // Stopped projects get a clear indicator regardless of other state
+  if (project.state === 'stopped') {
+    return {
+      label: 'Stopped',
+      color: 'slate',
+      emoji: '⏹',
+    };
+  }
+
   const pending = project.autonomy?.pendingVersion;
 
   // Planning: Agent is working on next version

@@ -646,6 +646,11 @@ export async function POST(req: NextRequest) {
             }
           }
 
+          // Soft warning: needsReview flagged but going straight to done
+          if (updates.status === 'done' && t.needsReview) {
+            console.warn(`[TaskGuard] Task ${t.id} (#${t.ticketNumber || '?'}) has needsReview=true but moved to done directly. reviewReason: ${t.reviewReason || '(none)'}`);
+          }
+
           if (updates.status && updates.status !== t.status) {
             const history = t.statusHistory || [];
             const model = await resolveAgentModel(t.assignee, store);
@@ -891,6 +896,11 @@ export async function POST(req: NextRequest) {
         // PERF: Use targeted provider.updateProject() instead of full store write
         await getStoreProvider().updateProject(payload.id, payload.updates);
         console.log('[API:store:updateProject] completed for', payload.id);
+
+        // Log project state changes
+        if (payload.updates?.state && payload.updates.state !== oldProject?.state) {
+          console.log(`[ProjectState] ${payload.id}: ${oldProject?.state || 'undefined'} → ${payload.updates.state}`);
+        }
 
         // Note: Vision cron management has been replaced by the Launch model
         // No auto-create/update/delete cron logic needed here anymore
