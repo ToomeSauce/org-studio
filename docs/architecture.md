@@ -79,8 +79,8 @@ Per-agent daily metrics are computed at midnight by a cron in `server.mjs` and s
 Key pages:
 - `/` — Home dashboard with live activity
 - `/team` — Team topology, org chart, teammate cards with metrics
-- `/projects` — Project list, vision cards, vision launch
-- `/tasks` — Kanban board (planning → backlog → in-progress → qa → review → done)
+- `/projects` — Project list, vision cards, **Start/Stop** control
+- `/tasks` — Kanban board (default: backlog → in-progress → done; planning + qa + review are optional lanes)
 - `/context` — Agent task backlog and work in progress
 - `/vision` — Vision roadmap view and approval interface
 - `/performance` — Performance dashboard with team health, quality scorecard, cultural alignment, agent comparison, coaching, weekly digest
@@ -100,7 +100,7 @@ Responsibilities:
 - Vision cycle intent processing
 - Intent bridge for remote access
 - **Daily metrics cron** — computes per-agent snapshots at midnight, writes to `org_studio_agent_metrics`
-- **Auto-pause detection** — after a version completes, checks whether all approved versions are done and pauses the project if so
+- **Auto-advance detection** — after a version completes, checks whether the project is `started` and if `approvedThrough` permits advancing to the next planned version. If `state === "stopped"` (human paused), the version still ships but auto-advance is skipped.
 
 ### Data Models
 

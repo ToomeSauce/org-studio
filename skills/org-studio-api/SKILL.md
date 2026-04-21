@@ -72,9 +72,22 @@ Org Studio's context board has six columns. Each has a specific contract.
 | **Planning** | Humans + agents | Scoping column. Tasks here are being refined. **Agents ARE encouraged to pull from planning**, flesh out acceptance criteria / constraints / context, and move to backlog when ready for execution. If a task lacks enough context to scope, post a comment asking instead of guessing. |
 | **Backlog** | Agents | Ready-for-work queue. Pull from the top (highest priority first). |
 | **In Progress** | Agents | Actively being worked. Move here only AFTER work starts — do not claim speculatively. |
-| **QA** | QA agent (e.g. Billy) | Tasks with `requiresTestPlan: true` land here after dev finishes. QA agent verifies end-user behavior. |
-| **Review** | Humans | Done but needs human sign-off. Agent writes `reviewNotes`; human approves. |
-| **Done** | — | Complete and verified. Agents should not move tasks back from done. |
+| **QA** | QA agent (e.g. Billy) | Tasks with `testType: qa` land here after dev finishes. QA agent verifies end-user behavior. |
+| **Review** | Humans | OPT-IN ONLY. For irreversible/cross-domain/security-sensitive work. Agent sets `needsReview: true` + writes `reviewNotes`. |
+| **Done** | — | Complete and verified. **DEFAULT destination** for finished work. |
+
+**Default agent path: backlog → in-progress → done.**
+Review is opt-in. Ship directly to done for reversible work in your owned domain.
+
+### When to use Review (opt-in)
+
+Set `needsReview: true` and `reviewReason: "<why>"` at task start (or mid-work if scope changes). Move to **review** instead of **done** ONLY when:
+- **(a) Irreversible** — DB migrations, deletions, money/billing, external API writes with cost
+- **(b) Cross-domain** — touching another agent's owned code/section
+- **(c) Mission/vision/roadmap** direction changes
+- **(d) Security-sensitive** changes
+
+When in doubt about reversibility, use review. Everything else ships directly to done.
 
 ## Work Loop
 
@@ -85,20 +98,20 @@ This is the canonical work loop for every agent session. Follow it exactly.
    - Read the full task description AND all comments FIRST.
    - Only move to in-progress AFTER actual work starts. Do NOT claim tasks speculatively.
 3. **Check `testType` before moving out of in-progress:**
-   - `self` (default): self-test, write results in `reviewNotes`, move to review/done.
+   - `self` (default): self-test, write results in a comment or `reviewNotes`, move to done (or review if `needsReview: true`).
    - `qa`: self-test first (basic sanity), write a `testPlan`, move to QA column.
-4. **When complete:** update status + always include `reviewNotes` (what was done, what wasn't, blockers). Clear activity status.
+4. **When complete:** move to done (default) or review (if `needsReview: true`). Include `reviewNotes` when moving to review. Clear activity status.
 5. **If more backlog tasks remain**, continue with the next one.
 6. **If you run out of time mid-task**, leave it where it is. Status must reflect reality.
 7. **If you discover a follow-up task**, create it as adhoc (no `version`), do NOT expand scope of current task.
 
-**Task lifecycle:** `planning → backlog → in-progress → [qa] → review → done`
+**Task lifecycle:** `planning → backlog → in-progress → [qa] → done` (default) or `→ review → done` (opt-in)
 
 ## Testing — Every Task Gets Tested
 
 Every task must be tested before leaving in-progress. The variable is *type*, not *whether*.
 
-- **`testType: self`** (default) — You write a test plan, execute it yourself (curl, build check, DB verify), document results in `reviewNotes`, move to review/done.
+- **`testType: self`** (default) — You write a test plan, execute it yourself (curl, build check, DB verify), document results in a comment or `reviewNotes`, move to done.
 - **`testType: qa`** — You still self-test first (basic sanity: build passes, no 500s), write a `testPlan` field for end-user verification, then move to **qa** column (not review). QA agent runs the user-facing tests.
 - **Never skip self-testing.** If QA gets a task with broken basics (500s, build fails), they'll bounce it back.
 
@@ -107,7 +120,7 @@ Every task must be tested before leaving in-progress. The variable is *type*, no
 1. **Pick from backlog** — highest priority first
 2. **Move to in-progress** when starting actual work (not to "claim")
 3. **Post comments** documenting decisions, progress, blockers
-4. **Move to done** with `reviewNotes` summarizing what was done + verification checklist
+4. **Move to done** (default) or review (if `needsReview: true`) with a final comment summarizing what was done
 5. System auto-triggers next task dispatch — do NOT pull multiple tasks
 
 ### Status Update Example
@@ -200,6 +213,40 @@ There is NO separate outcomes list. Outcomes are derived entirely from the roadm
 4. Agent links each planning ticket to its roadmap item: set `taskId` on the item AND append `(#NNN)` to the item title using the task's `ticketNumber` field (e.g. "Child can complete a challenge (#573)"). This makes tickets human-readable and deep-linkable in the UI.
 5. When all items in a version have linked planning tickets → the approval horizon can move past it
 6. Human approves → launch moves planning tickets to backlog → dev agent starts work
+
+### ⚠️ Versioned tasks REQUIRE `roadmapItemId` — and items often need an `id` minted first
+
+Any task created with a `version` set must also include `roadmapItemId`. The API returns `403` otherwise:
+
+> `Tasks with a version must include roadmapItemId. Use the roadmap flow to create versioned tasks.`
+
+**The gotcha:** older roadmap items (and items created via `POST /api/roadmap/{projectId}` without explicit ids) are stored as `{title, done, taskId}` — **no `id` field**. You must mint one before creating the task.
+
+**Pattern — mint id then create task:**
+```bash
+# 1. GET roadmap, pick your item. If the item has no id, mint one:
+ITEM_ID="item-$(openssl rand -hex 4)-$(date +%s | xxd -p | head -c 8)"
+
+# 2. Re-upsert the version with the item now carrying that id.
+#    Include the FULL items array (every item of that version), just with id stamped on yours.
+curl -s http://localhost:4501/api/roadmap/$PROJECT_ID -X POST \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $ORG_STUDIO_API_KEY" \
+  -d '{"action":"upsert","version":"0.5","title":"...","status":"planned",
+       "items":[{"id":"'$ITEM_ID'","title":"...","done":false}, ...all other items of this version...]}'
+
+# 3. Now create the planning ticket with roadmapItemId
+curl -s http://localhost:4501/api/store -X POST \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $ORG_STUDIO_API_KEY" \
+  -d '{"action":"addTask","task":{"title":"...","version":"0.5",
+       "roadmapItemId":"'$ITEM_ID'","status":"planning","assignee":"Ana","projectId":"'$PROJECT_ID'"}}'
+
+# 4. Link the task back to the item (set items[i].taskId + append #NNN to title).
+#    ticketNumber comes back in the addTask response.
+```
+
+**Why this happens:** the dashboard's “Create task” button lazy-mints automatically (see `RoadmapTaskCreator.tsx`). The API does not — agents must do it themselves. A server-side auto-mint on upsert is planned.
+
+**Adhoc tasks** (non-roadmap): omit `version` and set `taskType` to an allowed adhoc type (e.g. bug, chore, spike, infra, docs). No `roadmapItemId` needed.
 
 ### Approval Horizon
 

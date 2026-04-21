@@ -1,9 +1,8 @@
 # Vision Launch Model — Design Spec
 
-> **⚠️ DEPRECATED** — This design was replaced on 2026-03-31.
-> The launch flow now creates tasks directly from roadmap items (no vision cycle agent).
-> Auto-advance is controlled by a 3-mode dropdown: next-only, auto-minor, auto-all.
-> See `docs/guide.md` for the current model.
+> **⚠️ HISTORICAL** — Superseded twice. Kept for context only.
+> - 2026-03-31: replaced with direct roadmap → tasks (no vision cycle agent).
+> - 2026-04-21: **Launch/Pause renamed to Start/Stop** as part of the project-state unification (#859). `project.state: "stopped" | "started"` is now the single run-gate. See `docs/guide.md` and README for the current model.
 
 ## Summary
 Replace the cron-based vision cycle with a human-initiated "Launch" model. The human clicks a button to start the next version cycle. After launch, dev and QA agents work autonomously with status updates in the Telegram sprint topic. The human is notified of blockers and version completion.
