@@ -2321,6 +2321,33 @@ server.listen(port, async () => {
   // Initialize PostgreSQL LISTEN for bidirectional sync
   await initializePostgresListener();
 
+  // Roadmap reconcile: startup (30s delay so Next.js route is warm) + every 10 minutes.
+  // Heals any item-done drift caused by missed sync calls or past races.
+  const safeRoadmapReconcile = async () => {
+    try {
+      const port = process.env.PORT || 4501;
+      const apiKey = process.env.ORG_STUDIO_API_KEY || '';
+      const res = await fetch(`http://127.0.0.1:${port}/api/roadmap/reconcile`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        },
+        body: '{}',
+      });
+      if (!res.ok) {
+        console.warn(`[RoadmapReconcile] API returned HTTP ${res.status}`);
+      }
+    } catch (e) {
+      console.error('[RoadmapReconcile] self-call failed (non-fatal):', e.message);
+    }
+  };
+  setTimeout(() => {
+    safeRoadmapReconcile();
+    setInterval(safeRoadmapReconcile, 10 * 60_000);
+    console.log('[RoadmapReconcile] Scheduled: startup + every 10 min');
+  }, 30_000);
+
   // Daily metrics computation — runs at startup (15s delay) + daily at midnight
   setTimeout(async () => {
     await computeDailyMetrics(); // today

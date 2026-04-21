@@ -63,18 +63,23 @@ export async function syncRoadmapItemForTask(
     if (!pool) return; // file-store mode — no-op for now (file-based roadmaps rare)
 
     const client = await pool.connect();
+    let changed = false;
+    let shouldCheckAdvance = false;
     try {
-      // Find all roadmap versions for this project that mention this taskId
-      // Note: roadmap_versions are scoped by project_id; workspace_id guard applied
+      // Transaction + row-level locks to eliminate the read-modify-write race.
+      // Multiple tasks on the same version completing concurrently used to
+      // overwrite each other's item-done flips. SELECT ... FOR UPDATE serializes
+      // concurrent syncs on the affected version rows.
+      await client.query('BEGIN');
+
       const result = await client.query(
         `SELECT id, version, status, items, sort_order
          FROM org_studio_roadmap_versions
-         WHERE project_id = $1 AND workspace_id = $2`,
+         WHERE project_id = $1 AND workspace_id = $2
+         ORDER BY sort_order ASC
+         FOR UPDATE`,
         [projectId, 'default-workspace'], // TODO(v0.17-multi-workspace): resolve from caller context
       );
-
-      let changed = false;
-      let changedVersionId: string | null = null;
 
       for (const row of result.rows) {
         const items: any[] = row.items || [];
@@ -93,19 +98,27 @@ export async function syncRoadmapItemForTask(
             [JSON.stringify(items), row.id],
           );
           changed = true;
-          changedVersionId = row.id;
           console.log(
             `[RoadmapSync] ${projectId} ${row.version}: item ${taskId} → done=${isDone}`,
           );
         }
       }
 
-      // If we flipped an item to done, check whether the entire version completed
-      if (changed && isDone && changedVersionId) {
-        await checkAndAutoAdvance(projectId, client);
-      }
+      await client.query('COMMIT');
+
+      // If we flipped an item to done, check whether the entire version completed.
+      // Run AFTER commit so checkAndAutoAdvance observes the flushed state and can
+      // take its own row locks cleanly.
+      if (changed && isDone) shouldCheckAdvance = true;
+    } catch (txErr: any) {
+      try { await client.query('ROLLBACK'); } catch { /* best-effort */ }
+      throw txErr;
     } finally {
       client.release();
+    }
+
+    if (shouldCheckAdvance) {
+      await checkAndAutoAdvance(projectId);
     }
   } catch (err: any) {
     console.error('[RoadmapSync] syncRoadmapItemForTask error (non-fatal):', err?.message || err);
@@ -181,6 +194,17 @@ export async function checkAndAutoAdvance(
         : projResult.rows[0].data || {};
 
     const approvedThrough: string | undefined = projData.autonomy?.approvedThrough;
+
+    // 3b. Paused-project gate: if currentVersion is explicitly null, the human has
+    // paused auto-advance. Reconcile still ships the completed version (done flags
+    // + status='shipped' are factual), but we do NOT promote a next version.
+    if (projData.currentVersion === null || projData.currentVersion === undefined) {
+      console.log(
+        `[AutoAdvance] ${projectId}: project paused (currentVersion=null) — shipped ${current.version} but skipping auto-advance`,
+      );
+      (checkAndAutoAdvance as any)._lastSkipReason = 'paused';
+      return;
+    }
 
     // 4. No horizon = nothing is approved. Stop.
     if (!approvedThrough) {
@@ -282,4 +306,184 @@ export async function checkAndAutoAdvance(
   } finally {
     if (ownClient) client.release();
   }
+}
+
+/* ------------------------------------------------------------------ */
+/*  reconcileRoadmapItemDone                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Cross-check every `current` roadmap version's item-done flags against
+ * the underlying tasks' `status`. Fixes drift caused by missed sync calls
+ * (historical bug) or any future write path that forgets to call sync.
+ *
+ * For each `current` version (optionally filtered by projectId):
+ *   - For each item with a taskId, set item.done = (task.status === 'done').
+ *   - If all items done AND version still `current` after flips, ship it.
+ *   - After shipping, call checkAndAutoAdvance. Paused projects
+ *     (currentVersion === null) ship the version but skip auto-advance.
+ *
+ * Non-fatal: wraps in try/catch. No-ops in file-store mode.
+ *
+ * @param projectId - optional project filter; when omitted, scans all projects.
+ * @returns summary counts for logging / API response.
+ */
+export async function reconcileRoadmapItemDone(
+  projectId?: string,
+): Promise<{ scanned: number; flipped: number; shipped: number; advanced: number; skippedAdvance: number }> {
+  const summary = { scanned: 0, flipped: 0, shipped: 0, advanced: 0, skippedAdvance: 0 };
+  const pool = getPool();
+  if (!pool) return summary;
+
+  try {
+    const client = await pool.connect();
+    try {
+      // 1. Find all `current` versions (optionally scoped to one project).
+      const versionsRes = projectId
+        ? await client.query(
+            `SELECT id, project_id, version, items FROM org_studio_roadmap_versions
+             WHERE status = 'current' AND workspace_id = $1 AND project_id = $2`,
+            ['default-workspace', projectId],
+          )
+        : await client.query(
+            `SELECT id, project_id, version, items FROM org_studio_roadmap_versions
+             WHERE status = 'current' AND workspace_id = $1`,
+            ['default-workspace'],
+          );
+
+      summary.scanned = versionsRes.rows.length;
+
+      // 2. For each version: lock it, fetch linked task statuses, flip drifted items.
+      const shippedProjectIds: string[] = [];
+      for (const v of versionsRes.rows) {
+        try {
+          await client.query('BEGIN');
+
+          // Re-fetch under FOR UPDATE to avoid racing with live syncs.
+          const locked = await client.query(
+            `SELECT id, project_id, version, items FROM org_studio_roadmap_versions
+             WHERE id = $1 AND status = 'current' AND workspace_id = $2 FOR UPDATE`,
+            [v.id, 'default-workspace'],
+          );
+          if (locked.rows.length === 0) { await client.query('COMMIT'); continue; }
+          const row = locked.rows[0];
+          const items: any[] = row.items || [];
+
+          const taskIds = items.map((i: any) => i.taskId).filter(Boolean);
+          const statusMap = new Map<string, string>();
+          if (taskIds.length > 0) {
+            const tRes = await client.query(
+              `SELECT id, status FROM org_studio_tasks WHERE id = ANY($1) AND workspace_id = $2`,
+              [taskIds, 'default-workspace'],
+            );
+            for (const t of tRes.rows) statusMap.set(t.id, t.status);
+          }
+
+          let localFlipped = 0;
+          for (const item of items) {
+            if (!item.taskId) continue;
+            const actualStatus = statusMap.get(item.taskId);
+            if (actualStatus === undefined) continue; // orphan taskId — leave as-is
+            const shouldBeDone = actualStatus === 'done';
+            if (item.done !== shouldBeDone) {
+              item.done = shouldBeDone;
+              localFlipped++;
+              console.log(
+                `[RoadmapSync] ${row.project_id} ${row.version}: item ${item.id} → done=${shouldBeDone} (reconcile)`,
+              );
+            }
+          }
+
+          if (localFlipped > 0) {
+            await client.query(
+              `UPDATE org_studio_roadmap_versions SET items = $1 WHERE id = $2`,
+              [JSON.stringify(items), row.id],
+            );
+            summary.flipped += localFlipped;
+          }
+
+          // 3. If all items done and there's at least one, ship this version.
+          let didShip = false;
+          if (items.length > 0 && items.every((i: any) => i.done === true)) {
+            const shippedAt = Date.now();
+            await client.query(
+              `UPDATE org_studio_roadmap_versions SET status = 'shipped', shipped_at = $1
+               WHERE id = $2 AND workspace_id = $3 AND status = 'current'`,
+              [String(shippedAt), row.id, 'default-workspace'],
+            );
+            console.log(`[VersionShip] ${row.project_id}: ${row.version} shipped (reconcile)`);
+            summary.shipped++;
+            didShip = true;
+          }
+
+          await client.query('COMMIT');
+          if (didShip) shippedProjectIds.push(row.project_id);
+        } catch (vErr: any) {
+          try { await client.query('ROLLBACK'); } catch { /* best-effort */ }
+          console.error(
+            `[RoadmapReconcile] version ${v.id} error (non-fatal):`,
+            vErr?.message || vErr,
+          );
+        }
+      }
+
+      // 4. For each shipped project, run auto-advance (paused projects will skip internally).
+      for (const pid of shippedProjectIds) {
+        try {
+          // Snapshot the paused state BEFORE calling advance, so we can classify.
+          const projRes = await client.query(
+            `SELECT data FROM org_studio_projects WHERE id = $1 AND workspace_id = $2`,
+            [pid, 'default-workspace'],
+          );
+          const projData =
+            projRes.rows.length === 0
+              ? {}
+              : typeof projRes.rows[0].data === 'string'
+                ? JSON.parse(projRes.rows[0].data)
+                : projRes.rows[0].data || {};
+          const wasPaused = projData.currentVersion === null || projData.currentVersion === undefined;
+
+          if (wasPaused) {
+            console.log(
+              `[AutoAdvance] ${pid}: project paused (currentVersion=null) — shipped via reconcile but skipping auto-advance`,
+            );
+            summary.skippedAdvance++;
+            continue;
+          }
+
+          await checkAndAutoAdvance(pid);
+
+          // Re-read to see if currentVersion moved — proxy for a successful advance.
+          const after = await client.query(
+            `SELECT data FROM org_studio_projects WHERE id = $1 AND workspace_id = $2`,
+            [pid, 'default-workspace'],
+          );
+          const afterData =
+            after.rows.length === 0
+              ? {}
+              : typeof after.rows[0].data === 'string'
+                ? JSON.parse(after.rows[0].data)
+                : after.rows[0].data || {};
+          if (afterData.currentVersion && afterData.currentVersion !== projData.currentVersion) {
+            summary.advanced++;
+          }
+        } catch (advErr: any) {
+          console.error(
+            `[RoadmapReconcile] auto-advance ${pid} error (non-fatal):`,
+            advErr?.message || advErr,
+          );
+        }
+      }
+    } finally {
+      client.release();
+    }
+  } catch (err: any) {
+    console.error('[RoadmapReconcile] error (non-fatal):', err?.message || err);
+  }
+
+  console.log(
+    `[RoadmapReconcile] scanned=${summary.scanned} flipped=${summary.flipped} shipped=${summary.shipped} advanced=${summary.advanced} skipped_advance=${summary.skippedAdvance}` +
+      (projectId ? ` project=${projectId}` : ''),
+  );
+  return summary;
 }
