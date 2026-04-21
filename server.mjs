@@ -988,20 +988,51 @@ async function initializePostgresListener() {
                             }
                           }
                         } else {
-                          // OpenClaw agent — trigger via scheduler API
+                          // OpenClaw agent — inject mention text directly via chat.send so the
+                          // mention content actually lands in the agent's session, not just
+                          // a generic scheduler wake. (The scheduler trigger path dispatches
+                          // task-work prompts that ignore comment content, so mentions on
+                          // paused/blocked tasks were silently dropped before this fix.)
+                          let delivered = false;
+                          try {
+                            const chatRes = await fetch(`http://127.0.0.1:${port}/api/gateway`, {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                method: 'chat.send',
+                                params: {
+                                  sessionKey: `agent:${tm.agentId}:main`,
+                                  message: msg,
+                                  idempotencyKey: `mention-${comment.id}-${tm.agentId}`,
+                                },
+                              }),
+                            });
+                            if (chatRes.ok) {
+                              delivered = true;
+                              console.log(`[LISTEN] Mention delivered via chat.send: recipient=${mentionName} agentId=${tm.agentId} commentId=${comment.id}`);
+                            } else {
+                              console.warn(`[LISTEN] chat.send failed for ${mentionName}: HTTP ${chatRes.status}`);
+                            }
+                          } catch (chatErr) {
+                            console.warn(`[LISTEN] chat.send threw for ${mentionName}:`, chatErr.message);
+                          }
+
+                          // Also nudge the scheduler — harmless if the session is already
+                          // awake from chat.send, and ensures a wake even if chat.send was
+                          // best-effort-lost.
                           const apiKey = process.env.ORG_STUDIO_API_KEY || '';
                           const triggerHeaders = { 'Content-Type': 'application/json' };
                           if (apiKey) triggerHeaders['Authorization'] = `Bearer ${apiKey}`;
-                          const triggerRes = await fetch(`http://127.0.0.1:${port}/api/scheduler`, {
-                            method: 'POST',
-                            headers: triggerHeaders,
-                            body: JSON.stringify({ action: 'trigger', agentId: tm.agentId }),
-                          });
-                          if (triggerRes.ok) {
-                            console.log(`[LISTEN] Mention routing: recipient=${mentionName} agentId=${tm.agentId} status=${triggerRes.status}`);
-                          } else {
-                            console.warn(`[LISTEN] Mention trigger failed for ${mentionName}: HTTP ${triggerRes.status}`);
-                          }
+                          try {
+                            const triggerRes = await fetch(`http://127.0.0.1:${port}/api/scheduler`, {
+                              method: 'POST',
+                              headers: triggerHeaders,
+                              body: JSON.stringify({ action: 'trigger', agentId: tm.agentId }),
+                            });
+                            if (!triggerRes.ok && !delivered) {
+                              console.warn(`[LISTEN] Mention trigger failed for ${mentionName}: HTTP ${triggerRes.status}`);
+                            }
+                          } catch { /* best-effort */ }
                         }
                       } catch (e) {
                         console.warn(`[LISTEN] Mention dispatch failed for ${mentionName}:`, e.message);
