@@ -106,7 +106,7 @@ function checkAndTriggerStuckTask(task: any, store: StoreData) {
   const now = Date.now();
   const status = (task.status || '').toLowerCase();
 
-  if (status !== 'in-progress' && status !== 'qa') return; // Only check these statuses
+  if (status !== 'in-progress') return; // #862: Only in-progress has the stuck-task escalation path now
   if (task.isArchived) return; // Don't check archived tasks
 
   // Get last activity timestamp
@@ -117,19 +117,8 @@ function checkAndTriggerStuckTask(task: any, store: StoreData) {
 
   if (now - lastActivity < STUCK_THRESHOLD_MS) return; // Not stuck yet
 
-  // Task is stuck — resolve responsible agent
+  // Task is stuck — responsible agent is the assignee (#862: QA tickets use standard assignee now)
   let responsibleName: string | null = null;
-  if (status === 'qa') {
-    responsibleName = task.testAssignee || null;
-    if (!responsibleName) {
-      const teammates = (store as any).settings?.teammates || [];
-      const qaLead = store.settings?.qaLead;
-      if (qaLead) {
-        const qaTeammate = teammates.find((t: any) => t.agentId === qaLead);
-        responsibleName = qaTeammate?.name || qaLead;
-      }
-    }
-  }
   if (!responsibleName) {
     responsibleName = task.assignee;
   }
@@ -234,7 +223,7 @@ function notifyTaskStatusChange(task: any, newStatus: string, store: StoreData) 
   
   // Notify on all significant status transitions (user needs to see these)
   // All statuses go to the activity feed, but only high-signal ones go to Telegram
-  const FEED_STATUSES = ['in-progress', 'review', 'done', 'blocked', 'qa'];
+  const FEED_STATUSES = ['in-progress', 'review', 'done', 'blocked']; // #862: dropped 'qa'
   const TELEGRAM_STATUSES = ['blocked']; // Only blocked tasks are urgent enough for Telegram
   if (!FEED_STATUSES.includes(newStatus)) return;
 
@@ -248,7 +237,6 @@ function notifyTaskStatusChange(task: any, newStatus: string, store: StoreData) 
     'review': '👀',
     'done': '✅',
     'blocked': '🚫',
-    'qa': '🧪',
   };
 
   const emoji = statusEmoji[newStatus] || '📋';
@@ -336,7 +324,7 @@ function piggybackStuckCheck(store: any) {
     const assignee = task.assignee?.toLowerCase();
     if (!assignee) continue;
 
-    if (['in-progress', 'qa', 'review'].includes(task.status)) {
+    if (['in-progress', 'review'].includes(task.status)) {
       agentHasActive.add(assignee);
     } else if (task.status === 'backlog') {
       const created = task.createdAt || 0;
@@ -542,6 +530,14 @@ export async function POST(req: NextRequest) {
         const id = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
         const now = Date.now();
         const initialStatus = payload.task?.status || 'backlog';
+        // #862: reject 'qa' as a status — QA is a component, not a column.
+        const VALID_STATUSES = ['planning', 'backlog', 'in-progress', 'review', 'done', 'blocked'];
+        if (!VALID_STATUSES.includes(initialStatus)) {
+          return NextResponse.json(
+            { error: `Invalid status '${initialStatus}'. Allowed: ${VALID_STATUSES.join(', ')}. (QA is a component, not a column — see #862.)` },
+            { status: 400 }
+          );
+        }
         const ticketNumber = getNextTicketNumber(store);
         const task = {
           id,
@@ -608,13 +604,7 @@ export async function POST(req: NextRequest) {
           triggerAgentLoop(task.assignee, store);
         }
 
-        // Event-driven: if task lands in QA, trigger the QA agent
-        if (initialStatus === 'qa') {
-          const qaAssignee = task.testAssignee || store.settings?.qaLead;
-          if (qaAssignee) {
-            triggerAgentLoop(qaAssignee, store);
-          }
-        }
+        // #862: removed QA-column event trigger — QA tickets trigger via the standard backlog/assignee path.
 
         return NextResponse.json({ ok: true, task });
       }
@@ -633,6 +623,17 @@ export async function POST(req: NextRequest) {
           }
 
           const updates = { ...payload.updates };
+
+          // #862: reject status 'qa' — QA is a component, not a column.
+          if (updates.status !== undefined) {
+            const VALID_STATUSES = ['planning', 'backlog', 'in-progress', 'review', 'done', 'blocked'];
+            if (!VALID_STATUSES.includes(updates.status)) {
+              return NextResponse.json(
+                { error: `Invalid status '${updates.status}'. Allowed: ${VALID_STATUSES.join(', ')}. (QA is a component, not a column — see #862.)` },
+                { status: 400 }
+              );
+            }
+          }
 
           // Guard: only the assignee can move a task to done
           if (updates.status === 'done' && payload.by) {
@@ -663,27 +664,13 @@ export async function POST(req: NextRequest) {
             (updates as any).loopPausedAt = null;
             (updates as any).loopPauseReason = null;
 
-            // When moving to qa, resolve testAssignee if not already set
-            if (updates.status === 'qa') {
-              const merged = { ...t, ...updates };
-              if (!merged.testAssignee) {
-                const teammates = (store as any).settings?.teammates || [];
-                // resolve testAssignee: explicit > qaLead setting > team QA role > self
-                const qaLeadId = store.settings?.qaLead;
-                if (qaLeadId) {
-                  const qaLeadTeammate = teammates.find((tm: any) => tm.agentId === qaLeadId);
-                  updates.testAssignee = qaLeadTeammate?.name || qaLeadId;
-                } else {
-                  const qaAgent = teammates.find((tm: any) => tm.role === 'qa');
-                  updates.testAssignee = qaAgent?.name || t.assignee;
-                }
-              }
-            }
+            // #862: QA is a component, not a column. Moving to 'qa' is no longer supported.
+            // The status validation above already rejected it; this branch is removed.
 
-            // Notify on status changes FROM in-progress/qa (these are tracked work transitions)
-            // OR notify on transitions TO in-progress/review/done/qa/blocked (significant state changes)
-            const shouldNotify = (t.status === 'in-progress' || t.status === 'qa') || 
-                                  ['in-progress', 'review', 'done', 'blocked', 'qa'].includes(updates.status);
+            // Notify on status changes FROM in-progress (tracked work transitions)
+            // OR notify on transitions TO in-progress/review/done/blocked (significant state changes)
+            const shouldNotify = (t.status === 'in-progress') || 
+                                  ['in-progress', 'review', 'done', 'blocked'].includes(updates.status);
             if (shouldNotify) {
               const merged = { ...t, ...updates };
               notifyTaskStatusChange(merged, updates.status, store);
@@ -713,10 +700,7 @@ export async function POST(req: NextRequest) {
             triggeredAssignee = updated.assignee;
           }
 
-          // Trigger dev agent when task bounces back to in-progress (e.g. QA rejection)
-          if (updates.status === 'in-progress' && t.status === 'qa' && updated.assignee) {
-            triggeredAssignee = updated.assignee;
-          }
+          // #862: QA-bounce trigger removed (no more qa column). Reassignment on in-progress still triggers below.
 
           // Trigger new assignee when an in-progress task is reassigned
           if (updated.status === 'in-progress' && updates.assignee &&
@@ -724,13 +708,7 @@ export async function POST(req: NextRequest) {
             triggeredAssignee = updated.assignee;
           }
 
-          // Trigger QA agent when task moves to QA column
-          if (updates.status === 'qa') {
-            const qaAssignee = updated.testAssignee || store.settings?.qaLead;
-            if (qaAssignee) {
-              triggerAgentLoop(qaAssignee, store);
-            }
-          }
+          // #862: QA-column trigger removed — QA tickets follow standard backlog→in-progress assignee triggers.
 
           store.tasks[i] = updated;
           // Piggyback stuck-task detection: check if this updated task is now stuck
@@ -1264,6 +1242,17 @@ export async function POST(req: NextRequest) {
       }
 
       case 'updateQaLead': {
+        // #862: QA is a component, not a column. `qaLead` is deprecated.
+        // This action is retained as a no-op for backward compat (any callers don't 500).
+        // Callers should move to per-project `qaOwner` on the project record instead.
+        return NextResponse.json({
+          ok: true,
+          deprecated: true,
+          message: 'updateQaLead is deprecated post-#862. QA is a component; set `qaOwner` on the project instead.',
+        });
+      }
+
+      case '__removed_updateQaLead_legacy__': {
         const newQaLead = payload.agentId || null;
         const oldQaLead = store.settings?.qaLead || null;
 

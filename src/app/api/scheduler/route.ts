@@ -87,7 +87,7 @@ async function detectAndIncrementLoops(store: StoreData, agentId: string): Promi
     const t = store.tasks[i];
     const assignee = (t.assignee || '').toLowerCase();
     if (!(assignee === nameLower || assignee === agentId)) continue;
-    if (t.status !== 'in-progress' && t.status !== 'qa') continue;
+    if (t.status !== 'in-progress') continue;
     if (t.loopPausedAt) continue; // already paused
 
     // Reset loop count if agent posted a comment since last dispatch
@@ -180,14 +180,13 @@ function getActionableWork(store: StoreData, agentId: string): { hasWork: boolea
   const agentName = getAgentName(store, agentId);
   const nameLower = agentName.toLowerCase();
   const agentRole = getAgentRole(store, agentId);
-  const isQa = agentRole === 'qa';
+  // #862: agentRole === 'qa' still shapes scheduler prompts (validation-oriented) but no longer affects column routing.
 
   let hasInProgress = false;
   let hasNewWork = false;
 
   for (const t of store.tasks) {
     const assignee = (t.assignee || '').toLowerCase();
-    const testAssignee = (t.testAssignee || '').toLowerCase();
     const status = (t.status || '').toLowerCase();
 
     // Skip paused tasks — they don't count as actionable
@@ -220,15 +219,7 @@ function getActionableWork(store: StoreData, agentId: string): { hasWork: boolea
       if (!gated) hasNewWork = true;
     }
 
-    // QA work: tasks in qa column assigned to this agent
-    if (status === 'qa') {
-      if (testAssignee === nameLower || testAssignee === agentId) { hasNewWork = true; }
-      else if (isQa && isAssigned) { hasNewWork = true; }
-      else {
-        const qaLead = store.settings?.qaLead;
-        if (qaLead === agentId && !testAssignee) { hasNewWork = true; }
-      }
-    }
+    // #862: QA-column routing removed — QA tickets are ordinary tickets owned by the QA component owner (assignee).
   }
 
   return { hasWork: hasInProgress || hasNewWork, hasNewWork, hasInProgress };
@@ -714,35 +705,7 @@ export async function POST(request: NextRequest) {
             }
           }
 
-          // 3. QA orphans — tasks in QA where testAssignee matches this agent or agent is qaLead
-          const qaLeadSetting = store.settings?.qaLead;
-          const qaOrphans = store.tasks.filter(t => {
-            if (t.status !== 'qa') return false;
-            const ta = (t.testAssignee || '').toLowerCase();
-            if (ta === nameLower || ta === agentId) return true;
-            // If no testAssignee and this agent is the qaLead, it's theirs
-            if (!ta && qaLeadSetting === agentId) return true;
-            return false;
-          });
-
-          if (qaOrphans.length > 0) {
-            const lastTrigger = lastTriggerByAgent[agentId] || 0;
-            const cooledDown = now2 - lastTrigger >= TRIGGER_COOLDOWN_MS;
-
-            if (cooledDown) {
-              lastTriggerByAgent[agentId] = now2;
-              try {
-                await fireOneShot(store, loop);
-                swept.push({ agentId, reason: `${qaOrphans.length} QA orphan(s)`, triggered: true });
-              } catch {
-                swept.push({ agentId, reason: `${qaOrphans.length} QA orphan(s)`, triggered: false });
-              }
-              continue;
-            } else {
-              swept.push({ agentId, reason: `${qaOrphans.length} QA orphan(s) — cooldown`, triggered: false });
-              continue;
-            }
-          }
+          // #862: QA-orphan detection removed — QA tickets are owned by their assignee and follow the standard in-progress path.
 
           // No actionable work found for this agent
         }
