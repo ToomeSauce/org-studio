@@ -1309,6 +1309,43 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: true, project: updatedProject });
       }
 
+      case 'promoteVersion': {
+        // Consolidated promote: UI Start button + auto-advance funnel through here.
+        // Wraps promoteProjectToNextVersion from project-state.ts.
+        const { promoteProjectToNextVersion } = await import('@/lib/project-state');
+        const promoteProjectId = payload.projectId;
+        const targetVersion = payload.targetVersion; // optional: explicit version for manual launch
+        if (!promoteProjectId) {
+          return NextResponse.json({ error: 'Missing projectId' }, { status: 400 });
+        }
+
+        // Need a Postgres client for the promote util
+        if (!process.env.DATABASE_URL) {
+          return NextResponse.json({ error: 'promoteVersion requires Postgres' }, { status: 501 });
+        }
+        const { Pool: PgPool } = await import('pg');
+        const pool = new PgPool({ connectionString: process.env.DATABASE_URL });
+        const pgClient = await pool.connect();
+        try {
+          const result = await promoteProjectToNextVersion(promoteProjectId, pgClient, {
+            targetVersion,
+            workspaceId: workspace.id,
+          });
+          if (!result.promoted) {
+            return NextResponse.json({ ok: false, reason: result.reason });
+          }
+          // Trigger the dev agent to pick up the new backlog tasks
+          const project = store.projects.find((p: any) => p.id === promoteProjectId);
+          if (project?.devOwner) {
+            triggerAgentLoop(project.devOwner, store);
+          }
+          return NextResponse.json({ ok: true, ...result });
+        } finally {
+          pgClient.release();
+          await pool.end();
+        }
+      }
+
       // --- Section CRUD ---
 
       case 'addSection': {

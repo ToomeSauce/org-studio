@@ -420,83 +420,42 @@ export default function ProjectDetailPage() {
       // Find the first unshipped version that's within the approval horizon
       const nextVersion = roadmapVersions.find((v) => {
         if (v.status === 'shipped') return false;
-        if (!approvedThrough) return false; // Nothing approved
+        if (!approvedThrough) return false;
         return isVersionInHorizon(v.version, approvedThrough);
       });
-      if (!nextVersion) return; // No approved unshipped versions
+      if (!nextVersion) return;
 
       // Gate: block launch if any items are missing planning tickets
       const draftItems = nextVersion.items?.filter((item: any) => !item.taskId) || [];
       if (draftItems.length > 0) {
-        alert(`Cannot launch ${nextVersion.version}: ${draftItems.length} item(s) need planning tickets before launch.`);
+        alert(`Cannot start ${nextVersion.version}: ${draftItems.length} item(s) need planning tickets before launch.`);
         return;
       }
 
-      // 1. Set it as current
-      await fetch(`/api/roadmap/${projectId}`, {
+      // Use consolidated promoteVersion action
+      const resp = await fetch('/api/store', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          action: 'upsert',
-          version: nextVersion.version,
-          title: nextVersion.title,
-          status: 'current',
-          items: nextVersion.items,
+          action: 'promoteVersion',
+          projectId,
+          targetVersion: nextVersion.version,
         }),
       });
-
-      // 2. Move planning tickets to backlog (no create fallback)
-      if (nextVersion.items?.length > 0) {
-        for (const item of nextVersion.items) {
-          if (item.taskId) {
-            // Move linked ticket to backlog
-            await fetch('/api/store', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                action: 'updateTask',
-                id: item.taskId,
-                updates: {
-                  status: 'backlog',
-                  assignee: project.devOwner || '',
-                  version: nextVersion.version,
-                },
-              }),
-            });
-          }
-          // No fallback — items without taskId should have been caught by approval gate
-        }
+      const result = await resp.json();
+      if (!result.ok && result.reason) {
+        alert(`Cannot start: ${result.reason}`);
+        return;
       }
 
-      // 3. Update project — set currentVersion + approvedThrough
-      const currentApproved = project.autonomy?.approvedThrough;
-      const shouldExpandHorizon = !currentApproved || isVersionInHorizon(currentApproved, nextVersion.version);
-      const newApprovedThrough = shouldExpandHorizon ? nextVersion.version : currentApproved;
-
-      await fetch('/api/store', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'updateProject',
-          id: projectId,
-          updates: {
-            currentVersion: nextVersion.version,
-            autonomy: {
-              ...project.autonomy,
-              approvedThrough: newApprovedThrough,
-            },
-          },
-        }),
-      });
-
-      // 4. Refresh roadmap
+      // Refresh roadmap
       const roadmapRes = await fetch(`/api/roadmap/${projectId}`);
       if (roadmapRes.ok) {
         const roadmapData = await roadmapRes.json();
         setRoadmap(roadmapData.versions || []);
       }
     } catch (e) {
-      console.error('Launch failed:', e);
+      console.error('Start failed:', e);
     } finally {
       setLaunching(false);
     }
