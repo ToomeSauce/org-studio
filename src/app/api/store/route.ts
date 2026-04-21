@@ -951,9 +951,12 @@ export async function POST(req: NextRequest) {
         // Resolve placeholder author 'You' to the actual teammate name for the
         // logged-in user. Otherwise mentions render as "💬 **You** mentioned you",
         // which agents interpret as a self-test instead of a real user message.
+        // Multi-human-safe: always goes through session->teammate lookup, never
+        // hardcodes a name.
         let resolvedAuthor = payload.comment?.author;
         if (resolvedAuthor === 'You' || !resolvedAuthor) {
           const teammates = store.settings?.teammates || [];
+          let matchedName: string | undefined;
           if (requestUserId) {
             const match = teammates.find((t: any) =>
               t.id === requestUserId ||
@@ -961,11 +964,12 @@ export async function POST(req: NextRequest) {
               t.name?.toLowerCase() === String(requestUserId).toLowerCase() ||
               t.email?.toLowerCase() === String(requestUserId).toLowerCase()
             );
-            if (match?.name) resolvedAuthor = match.name;
+            if (match?.name) matchedName = match.name;
           }
-          // Still unresolved? Fall back to 'Basil' (single-workspace dev default)
-          // rather than leaving 'You' which breaks downstream mention envelopes.
-          if (resolvedAuthor === 'You' || !resolvedAuthor) resolvedAuthor = 'Basil';
+          // Last resort: keep whatever userId the session gave us (better than
+          // 'You'). Only hits if the user is logged in but has no teammate
+          // record — they get labeled with their raw userId instead of a generic.
+          resolvedAuthor = matchedName || requestUserId || 'Unknown';
         }
 
         const comment = {
