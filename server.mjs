@@ -897,6 +897,28 @@ async function processIntent(changeEvent) {
 // --- PostgreSQL LISTEN for bidirectional sync ---
 // When remote server makes changes via /api/store, they trigger NOTIFY events
 // that the local server receives and broadcasts to all WebSocket clients.
+
+// PubSub health state (exported via /api/health/pubsub and MC dashboard)
+const pubsubHealth = {
+  connected: false,
+  lastHeartbeatAt: null,    // ISO string
+  reconnectCount: 0,
+  lastError: null,          // string
+  lastConnectedAt: null,    // ISO string
+};
+// Expose for health endpoint
+globalThis.__pubsubHealth = pubsubHealth;
+
+let _pubsubHeartbeatTimer = null;
+let _pubsubReconnectAttempt = 0;
+const PUBSUB_HEARTBEAT_INTERVAL_MS = 30_000; // 30s
+const PUBSUB_RECONNECT_DELAYS = [5000, 10000, 20000, 60000]; // exponential backoff, cap at 60s
+
+function getPubsubReconnectDelay() {
+  const idx = Math.min(_pubsubReconnectAttempt, PUBSUB_RECONNECT_DELAYS.length - 1);
+  return PUBSUB_RECONNECT_DELAYS[idx];
+}
+
 async function initializePostgresListener() {
   const dbUrl = process.env.DATABASE_URL;
   if (!dbUrl) {
@@ -904,25 +926,47 @@ async function initializePostgresListener() {
     return;
   }
 
+  // Clear any existing heartbeat timer
+  if (_pubsubHeartbeatTimer) {
+    clearInterval(_pubsubHeartbeatTimer);
+    _pubsubHeartbeatTimer = null;
+  }
+
   try {
     const pg = await import('pg');
     const Client = pg.default?.Client || pg.Client;
     const listener = new Client({ connectionString: dbUrl });
-    
-    // Error handler — reconnect on disconnect
+
+    function scheduleReconnect(reason) {
+      pubsubHealth.connected = false;
+      pubsubHealth.lastError = reason;
+      if (_pubsubHeartbeatTimer) {
+        clearInterval(_pubsubHeartbeatTimer);
+        _pubsubHeartbeatTimer = null;
+      }
+      const delay = getPubsubReconnectDelay();
+      _pubsubReconnectAttempt++;
+      pubsubHealth.reconnectCount++;
+      console.warn(`[LISTEN] ${reason}. Reconnecting in ${delay / 1000}s (attempt #${_pubsubReconnectAttempt})`);
+      setTimeout(() => initializePostgresListener(), delay);
+    }
+
     listener.on('error', (err) => {
-      console.error('[LISTEN] Connection error:', err.message);
-      setTimeout(() => initializePostgresListener(), 5000);
+      scheduleReconnect(`Connection error: ${err.message}`);
     });
 
     listener.on('end', () => {
-      console.log('[LISTEN] Connection closed, will reconnect in 5s');
-      setTimeout(() => initializePostgresListener(), 5000);
+      scheduleReconnect('Connection closed');
     });
 
-    // Listen for store update events
+    // Listen for store update events + heartbeat
     listener.on('notification', async (msg) => {
       try {
+        // Heartbeat channel — just update timestamp, don't process further
+        if (msg.channel === 'org_studio_heartbeat') {
+          pubsubHealth.lastHeartbeatAt = new Date().toISOString();
+          return;
+        }
         // msg.channel is the event name, msg.payload is the JSON data
         if (msg.channel === 'org_studio_change') {
           const changeEvent = JSON.parse(msg.payload);
@@ -1108,14 +1152,34 @@ async function initializePostgresListener() {
     });
 
     await listener.connect();
+    pubsubHealth.connected = true;
+    pubsubHealth.lastConnectedAt = new Date().toISOString();
+    pubsubHealth.lastError = null;
+    _pubsubReconnectAttempt = 0; // reset backoff on successful connect
     console.log('[LISTEN] Connected to PostgreSQL, listening for org_studio_change events');
     
     // Subscribe to notifications
     await listener.query('LISTEN org_studio_change');
+    await listener.query('LISTEN org_studio_heartbeat');
+
+    // Start heartbeat: NOTIFY every 30s so we know the connection is alive
+    _pubsubHeartbeatTimer = setInterval(async () => {
+      try {
+        await listener.query("NOTIFY org_studio_heartbeat, 'ping'");
+      } catch (err) {
+        console.warn('[LISTEN] Heartbeat NOTIFY failed:', err.message);
+        // Connection is likely dead — the error/end handler will reconnect
+      }
+    }, PUBSUB_HEARTBEAT_INTERVAL_MS);
+    console.log('[LISTEN] Heartbeat started (30s interval)');
   } catch (e) {
     console.warn('[LISTEN] Failed to initialize PostgreSQL listener:', e.message);
-    // Not fatal — file system watchers are still working
-    setTimeout(() => initializePostgresListener(), 5000);
+    pubsubHealth.connected = false;
+    pubsubHealth.lastError = e.message;
+    const delay = getPubsubReconnectDelay();
+    _pubsubReconnectAttempt++;
+    pubsubHealth.reconnectCount++;
+    setTimeout(() => initializePostgresListener(), delay);
   }
 }
 

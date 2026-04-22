@@ -130,6 +130,31 @@ function StaleLabel({ minutes }: { minutes: number }) {
   return <span className={clsx('font-medium tabular-nums', color)}>{minutes}m</span>;
 }
 
+function PubSubStatus() {
+  const [ps, setPs] = useState<any>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => fetch('/api/health/pubsub').then(r => r.json()).then(d => { if (!cancelled) setPs(d); }).catch(() => {});
+    load();
+    const iv = setInterval(load, 15_000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, []);
+  if (!ps) return null;
+  const connected = ps.connected && !ps.stale;
+  return (
+    <div className="flex items-center gap-2.5 text-sm">
+      <StatusDot ok={connected} />
+      <span className="font-medium text-[var(--text-primary)]">
+        PubSub {connected ? 'Connected' : ps.stale ? 'Stale' : 'Disconnected'}
+      </span>
+      <span className="text-[var(--text-muted)]">
+        {ps.lastHeartbeatAt ? `— last heartbeat ${relativeTime(ps.lastHeartbeatAt)}` : '— no heartbeat yet'}
+        {ps.reconnectCount > 0 ? ` · ${ps.reconnectCount} reconnect${ps.reconnectCount > 1 ? 's' : ''}` : ''}
+      </span>
+    </div>
+  );
+}
+
 // ---------- page ----------
 
 export default function HealthPage() {
@@ -233,14 +258,17 @@ export default function HealthPage() {
         {/* ── 3. Postgres LISTEN ── */}
         <Panel title="Postgres LISTEN">
           {data ? (
-            <div className="flex items-center gap-2.5 text-sm">
-              <StatusDot ok={data.listen.healthy} />
-              <span className="font-medium text-[var(--text-primary)]">
-                {data.listen.healthy ? 'Healthy' : 'Unhealthy'}
-              </span>
-              {data.listen.detail && (
-                <span className="text-[var(--text-muted)]">— {data.listen.detail}</span>
-              )}
+            <div className="space-y-2">
+              <div className="flex items-center gap-2.5 text-sm">
+                <StatusDot ok={data.listen.healthy} />
+                <span className="font-medium text-[var(--text-primary)]">
+                  {data.listen.healthy ? 'Healthy' : 'Unhealthy'}
+                </span>
+                {data.listen.detail && (
+                  <span className="text-[var(--text-muted)]">— {data.listen.detail}</span>
+                )}
+              </div>
+              <PubSubStatus />
             </div>
           ) : (
             <p className="text-sm text-[var(--text-muted)]">Checking...</p>
