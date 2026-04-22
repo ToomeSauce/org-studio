@@ -29,6 +29,49 @@ import { promoteProjectToNextVersion } from './project-state';
 /* ------------------------------------------------------------------ */
 
 /**
+ * Fire-and-forget scheduler trigger so newly backlogged tasks get
+ * dispatched immediately after version auto-advance.
+ * Resolves display name → agentId via store teammates.
+ */
+function triggerSchedulerForAgent(assigneeName: string): void {
+  (async () => {
+    try {
+      // Resolve display name → agentId
+      const storeRes = await fetch('http://localhost:4501/api/store');
+      if (!storeRes.ok) return;
+      const store = await storeRes.json();
+      const teammates: any[] = store?.settings?.teammates || [];
+      const match = teammates.find((t: any) =>
+        t.name?.toLowerCase() === assigneeName.toLowerCase() ||
+        t.agentId === assigneeName.toLowerCase()
+      );
+      const agentId = match?.agentId;
+      if (!agentId) {
+        console.warn(`[AutoAdvance] no agentId found for devOwner "${assigneeName}" — skipping dispatch`);
+        return;
+      }
+
+      const apiKey = process.env.ORG_STUDIO_API_KEY || '';
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+      const res = await fetch('http://localhost:4501/api/scheduler', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ action: 'trigger', agentId }),
+      });
+      if (res.ok) {
+        console.log(`[AutoAdvance] scheduler triggered for ${assigneeName} (${agentId})`);
+      } else {
+        console.warn(`[AutoAdvance] scheduler trigger returned ${res.status} for ${agentId}`);
+      }
+    } catch (err: any) {
+      console.warn(`[AutoAdvance] scheduler trigger failed for ${assigneeName}:`, err?.message || err);
+    }
+  })();
+}
+
+/**
  * Get a Postgres pool, or null if DATABASE_URL is not set.
  * Re-uses the same pool instance across calls.
  */
@@ -232,6 +275,12 @@ export async function checkAndAutoAdvance(
       console.log(
         `[AutoAdvance] ${projectId}: ${current.version} → ${result.to} (${result.movedTasks} tasks moved planning→backlog)`,
       );
+
+      // Trigger the scheduler for the project's dev owner so the newly
+      // backlogged tasks get dispatched immediately — no poll needed.
+      if (result.movedTasks > 0 && projData.devOwner) {
+        triggerSchedulerForAgent(projData.devOwner);
+      }
     } else {
       console.log(
         `[AutoAdvance] ${projectId}: ${current.version} shipped — promote skipped: ${result.reason}`,

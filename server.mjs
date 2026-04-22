@@ -2384,8 +2384,9 @@ server.listen(port, async () => {
   // Initialize PostgreSQL LISTEN for bidirectional sync
   await initializePostgresListener();
 
-  // Roadmap reconcile: startup (30s delay so Next.js route is warm) + every 10 minutes.
-  // Heals any item-done drift caused by missed sync calls or past races.
+  // Roadmap reconcile: startup only (30s delay so Next.js route is warm).
+  // Version auto-advance is now fully event-driven via checkAndAutoAdvance
+  // in roadmap-sync.ts — the periodic poll was removed as part of KISS cleanup.
   const safeRoadmapReconcile = async () => {
     try {
       const port = process.env.PORT || 4501;
@@ -2407,8 +2408,7 @@ server.listen(port, async () => {
   };
   setTimeout(() => {
     safeRoadmapReconcile();
-    setInterval(safeRoadmapReconcile, 10 * 60_000);
-    console.log('[RoadmapReconcile] Scheduled: startup + every 10 min');
+    console.log('[RoadmapReconcile] Startup reconcile fired (no recurring poll)');
   }, 30_000);
 
   // Daily metrics computation — runs at startup (15s delay) + daily at midnight
@@ -2448,14 +2448,14 @@ server.listen(port, async () => {
     startLoopWatchdog();
 
     // --- Health alert monitors ---
-    // Gateway disconnect check (every 30s)
+    // Gateway disconnect check (every 5 min — KISS cleanup: was 30s)
     const safeCheckGateway = async () => {
       try { await checkGatewayDisconnect(); } catch (e) {
         console.error('[HealthMonitor] Gateway check error (non-fatal):', e.message);
       }
     };
-    setInterval(safeCheckGateway, 30_000);
-    console.log('[HealthMonitor] Gateway disconnect monitor started (30s tick)');
+    setInterval(safeCheckGateway, 5 * 60_000);
+    console.log('[HealthMonitor] Gateway disconnect monitor started (5 min tick)');
 
     // Dead-letter backlog check (every 5min)
     const safeCheckDeadLetter = async () => {
@@ -2469,14 +2469,14 @@ server.listen(port, async () => {
       console.log('[HealthMonitor] Dead-letter backlog monitor started (5min tick)');
     }, 15_000);
 
-    // LISTEN stale check (every 60s)
+    // LISTEN stale check (every 5 min — KISS cleanup: was 60s)
     const safeCheckListen = async () => {
       try { await checkListenStale(); } catch (e) {
         console.error('[HealthMonitor] LISTEN check error (non-fatal):', e.message);
       }
     };
-    setInterval(safeCheckListen, 60_000);
-    console.log('[HealthMonitor] LISTEN stale monitor started (60s tick)');
+    setInterval(safeCheckListen, 5 * 60_000);
+    console.log('[HealthMonitor] LISTEN stale monitor started (5 min tick)');
 
     // Start stuck-task detector (incident logging, no auto-recovery)
     const safeStuckTaskDetector = async () => {
@@ -2492,7 +2492,7 @@ server.listen(port, async () => {
       setInterval(safeStuckTaskDetector, STUCK_TASK_DETECT_INTERVAL_MS);
       console.log(`[StuckTaskDetector] Started (interval: 5min, threshold: ${STUCK_TASK_THRESHOLD_MIN}min)`);
 
-      // Project integrity audit (#697) — 60s interval
+      // Project integrity audit (#697) — startup only (KISS cleanup: 60s poll removed)
       const safeProjectIntegrityAudit = async () => {
         try {
           await projectIntegrityAudit();
@@ -2501,8 +2501,7 @@ server.listen(port, async () => {
         }
       };
       safeProjectIntegrityAudit();
-      setInterval(safeProjectIntegrityAudit, PROJECT_INTEGRITY_INTERVAL_MS);
-      console.log('[ProjectIntegrityAudit] Started (interval: 60s, dedup: 60min)');
+      console.log('[ProjectIntegrityAudit] Startup audit fired (no recurring poll)');
     }, 30_000);
   }, 60_000);
 });
