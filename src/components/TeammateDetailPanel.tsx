@@ -7,6 +7,7 @@ import { Teammate, resolveColor } from '@/lib/teammates';
 import type { AgentLoop } from '@/lib/store';
 import Link from 'next/link';
 import OrgRefreshSection from './OrgRefreshSection';
+import BootstrapDriftSection from './BootstrapDriftSection';
 
 // --- Status badge colors (matches context board) ---
 const STATUS_STYLES: Record<string, { bg: string; text: string; label: string }> = {
@@ -483,6 +484,11 @@ export default function TeammateDetailPanel({
           {/* ORG.md Refresh Section — #864 silent-drift vector #1 */}
           <Section title="ORG.md Refresh" defaultOpen={false}>
             <OrgRefreshSection agentId={teammate.agentId || teammate.id} />
+          </Section>
+
+          {/* Bootstrap Drift Section — #864 silent-drift vector #5 */}
+          <Section title="Bootstrap Files" defaultOpen={false}>
+            <BootstrapDriftSection agentId={teammate.agentId || teammate.id} />
           </Section>
 
           {/* Recent Activity Section */}
