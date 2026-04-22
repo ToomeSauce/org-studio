@@ -212,9 +212,8 @@ export async function checkAndAutoAdvance(
     const current = versionResult.rows[0];
     const items: any[] = current.items || [];
 
-    // All items must be done (and there must be at least one item)
-    if (items.length === 0) return;
-    if (!items.every((i: any) => i.done === true)) return;
+    // All items must be done (zero-item versions are auto-shipped)
+    if (items.length > 0 && !items.every((i: any) => i.done === true)) return;
 
     // 2. Ship the current version
     const shippedAt = Date.now();
@@ -259,11 +258,23 @@ export async function checkAndAutoAdvance(
       return;
     }
 
-    // 4. No horizon = nothing is approved. Stop.
+    // 4. No horizon = nothing is approved. Auto-stop.
     if (!approvedThrough) {
-      console.log(
-        `[AutoAdvance] ${projectId}: no approvedThrough set — stopping after ${current.version}`,
-      );
+      if (projData.state !== 'stopped') {
+        projData.state = 'stopped';
+        projData.currentVersion = null;
+        await client.query(
+          `UPDATE org_studio_projects SET data = $1 WHERE id = $2 AND workspace_id = $3`,
+          [JSON.stringify(projData), projectId, 'default-workspace'],
+        );
+        console.log(
+          `[AutoAdvance] ${projectId}: auto-stopped — no approvedThrough set, shipped ${current.version}`,
+        );
+      } else {
+        console.log(
+          `[AutoAdvance] ${projectId}: no approvedThrough set — stopping after ${current.version}`,
+        );
+      }
       return;
     }
 
@@ -285,6 +296,20 @@ export async function checkAndAutoAdvance(
       console.log(
         `[AutoAdvance] ${projectId}: ${current.version} shipped — promote skipped: ${result.reason}`,
       );
+
+      // All approved work is done and no next version to promote — auto-stop the project.
+      // This prevents the project from staying in "started" state with nothing to do.
+      if (projData.state !== 'stopped') {
+        projData.state = 'stopped';
+        projData.currentVersion = null;
+        await client.query(
+          `UPDATE org_studio_projects SET data = $1 WHERE id = $2 AND workspace_id = $3`,
+          [JSON.stringify(projData), projectId, 'default-workspace'],
+        );
+        console.log(
+          `[AutoAdvance] ${projectId}: auto-stopped — all approved versions shipped, nothing to promote`,
+        );
+      }
     }
   } catch (err: any) {
     console.error('[AutoAdvance] checkAndAutoAdvance error (non-fatal):', err?.message || err);
@@ -451,6 +476,35 @@ export async function reconcileRoadmapItemDone(
                 : after.rows[0].data || {};
           if (afterData.currentVersion && afterData.currentVersion !== projData.currentVersion) {
             summary.advanced++;
+          } else if (!afterData.currentVersion || afterData.currentVersion === projData.currentVersion) {
+            // checkAndAutoAdvance didn't advance — check if we should auto-stop.
+            // This catches the case where the shipped version was the last current one
+            // and there's nothing to promote (all approved work done).
+            const hasPlannedInHorizon = await (async () => {
+              const horizon = afterData.autonomy?.approvedThrough;
+              if (!horizon) return false;
+              const { isVersionGreater } = await import('./version-utils');
+              const nextRes = await client.query(
+                `SELECT version FROM org_studio_roadmap_versions
+                 WHERE project_id = $1 AND status = 'planned' AND workspace_id = $2
+                 ORDER BY sort_order ASC LIMIT 1`,
+                [pid, 'default-workspace'],
+              );
+              if (nextRes.rows.length === 0) return false;
+              return !isVersionGreater(nextRes.rows[0].version, horizon);
+            })();
+
+            if (!hasPlannedInHorizon && afterData.state !== 'stopped') {
+              afterData.state = 'stopped';
+              afterData.currentVersion = null;
+              await client.query(
+                `UPDATE org_studio_projects SET data = $1 WHERE id = $2 AND workspace_id = $3`,
+                [JSON.stringify(afterData), pid, 'default-workspace'],
+              );
+              console.log(
+                `[RoadmapReconcile] ${pid}: auto-stopped — all approved versions shipped, nothing to promote`,
+              );
+            }
           }
         } catch (advErr: any) {
           console.error(
