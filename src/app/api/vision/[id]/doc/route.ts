@@ -130,6 +130,7 @@ export async function GET(
           );
           if (result.rows.length > 0) {
             content = result.rows[0].content;
+            console.info(`[VisionDoc] GET project=${projectId} source=postgres len=${content?.length ?? 0}`);
           }
         } finally {
           await client.end();
@@ -144,6 +145,9 @@ export async function GET(
     if (!content) {
       const { content: fsContent } = await resolveDocPath(projectId);
       content = fsContent;
+      if (content) {
+        console.info(`[VisionDoc] GET project=${projectId} source=filesystem len=${content.length}`);
+      }
     }
 
     // If still not found, check if remote access without storage
@@ -209,6 +213,7 @@ export async function PUT(
             [projectId, newContent, updatedAt, 'default-workspace'] // TODO(v0.17-multi-workspace): resolve from request context
           );
           savedToDb = true;
+          console.info(`[VisionDoc] PUT project=${projectId} saved_to=postgres len=${newContent.length}`);
         } finally {
           await client.end();
         }
@@ -232,6 +237,7 @@ export async function PUT(
       }
 
       writeFileSync(absPath, newContent, 'utf-8');
+      console.info(`[VisionDoc] PUT project=${projectId} saved_to=filesystem len=${newContent.length} path=${absPath}`);
     }
 
     // Re-parse after save
@@ -274,8 +280,14 @@ export async function PUT(
           sessionKey: `agent:${agentId}:main`,
           message,
           idempotencyKey: `vision-doc-${projectId}-${Date.now()}`,
-        }).catch(() => {}); // best-effort
+        }).then(() => {
+          console.info(`[VisionDoc] PUT project=${projectId} notify_agent=${agentId} notify_ok=true`);
+        }).catch((err: any) => {
+          console.warn(`[VisionDoc] PUT project=${projectId} notify_agent=${agentId} notify_ok=false error=${err?.message || err}`);
+        });
       }
+
+      console.info(`[VisionDoc] PUT project=${projectId} notify_agents=[${[...agentIds].join(',')}]`);
     }
 
     // --- 2. Trigger ORG.md re-sync ---
