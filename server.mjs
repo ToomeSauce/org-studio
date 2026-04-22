@@ -1378,17 +1378,15 @@ async function cleanupStaleCrons() {
 // Catches tasks stuck in in-progress when nobody is watching the dashboard.
 // Only fires event-driven triggers — never creates cron jobs.
 const WATCHDOG_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
-const WATCHDOG_STUCK_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes idle
 const VISION_CYCLE_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes — vision cycles should complete within this
 
-// --- Stuck Task Detector (incident logging, separate from re-trigger watchdog) ---
-const STUCK_TASK_DETECT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+// --- Stuck Task constants (shared between watchdog + incident logging, merged by KISS cleanup) ---
 const STUCK_TASK_THRESHOLD_MIN = parseInt(process.env.STUCK_TASK_THRESHOLD_MIN || '30', 10);
-const STUCK_TASK_THRESHOLD_MS_DETECT = STUCK_TASK_THRESHOLD_MIN * 60 * 1000;
+const STUCK_TASK_THRESHOLD_MS = STUCK_TASK_THRESHOLD_MIN * 60 * 1000;
 const _stuckTaskLoggedSet = new Set(); // task ids already emitted this uptime
 
-async function stuckTaskDetector() {
-  const store = cachedStore || safeRead(STORE_PATH);
+// Log incident for stuck tasks (called from stuckTaskWatchdog, no separate interval).
+async function logStuckTaskIncidents(store) {
   if (!store?.tasks?.length) return;
 
   const now = Date.now();
@@ -1398,7 +1396,6 @@ async function stuckTaskDetector() {
   for (const task of store.tasks) {
     if (task.isArchived || task.status !== 'in-progress') continue;
 
-    // Compute time in-progress from statusHistory or fallback
     let inProgressSince = task.updatedAt || task.createdAt || now;
     const history = task.statusHistory || [];
     for (let i = history.length - 1; i >= 0; i--) {
@@ -1411,7 +1408,7 @@ async function stuckTaskDetector() {
     const elapsed = now - new Date(inProgressSince).getTime();
     const minutesInStatus = Math.round(elapsed / 60000);
 
-    if (elapsed > STUCK_TASK_THRESHOLD_MS_DETECT) {
+    if (elapsed > STUCK_TASK_THRESHOLD_MS) {
       currentStuckIds.add(task.id);
 
       if (!_stuckTaskLoggedSet.has(task.id)) {
@@ -1433,14 +1430,13 @@ async function stuckTaskDetector() {
             },
           });
         } catch (e) {
-          console.error('[StuckTaskDetector] logIncident failed (non-fatal):', e.message);
+          console.error('[Watchdog] logIncident failed (non-fatal):', e.message);
         }
         _stuckTaskLoggedSet.add(task.id);
       }
     }
   }
 
-  // Remove recovered tasks from the logged set so future stalls re-fire
   for (const id of _stuckTaskLoggedSet) {
     if (!currentStuckIds.has(id)) {
       _stuckTaskLoggedSet.delete(id);
@@ -1536,6 +1532,9 @@ async function stuckTaskWatchdog() {
   const store = cachedStore || safeRead(STORE_PATH);
   if (!store?.tasks?.length) return;
 
+  // Log incidents for stuck tasks (merged from standalone stuckTaskDetector)
+  await logStuckTaskIncidents(store);
+
   const now = Date.now();
   const teammates = store.settings?.teammates || [];
   const triggered = new Set();
@@ -1548,7 +1547,7 @@ async function stuckTaskWatchdog() {
       || (task.statusHistory?.length ? task.statusHistory[task.statusHistory.length - 1]?.timestamp : null)
       || task.createdAt || 0;
 
-    if (now - lastActivity < WATCHDOG_STUCK_THRESHOLD_MS) continue;
+    if (now - lastActivity < STUCK_TASK_THRESHOLD_MS) continue;
 
     const assignee = task.assignee;
     if (!assignee || triggered.has(assignee.toLowerCase())) continue;
@@ -2455,19 +2454,8 @@ server.listen(port, async () => {
     setInterval(safeCheckListen, 5 * 60_000);
     console.log('[HealthMonitor] LISTEN stale monitor started (5 min tick)');
 
-    // Start stuck-task detector (incident logging, no auto-recovery)
-    const safeStuckTaskDetector = async () => {
-      try {
-        await stuckTaskDetector();
-      } catch (e) {
-        console.error('[StuckTaskDetector] Unhandled error (non-fatal):', e.message);
-      }
-    };
-    // First tick after 30s delay (let heartbeats / store warm up)
+    // Stuck-task detector merged into watchdog (KISS cleanup — no separate interval)
     setTimeout(() => {
-      safeStuckTaskDetector();
-      setInterval(safeStuckTaskDetector, STUCK_TASK_DETECT_INTERVAL_MS);
-      console.log(`[StuckTaskDetector] Started (interval: 5min, threshold: ${STUCK_TASK_THRESHOLD_MIN}min)`);
 
       // Project integrity audit (#697) — startup only (KISS cleanup: 60s poll removed)
       const safeProjectIntegrityAudit = async () => {

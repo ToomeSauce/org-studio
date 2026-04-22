@@ -717,23 +717,13 @@ export async function buildDispatchMessage(
   // Store handoff task IDs for cleanup
   (buildDispatchMessage as any)._lastHandoffTaskIds = handoffTaskIds;
 
-  // Instructions (minimal — agent's ORG.md has the full workflow)
-  const apiKey = process.env.ORG_STUDIO_API_KEY || '';
+  // Instructions — kept minimal. Full workflow lives in the org-studio-api skill.
   lines.push('**Instructions:**');
-  lines.push('1. Read your ORG.md for current context and workflow');
+  lines.push('1. Read your ORG.md for current context and the `org-studio-api` skill for the full work contract.');
   lines.push('2. **Work the tasks listed above — do NOT create new tasks.** Your backlog is pre-populated.');
-  lines.push('3. Move task to in-progress when you start:');
-  lines.push(` \`curl -s http://localhost:4501/api/store -X POST -H "Content-Type: application/json" -H "Authorization: Bearer ${apiKey}" -d '{"action":"updateTask","id":"<task-id>","updates":{"status":"in-progress"}}'\``);
-  lines.push('4. Use sub-agents for heavy work (coding, testing, builds)');
-  lines.push('5. **Post progress comments** as you work — decisions made, blockers hit, approaches taken, key findings:');
-  lines.push(` \`curl -s http://localhost:4501/api/store -X POST -H "Content-Type: application/json" -H "Authorization: Bearer ${apiKey}" -d '{"action":"addComment","taskId":"<task-id>","comment":{"author":"<your-name>","content":"<update>","type":"comment"}}'\``);
-  lines.push('   Post at least one comment per task (e.g. "Scaffolded Next.js 16 with Tailwind — chose App Router over Pages for RSC support")');
-  lines.push('6. **When done, you MUST update task status.** This triggers the next task. If you skip this, the pipeline stops.');
-  lines.push('   Include a **verification checklist** in reviewNotes showing what you tested. Use ✅/❌/⏭️:');
-  lines.push('   Example reviewNotes: "Built hero section with logo + tagline + CTA buttons.\\n\\nVerification:\\n✅ Component renders in light and dark mode\\n✅ Build passes (zero TS errors)\\n✅ Responsive at 375px, 768px, 1440px\\n❌ Lighthouse a11y — no browser available\\n⏭️ E2E test — deferred to QA"');
-  lines.push(` \`curl -s http://localhost:4501/api/store -X POST -H "Content-Type: application/json" -H "Authorization: Bearer ${apiKey}" -d '{"action":"updateTask","id":"<task-id>","updates":{"status":"done","reviewNotes":"<summary + verification checklist>"}}'\``);
-  lines.push('7. After updating status, the next task dispatches automatically. Do NOT pull multiple tasks at once.');
-  lines.push('8. Do NOT ask the user for permission to continue or present "Next Task" buttons. Just work, update, and stop. The system handles chaining.');
+  lines.push('3. Move task to in-progress, post progress comments, and update status to done when finished (see skill for curl examples).');
+  lines.push('4. After updating status, the next task dispatches automatically. Do NOT pull multiple tasks at once.');
+  lines.push('5. Do NOT ask the user for permission to continue or present "Next Task" buttons. Just work, update, and stop.');
 
   return lines.join('\n');
 }
