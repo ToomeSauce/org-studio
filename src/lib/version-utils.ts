@@ -1,182 +1,281 @@
 /**
  * src/lib/version-utils.ts
- * 
- * Semantic version comparison utilities using npm semver package.
- * Replaces all parseFloat-based version comparisons.
+ *
+ * Version comparison and formatting utilities.
+ *
+ * Supports two formats:
+ *   CalVer  — YYYY.MM.DD or YYYY.MM.DD.N  (e.g. 2026.04.22, 2026.04.22.1)
+ *   SemVer  — MAJOR.MINOR.PATCH           (e.g. 0.15.0, 1.12.0)
+ *
+ * CalVer is the current standard for new Org Studio releases.
+ * SemVer is accepted for backward compatibility (Garage and older roadmap entries).
+ *
+ * Comparison strategy: numeric part-by-part (works for both formats without
+ * any third-party library). A CalVer string (first part ≥ 2000) will always
+ * compare greater than a SemVer string (first part 0-9xx), which is correct —
+ * CalVer versions are newer.
  */
 
-import { lt, lte, gt, gte, compare, valid, coerce } from 'semver';
+// ── Patterns ─────────────────────────────────────────────────────────────────
 
 /**
- * Normalize a version string to valid semver format.
- * Handles versions like "0.141" → "0.14.1"
- * 
- * Note: This assumes SEMVER_MAP was already applied during migration.
- * This is a safety net for any stray old versions.
+ * CalVer: YYYY.MM.DD or YYYY.MM.DD.N
+ * Month 01-12, day 01-31, optional micro counter ≥ 0.
+ */
+export const CALVER_RE =
+  /^\d{4}\.(0[1-9]|1[0-2])\.(0[1-9]|[12]\d|3[01])(\.\d+)?$/;
+
+/**
+ * SemVer (strict 3-part, no v prefix): MAJOR.MINOR.PATCH
+ */
+export const SEMVER_RE = /^\d+\.\d+\.\d+$/;
+
+// ── Format detection ─────────────────────────────────────────────────────────
+
+export function isCalver(version: string | null | undefined): boolean {
+  if (!version) return false;
+  return CALVER_RE.test(version);
+}
+
+export function isSemver(version: string | null | undefined): boolean {
+  if (!version) return false;
+  return SEMVER_RE.test(version);
+}
+
+export function isValidVersion(version: string | null | undefined): boolean {
+  if (!version) return false;
+  return CALVER_RE.test(version) || SEMVER_RE.test(version);
+}
+
+// ── Normalisation ─────────────────────────────────────────────────────────────
+
+/**
+ * Normalize a version string to a canonical form.
+ *
+ * - Strips leading `v` prefix.
+ * - If already CalVer or SemVer → return as-is.
+ * - Handles old 2-part shorthand (e.g. "0.14") → "0.14.0".
+ * - Handles legacy compact form (e.g. "0.141") → "0.14.1" (safety net; DB
+ *   was already migrated but this prevents crashes if stray old values appear).
+ *
+ * Returns null if the string can't be recognized.
  */
 export function normalizeVersion(version: string | null | undefined): string | null {
   if (!version) return null;
-  
-  // Remove leading 'v' if present
+
   let v = version.startsWith('v') ? version.slice(1) : version;
-  
-  // Check if already valid semver
-  if (valid(v)) return v;
-  
-  // Handle leading zeros in parts (e.g. "1.05.0" → "1.5.0") which are
-  // invalid per semver spec. Split, strip leading zeros, rejoin.
-  const parts = v.split('.');
-  if (parts.length >= 2 && parts.length <= 3 && parts.every(p => /^\d+$/.test(p))) {
-    const cleaned = parts
-      .map(p => String(parseInt(p, 10))) // strips leading zeros, '0' stays '0'
-      .join('.');
-    const padded = parts.length === 2 ? `${cleaned}.0` : cleaned;
-    if (valid(padded)) return padded;
+
+  // Already canonical CalVer
+  if (CALVER_RE.test(v)) return v;
+
+  // Already canonical SemVer
+  if (SEMVER_RE.test(v)) return v;
+
+  // 2-part semver shorthand: "0.14" → "0.14.0"
+  if (/^\d+\.\d+$/.test(v)) return `${v}.0`;
+
+  // Legacy compact: "0.141" (2 digits in minor field) → "0.14.1"
+  // Splits into major=0 minor=141 → interpret as minor=14 patch=1
+  const compactMatch = v.match(/^(\d+)\.(\d{3,})$/);
+  if (compactMatch) {
+    const [, major, rest] = compactMatch;
+    // Last digit is patch, preceding digits are minor
+    const patch = rest.slice(-1);
+    const minor = rest.slice(0, -1).replace(/^0+/, '') || '0';
+    const candidate = `${major}.${minor}.${patch}`;
+    if (SEMVER_RE.test(candidate)) return candidate;
   }
-  
-  // Try to coerce it (e.g., "0.14" → "0.14.0")
-  const coerced = coerce(v);
-  if (coerced) return coerced.version;
-  
-  // Could not normalize — return null so callers can handle gracefully.
+
   console.warn(`[version-utils] Could not normalize version: ${version}`);
   return null;
 }
 
+// ── Comparison ────────────────────────────────────────────────────────────────
+
 /**
- * Compare two versions: -1 if v1 < v2, 0 if equal, 1 if v1 > v2
+ * Compare two version strings numerically, part by part.
+ * Returns -1 | 0 | 1. Handles CalVer, SemVer, or mixed comparisons.
+ *
+ * Mixed (SemVer vs CalVer): CalVer years (≥ 2000) naturally sort higher
+ * than any real-world SemVer major version, which is correct — CalVer
+ * releases are always newer than the legacy SemVer history.
  */
-export function compareVersions(v1: string | null | undefined, v2: string | null | undefined): -1 | 0 | 1 {
-  const normalized1 = normalizeVersion(v1);
-  const normalized2 = normalizeVersion(v2);
-  
-  // Defensive: never throw from a comparator. A throwing comparator corrupts
-  // Array.sort and can cascade into React render loops downstream.
-  // Unknown/invalid versions sort as equal to each other, and greater than
-  // known versions (push bad data to the end).
-  if (!normalized1 && !normalized2) return 0;
-  if (!normalized1) return 1;
-  if (!normalized2) return -1;
-  
+export function compareVersions(
+  v1: string | null | undefined,
+  v2: string | null | undefined,
+): -1 | 0 | 1 {
+  const n1 = normalizeVersion(v1);
+  const n2 = normalizeVersion(v2);
+
+  if (!n1 && !n2) return 0;
+  if (!n1) return 1;  // unknown sorts last (greater)
+  if (!n2) return -1;
+
   try {
-    return compare(normalized1, normalized2);
+    const p1 = n1.split('.').map(Number);
+    const p2 = n2.split('.').map(Number);
+    const len = Math.max(p1.length, p2.length);
+
+    for (let i = 0; i < len; i++) {
+      const a = p1[i] ?? 0;
+      const b = p2[i] ?? 0;
+      if (a < b) return -1;
+      if (a > b) return 1;
+    }
+    return 0;
   } catch (e) {
     console.error(`[version-utils] compareVersions error: ${v1} vs ${v2}`, e);
     return 0;
   }
 }
 
-/**
- * Check if version is less than horizon.
- * Used for approval horizon checks: is this version approved?
- */
-export function isVersionInHorizon(version: string | null | undefined, horizon: string | null | undefined): boolean {
-  if (!horizon) return false; // Nothing approved
-  if (!version) return false;
-  
-  try {
-    return lte(normalizeVersion(version)!, normalizeVersion(horizon)!);
-  } catch (e) {
-    console.error(`[version-utils] Error checking horizon: ${version} <= ${horizon}`, e);
-    return false;
-  }
-}
+// ── Horizon checks ────────────────────────────────────────────────────────────
 
 /**
- * Check if version is less than another.
+ * Is `version` ≤ `horizon`?  Used for approval horizon checks.
  */
-export function isVersionLess(v1: string | null | undefined, v2: string | null | undefined): boolean {
+export function isVersionInHorizon(
+  version: string | null | undefined,
+  horizon: string | null | undefined,
+): boolean {
+  if (!horizon || !version) return false;
+  return compareVersions(version, horizon) <= 0;
+}
+
+/** Is v1 < v2? */
+export function isVersionLess(
+  v1: string | null | undefined,
+  v2: string | null | undefined,
+): boolean {
   if (!v1 || !v2) return false;
-  try {
-    return lt(normalizeVersion(v1)!, normalizeVersion(v2)!);
-  } catch (e) {
-    console.error(`[version-utils] Error comparing: ${v1} < ${v2}`, e);
-    return false;
-  }
+  return compareVersions(v1, v2) < 0;
 }
 
-/**
- * Check if version is less than or equal to another.
- */
-export function isVersionLessOrEqual(v1: string | null | undefined, v2: string | null | undefined): boolean {
+/** Is v1 ≤ v2? */
+export function isVersionLessOrEqual(
+  v1: string | null | undefined,
+  v2: string | null | undefined,
+): boolean {
   if (!v1 || !v2) return false;
-  try {
-    return lte(normalizeVersion(v1)!, normalizeVersion(v2)!);
-  } catch (e) {
-    console.error(`[version-utils] Error comparing: ${v1} <= ${v2}`, e);
-    return false;
-  }
+  return compareVersions(v1, v2) <= 0;
 }
 
-/**
- * Check if version is greater than another.
- */
-export function isVersionGreater(v1: string | null | undefined, v2: string | null | undefined): boolean {
+/** Is v1 > v2? */
+export function isVersionGreater(
+  v1: string | null | undefined,
+  v2: string | null | undefined,
+): boolean {
   if (!v1 || !v2) return false;
-  try {
-    return gt(normalizeVersion(v1)!, normalizeVersion(v2)!);
-  } catch (e) {
-    console.error(`[version-utils] Error comparing: ${v1} > ${v2}`, e);
-    return false;
-  }
+  return compareVersions(v1, v2) > 0;
 }
 
-/**
- * Check if version is greater than or equal to another.
- */
-export function isVersionGreaterOrEqual(v1: string | null | undefined, v2: string | null | undefined): boolean {
+/** Is v1 ≥ v2? */
+export function isVersionGreaterOrEqual(
+  v1: string | null | undefined,
+  v2: string | null | undefined,
+): boolean {
   if (!v1 || !v2) return false;
-  try {
-    return gte(normalizeVersion(v1)!, normalizeVersion(v2)!);
-  } catch (e) {
-    console.error(`[version-utils] Error comparing: ${v1} >= ${v2}`, e);
-    return false;
-  }
+  return compareVersions(v1, v2) >= 0;
 }
 
-/**
- * Sort versions in ascending order.
- */
+// ── Sort ──────────────────────────────────────────────────────────────────────
+
+/** Sort an array of version strings ascending. */
 export function sortVersions(versions: (string | null | undefined)[]): string[] {
   const normalized = versions
     .map(normalizeVersion)
     .filter((v): v is string => v !== null);
-  return normalized.sort(compare);
+  return normalized.sort(compareVersions);
 }
 
-/**
- * Format version for display (remove v prefix, already removed by migration).
- */
+// ── Display ───────────────────────────────────────────────────────────────────
+
+/** Format a version for display (strips leading `v`, already absent post-migration). */
 export function formatVersion(version: string | null | undefined): string {
   if (!version) return '';
-  // Should already be clean post-migration, but safety net
   return version.startsWith('v') ? version.slice(1) : version;
 }
 
+// ── Sort key ──────────────────────────────────────────────────────────────────
+
 /**
- * Produce an integer sort key for a semver string. Packs major/minor/patch
- * into a single int so it fits the `sort_order` INTEGER column and sorts
- * correctly (e.g., 0.14.1 < 0.15.0 < 2.0.0).
+ * Produce an INTEGER sort key that fits a Postgres `INTEGER` column (< 2.1B).
  *
- * Formula: major*1_000_000_000 + minor*1_000_000 + patch*1_000
- * The trailing *1000 leaves headroom for future pre-release handling.
+ * CalVer  YYYY.MM.DD[.N] → (year - 2020) * 10_000_000 + month * 100_000 + day * 1_000 + micro
+ *   e.g. 2026.04.22   → (6)*10_000_000 + 4*100_000 + 22*1_000 = 60_422_000
+ *   e.g. 2026.04.22.1 → 60_422_001
+ *
+ * SemVer  MAJ.MIN.PAT   → maj * 1_000_000_000 + min * 1_000_000 + pat * 1_000
+ *   e.g. 0.16.0 → 16_000_000
+ *   e.g. 1.12.0 → 1_012_000_000
+ *
+ * CalVer keys (≥ 50_000_000 for year 2025+) are always larger than plausible
+ * SemVer keys, so mixed roadmaps sort CalVer after SemVer — correct.
  */
 export function versionSortKey(version: string | null | undefined): number {
   const n = normalizeVersion(version);
   if (!n) return 0;
+
   try {
-    const [maj, min, pat] = n.split('.').map(x => parseInt(x, 10) || 0);
-    return maj * 1_000_000_000 + min * 1_000_000 + pat * 1_000;
+    const parts = n.split('.').map(x => parseInt(x, 10) || 0);
+
+    if (CALVER_RE.test(n)) {
+      // CalVer: [YYYY, MM, DD] or [YYYY, MM, DD, micro]
+      const [year, month, day, micro = 0] = parts;
+      return (year - 2020) * 10_000_000 + month * 100_000 + day * 1_000 + micro;
+    } else {
+      // SemVer: [MAJOR, MINOR, PATCH]
+      const [maj, min, pat] = parts;
+      return maj * 1_000_000_000 + min * 1_000_000 + pat * 1_000;
+    }
   } catch {
     return 0;
   }
 }
 
+// ── Next version helpers ──────────────────────────────────────────────────────
+
 /**
- * Bump the minor version (e.g., "0.14.1" -> "0.15.0"). Falls back to "0.2.0".
+ * Return today's CalVer string: YYYY.MM.DD
+ * Pass a Date to override (useful in tests).
+ */
+export function todayCalver(date: Date = new Date()): string {
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(date.getUTCDate()).padStart(2, '0');
+  return `${y}.${m}.${d}`;
+}
+
+/**
+ * Given an existing CalVer string for today, return the next micro version.
+ * e.g. "2026.04.22" → "2026.04.22.1"
+ *      "2026.04.22.1" → "2026.04.22.2"
+ * If the version is not today's or is SemVer, just return todayCalver().
+ */
+export function nextCalver(current: string | null | undefined, date: Date = new Date()): string {
+  const today = todayCalver(date);
+  if (!current) return today;
+
+  const n = normalizeVersion(current);
+  if (!n || !isCalver(n)) return today;
+
+  const parts = n.split('.');
+  const versionDate = parts.slice(0, 3).join('.');
+  if (versionDate !== today) return today;
+
+  // Same day — bump micro
+  const micro = parts.length === 4 ? parseInt(parts[3], 10) + 1 : 1;
+  return `${today}.${micro}`;
+}
+
+/**
+ * @deprecated Use nextCalver() for new CalVer projects.
+ * Kept for backward compat with any callers on legacy SemVer projects.
+ * Bumps the minor version: "0.14.1" → "0.15.0". Falls back to "0.2.0".
  */
 export function nextMinorVersion(version: string | null | undefined): string {
   const n = normalizeVersion(version) || '0.1.0';
+  if (isCalver(n)) return nextCalver(n);
   try {
     const [maj, min] = n.split('.').map(x => parseInt(x, 10) || 0);
     return `${maj}.${min + 1}.0`;

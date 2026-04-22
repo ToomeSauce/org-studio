@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getStoreProvider } from '@/lib/store-provider';
 import { authenticateRequest } from '@/lib/auth';
 import { checkArchivedProject } from '@/lib/archived-project-compat';
-import { versionSortKey, compareVersions } from '@/lib/version-utils';
-import semver from 'semver';
+import { versionSortKey, compareVersions, isValidVersion } from '@/lib/version-utils';
 
 export const dynamic = 'force-dynamic';
 
@@ -121,21 +120,19 @@ export async function POST(
     const body = await req.json();
     const { action, version, title, status, items, order, versionType } = body;
 
-    // Validate version semver on any action that takes one (upsert/delete).
-    // Per docs/decisions/2026-04-19-version-numbering-convention.md the API
-    // refuses non-semver inputs. Strict check: must be 3-part semver, no `v`
-    // prefix, no coercion. Callers must send canonical form.
+    // Validate version on any action that takes one (upsert/delete).
+    // Accepts CalVer (YYYY.MM.DD or YYYY.MM.DD.N) and SemVer (MAJOR.MINOR.PATCH).
+    // No `v` prefix, no 2-part shortcuts. Callers must send canonical form.
     if ((action === 'upsert' || action === 'delete') && version !== undefined) {
-      const isStrictSemver =
+      const isValid =
         typeof version === 'string' &&
         !version.startsWith('v') &&
-        /^\d+\.\d+\.\d+$/.test(version) &&
-        !!semver.valid(version);
-      if (!isStrictSemver) {
+        isValidVersion(version);
+      if (!isValid) {
         return NextResponse.json(
           {
             error: 'invalid_version',
-            message: `Version "${version}" is not valid semver. Use 3-part semver: MAJOR.MINOR.PATCH (e.g. 0.15.0). No "v" prefix, no 2-part shortcuts.`,
+            message: `Version "${version}" is not a valid version. Use CalVer (e.g. 2026.04.22) or SemVer (e.g. 0.15.0). No "v" prefix.`,
           },
           { status: 400 },
         );

@@ -1,0 +1,661 @@
+[
+  {
+    "id": "proj-voice",
+    "name": "Voice Service",
+    "data": {
+      "repoUrl": "teampartial/catpilot-voice-v2",
+      "autonomy": {
+        "cadence": "weekly",
+        "enabled": true,
+        "autoAdvance": false,
+        "approvalMode": "per-major"
+      },
+      "devOwner": "Mikey",
+      "sections": [
+        {
+          "id": "sec-main-proj-voice",
+          "name": "Main",
+          "owner": "Mikey",
+          "contract": "",
+          "outcomes": ""
+        }
+      ],
+      "versions": [
+        {
+          "id": "v-6ast811t",
+          "items": [],
+          "status": "planned",
+          "version": "0.1.0",
+          "createdAt": 1776493477615,
+          "sort_order": 0,
+          "version_type": "outcome"
+        }
+      ],
+      "dependsOn": [],
+      "lifecycle": "building",
+      "autoAdvance": true,
+      "visionOwner": "Basil",
+      "visionDocPath": "docs/visions/proj-voice.md",
+      "currentVersion": null,
+      "approvedThrough": null
+    }
+  },
+  {
+    "id": "proj-ops",
+    "name": "Agent Operations",
+    "data": {
+      "sections": [
+        {
+          "id": "sec-main-proj-ops",
+          "name": "Main",
+          "owner": "Henry",
+          "contract": "",
+          "outcomes": ""
+        }
+      ],
+      "versions": [
+        {
+          "id": "v-gcd2tvtc",
+          "items": [],
+          "status": "planned",
+          "version": "0.1.0",
+          "createdAt": 1776493478141,
+          "sort_order": 0,
+          "version_type": "outcome"
+        }
+      ],
+      "autoAdvance": true,
+      "approvedThrough": null
+    }
+  },
+  {
+    "id": "proj-mc",
+    "name": "Org Studio",
+    "data": {
+      "qaOwner": "",
+      "autonomy": {
+        "enabled": true,
+        "autoAdvance": false,
+        "approvalMode": "per-major",
+        "approvedThrough": null
+      },
+      "devOwner": "Mikey",
+      "sections": [
+        {
+          "id": "sec-main-proj-mc",
+          "name": "Main",
+          "owner": "Basil",
+          "contract": "",
+          "outcomes": ""
+        }
+      ],
+      "versions": [
+        {
+          "id": "v-47jiodhi",
+          "items": [],
+          "status": "planned",
+          "version": "0.1.0",
+          "createdAt": 1776493479982,
+          "sort_order": 0,
+          "version_type": "outcome"
+        },
+        {
+          "label": "0.14",
+          "status": "shipped",
+          "version": "0.14.0",
+          "createdAt": 1776545673000,
+          "approvedAt": 1776545673000,
+          "sort_order": 2
+        },
+        {
+          "label": "0.141",
+          "status": "shipped",
+          "version": "0.14.1",
+          "createdAt": 1776545673000,
+          "approvedAt": "2026-04-19T03:09:49.325Z",
+          "sort_order": 3
+        },
+        {
+          "label": "0.16",
+          "status": "shipped",
+          "version": "0.16.0",
+          "approvedAt": 1776547074000,
+          "sort_order": 4
+        }
+      ],
+      "dependsOn": [],
+      "lifecycle": "building",
+      "autoAdvance": true,
+      "visionOwner": "Basil",
+      "visionDocPath": "docs/visions/proj-mc.md",
+      "currentVersion": "0.16.0",
+      "approvedThrough": "0.15.0"
+    }
+  },
+  {
+    "id": "dvqf6hmhmndgbrxt",
+    "name": "OrgStudio.dev landing page",
+    "data": {
+      "qaOwner": "",
+      "autonomy": {
+        "advanceMode": "auto-all",
+        "autoAdvance": false,
+        "approvalMode": "per-major",
+        "lastProposal": {
+          "tasks": [
+            {
+              "title": "Set up Next.js project with dark/light mode toggle",
+              "effort": "small",
+              "impact": "Establishes modern, accessible tech stack with built-in theme support"
+            },
+            {
+              "title": "Design and implement hero section with logo + tagline",
+              "effort": "small",
+              "impact": "Creates first impression and brand anchor"
+            },
+            {
+              "title": "Build Quick Start + What Org Studio Can Do sections with feature boxes",
+              "effort": "medium",
+              "impact": "Communicates core value and features to users"
+            },
+            {
+              "title": "Implement Integrations section",
+              "effort": "small",
+              "impact": "Shows extensibility and vendor partnerships"
+            },
+            {
+              "title": "Add newsletter signup form with email service integration",
+              "effort": "medium",
+              "impact": "Enables user acquisition and early feedback loops"
+            },
+            {
+              "title": "Build responsive footer with attribution + social links",
+              "effort": "small",
+              "impact": "Completes professional presence and navigation"
+            },
+            {
+              "title": "Deploy to Azure Static Web App (staging resource group)",
+              "effort": "medium",
+              "impact": "Makes the site publicly accessible for review/launch"
+            },
+            {
+              "title": "Accessibility audit + mobile responsiveness QA",
+              "effort": "medium",
+              "impact": "Ensures inclusive experience and works across devices"
+            }
+          ],
+          "version": "0.1",
+          "rationale": "OrgStudio.dev needs a launch-ready landing page to drive initial adoption. v0.1 consolidates the 8 existing backlog items into a coherent MVP: a modern, accessible landing page with hero, feature showcase, integrations teaser, and newsletter signup. This is demo-able to prospects and sufficient to announce the product.",
+          "proposedAt": 1774929757680,
+          "lifecycleSuggestion": ""
+        },
+        "lastApprovedAt": 1774929757906,
+        "lastLaunchedAt": 1774929721281,
+        "lastProposedAt": 1774929740393,
+        "pendingVersion": null,
+        "approvedThrough": "0.3.0"
+      },
+      "devOwner": "Kate",
+      "sections": [
+        {
+          "id": "sec-main-dvqf6hmhmndgbrxt",
+          "name": "Main",
+          "owner": "Basil",
+          "contract": "",
+          "outcomes": ""
+        }
+      ],
+      "versions": [
+        {
+          "id": "v-dh4wxkat",
+          "items": [],
+          "status": "planned",
+          "version": "0.1.0",
+          "createdAt": 1776493483654,
+          "sort_order": 0,
+          "version_type": "outcome"
+        }
+      ],
+      "lifecycle": "building",
+      "autoAdvance": true,
+      "visionOwner": "Basil",
+      "currentVersion": null,
+      "approvedThrough": null
+    }
+  },
+  {
+    "id": "proj-shortform",
+    "name": "Short-Form Learning",
+    "data": {
+      "sections": [
+        {
+          "id": "sec-main-proj-shortform",
+          "name": "Main",
+          "owner": "Henry",
+          "contract": "",
+          "outcomes": ""
+        }
+      ],
+      "versions": [
+        {
+          "id": "v-pyccj49s",
+          "items": [],
+          "status": "planned",
+          "version": "0.1.0",
+          "createdAt": 1776493479369,
+          "sort_order": 0,
+          "version_type": "outcome"
+        }
+      ],
+      "autoAdvance": true,
+      "approvedThrough": null
+    }
+  },
+  {
+    "id": "proj-catpilot",
+    "name": "Catpilot Platform",
+    "data": {
+      "sections": [
+        {
+          "id": "sec-main-proj-catpilot",
+          "name": "Main",
+          "owner": "Ana",
+          "contract": "",
+          "outcomes": ""
+        }
+      ],
+      "versions": [
+        {
+          "id": "v-id9l8146",
+          "items": [],
+          "status": "planned",
+          "version": "0.1.0",
+          "createdAt": 1776493480519,
+          "sort_order": 0,
+          "version_type": "outcome"
+        }
+      ],
+      "autoAdvance": true,
+      "approvedThrough": null
+    }
+  },
+  {
+    "id": "proj-garage",
+    "name": "Garage",
+    "data": {
+      "qaOwner": "",
+      "autonomy": {
+        "cadence": "daily",
+        "enabled": false,
+        "autoAdvance": false,
+        "lastProposal": null,
+        "pendingVersion": null,
+        "approvedThrough": "1.11.0"
+      },
+      "devOwner": "Gem",
+      "sections": [
+        {
+          "id": "sec-main-proj-garage",
+          "name": "Main",
+          "owner": "Basil",
+          "contract": "",
+          "outcomes": ""
+        }
+      ],
+      "versions": [
+        {
+          "id": "v-vvau52gw",
+          "items": [],
+          "status": "planned",
+          "version": "0.1.0",
+          "createdAt": 1776493481108,
+          "sort_order": 0,
+          "version_type": "outcome"
+        }
+      ],
+      "dependsOn": [
+        "proj-catpilot"
+      ],
+      "lifecycle": "building",
+      "autoAdvance": true,
+      "visionOwner": "Basil",
+      "visionDocPath": "docs/visions/proj-garage.md",
+      "currentVersion": null,
+      "approvedThrough": null
+    }
+  },
+  {
+    "id": "xjofbjrnmmf7tgrv",
+    "name": "Platform Engine",
+    "data": {
+      "sections": [
+        {
+          "id": "sec-main-xjofbjrnmmf7tgrv",
+          "name": "Main",
+          "owner": "Ana",
+          "contract": "",
+          "outcomes": ""
+        }
+      ],
+      "versions": [
+        {
+          "id": "v-yk013w7h",
+          "items": [],
+          "status": "planned",
+          "version": "0.1.0",
+          "createdAt": 1776493481759,
+          "sort_order": 0,
+          "version_type": "outcome"
+        }
+      ],
+      "autoAdvance": true,
+      "approvedThrough": null
+    }
+  },
+  {
+    "id": "k1l0yn4vmmfh2ed5",
+    "name": "Studio V2 Refresh",
+    "data": {
+      "sections": [
+        {
+          "id": "sec-main-k1l0yn4vmmfh2ed5",
+          "name": "Main",
+          "owner": "",
+          "contract": "",
+          "outcomes": ""
+        }
+      ],
+      "versions": [
+        {
+          "id": "v-lae9kada",
+          "items": [],
+          "status": "planned",
+          "version": "0.1.0",
+          "createdAt": 1776493482361,
+          "sort_order": 0,
+          "version_type": "outcome"
+        }
+      ],
+      "autoAdvance": true,
+      "approvedThrough": null
+    }
+  },
+  {
+    "id": "zrrt51fgmn578ujz",
+    "name": "Thrivor",
+    "data": {
+      "qaOwner": "",
+      "repoUrl": "toomesauce/thrivor",
+      "autonomy": {
+        "cadence": "weekly",
+        "enabled": true,
+        "autoAdvance": true,
+        "approvalMode": "per-major",
+        "lastProposal": {
+          "tasks": [
+            {
+              "title": "Test challenge CRUD flow E2E",
+              "impact": "Validates core gamification loop — create ladder, add challenge, complete, earn points, badge"
+            },
+            {
+              "title": "Test reward/redemption flow E2E",
+              "impact": "Validates parent creates reward, child redeems, parent approves — proves co-parenting model"
+            },
+            {
+              "title": "Test journal flow E2E",
+              "impact": "Validates free text, prompted entries, mood tracking, and trend view — core child engagement"
+            },
+            {
+              "title": "Build therapist dashboard pages",
+              "impact": "Registration, patient list, reports — therapists have no entry point without this"
+            },
+            {
+              "title": "Build therapist scene builder UI",
+              "impact": "Frontend for simulation scene builder API — lets therapists author custom scenarios"
+            },
+            {
+              "title": "Parent-child switcher UI",
+              "impact": "Essential UX for dual-user model — parents and children share device, need separate views"
+            },
+            {
+              "title": "Mobile viewport testing",
+              "impact": "Primary audience is families on phones/tablets — must work on mobile"
+            },
+            {
+              "title": "PDF progress report export",
+              "impact": "Tangible deliverable therapists hand to parents or attach to clinical notes"
+            }
+          ],
+          "version": "0.902",
+          "rationale": "v0.9015 hardened the backend. v0.902 closes the frontend loop: wire up remaining UIs, validate every core flow E2E, and make the app demo-ready on mobile. Answers: Can a parent, child, and therapist actually use Thrivor together?",
+          "proposedAt": 1774708479065,
+          "lifecycleSuggestion": ""
+        },
+        "lastTimeoutAt": 1774665596804,
+        "lastApprovedAt": 1774708481547,
+        "lastLaunchedAt": 1774708381667,
+        "lastProposedAt": 1774708394955,
+        "pendingVersion": null,
+        "approvedThrough": "0.906.0"
+      },
+      "devOwner": "Trevor",
+      "outcomes": [],
+      "sections": [
+        {
+          "id": "sec-main-zrrt51fgmn578ujz",
+          "name": "Main",
+          "owner": "Basil",
+          "contract": "",
+          "outcomes": ""
+        }
+      ],
+      "versions": [
+        {
+          "id": "v-6sae5c4q",
+          "items": [],
+          "status": "planned",
+          "version": "0.1.0",
+          "createdAt": 1776493482972,
+          "sort_order": 0,
+          "version_type": "outcome"
+        }
+      ],
+      "dependsOn": [
+        "proj-catpilot"
+      ],
+      "lifecycle": "building",
+      "guardrails": "",
+      "autoAdvance": true,
+      "visionOwner": "Basil",
+      "visionDocPath": "docs/visions/zrrt51fgmn578ujz.md",
+      "currentVersion": "0.906.0",
+      "approvedThrough": null
+    }
+  },
+  {
+    "id": "13z3l7yhmnrmecng",
+    "name": "Alpha Garage End User Validation",
+    "data": {
+      "qaOwner": "",
+      "autonomy": {
+        "autoAdvance": false,
+        "approvedThrough": "2.0.0"
+      },
+      "devOwner": "Billy",
+      "outcomes": [
+        {
+          "id": "zoktm2tmmnrmedej",
+          "done": false,
+          "text": "Agents can visit alphagarage.io, scan the site and fully understand what is about and the value proposition",
+          "createdAt": 1775747812699
+        },
+        {
+          "id": "gspi89xhmnrmee02",
+          "done": false,
+          "text": "Humans can visit alphagarage.io, scan the site and fully understand what is about and the value proposition",
+          "createdAt": 1775747813474
+        },
+        {
+          "id": "qmqv2irlmnrmeef0",
+          "done": false,
+          "text": "Agents can register and submit investment strategies",
+          "createdAt": 1775747814012
+        }
+      ],
+      "sections": [
+        {
+          "id": "sec-main-13z3l7yhmnrmecng",
+          "name": "Main",
+          "owner": "Basil",
+          "contract": "",
+          "outcomes": ""
+        }
+      ],
+      "versions": [
+        {
+          "id": "v-9dkyosy5",
+          "items": [],
+          "status": "planned",
+          "version": "0.1.0",
+          "createdAt": 1776493484343,
+          "sort_order": 0,
+          "version_type": "outcome"
+        }
+      ],
+      "lifecycle": "building",
+      "autoAdvance": true,
+      "visionOwner": "Basil",
+      "currentVersion": null,
+      "approvedThrough": null
+    }
+  },
+  {
+    "id": "proj-garage-passport",
+    "name": "GarlicStamp",
+    "data": {
+      "autonomy": {
+        "autoAdvance": false,
+        "approvedThrough": null
+      },
+      "devOwner": "Gem",
+      "sections": [
+        {
+          "id": "sec-main-proj-garage-passport",
+          "name": "Main",
+          "owner": "Basil",
+          "contract": "",
+          "outcomes": ""
+        }
+      ],
+      "versions": [
+        {
+          "id": "v-lfqdrn07",
+          "items": [],
+          "status": "planned",
+          "version": "0.1.0",
+          "createdAt": 1776493485008,
+          "sort_order": 0,
+          "version_type": "outcome"
+        }
+      ],
+      "lifecycle": "building",
+      "autoAdvance": true,
+      "currentVersion": null,
+      "approvedThrough": null
+    }
+  },
+  {
+    "id": "jnyq2zmbmnz320ed",
+    "name": "Blog Posts",
+    "data": {
+      "devOwner": "Basil",
+      "sections": [
+        {
+          "id": "sec-main-jnyq2zmbmnz320ed",
+          "name": "Main",
+          "owner": "Basil",
+          "contract": "",
+          "outcomes": ""
+        }
+      ],
+      "versions": [
+        {
+          "id": "v-0jmw2lbv",
+          "items": [],
+          "status": "planned",
+          "version": "0.1.0",
+          "createdAt": 1776493485704,
+          "sort_order": 0,
+          "version_type": "outcome"
+        }
+      ],
+      "lifecycle": "building",
+      "autoAdvance": true,
+      "visionOwner": "Basil",
+      "approvedThrough": null
+    }
+  },
+  {
+    "id": "w6wc1skbmo0atfqv",
+    "name": "Podcast API",
+    "data": {
+      "qaOwner": "",
+      "autonomy": {
+        "autoAdvance": false,
+        "approvedThrough": "1.0.0"
+      },
+      "devOwner": "Kate",
+      "outcomes": [
+        {
+          "id": "dp3f00z9mo0av319",
+          "done": false,
+          "text": "Any agent can send text to the API and get back a playable mp3",
+          "createdAt": 1776272632605
+        },
+        {
+          "id": "1wa0ief8mo0av41z",
+          "done": false,
+          "text": "Audio plays cleanly — no gaps, clicks, or cut-off sentences between chunks",
+          "createdAt": 1776272633927
+        },
+        {
+          "id": "cfbmi72imo0av4hl",
+          "done": false,
+          "text": "Blog post length text (~5,000-10,000 chars) generates in under 60 seconds",
+          "createdAt": 1776272634489
+        },
+        {
+          "id": "p8iyed3mmo0av4wy",
+          "done": false,
+          "text": "The service runs reliably as a systemd service with auto-restart",
+          "createdAt": 1776272635042
+        }
+      ],
+      "sections": [
+        {
+          "id": "sec-main-w6wc1skbmo0atfqv",
+          "name": "Main",
+          "owner": "Basil",
+          "contract": "",
+          "outcomes": ""
+        }
+      ],
+      "versions": [
+        {
+          "id": "v-zgp1goc7",
+          "items": [],
+          "status": "planned",
+          "version": "0.1.0",
+          "createdAt": 1776493486338,
+          "sort_order": 0,
+          "version_type": "outcome"
+        }
+      ],
+      "lifecycle": "building",
+      "autoAdvance": true,
+      "visionOwner": "Basil",
+      "currentVersion": null,
+      "approvedThrough": null
+    }
+  }
+]
