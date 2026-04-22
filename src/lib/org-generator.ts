@@ -1,6 +1,7 @@
 // Generates ORG.md content for a specific agent (or generic if no agentId)
 // This file is the source of truth for what agents read about org context.
 
+import { createHash } from 'node:crypto';
 import { Teammate } from './teammates';
 import { OperatingPrinciple } from './principles-generator';
 import { CoachingInsight } from './coaching-insights';
@@ -34,6 +35,19 @@ interface OrgContext {
   teamPerformance?: TeamPerformance;
   coachingInsights?: CoachingInsight[];
   projects?: any[];
+}
+
+export interface OrgMdMeta {
+  sha: string;
+  generatedAt: string;
+  sections: number;
+}
+
+// Compute metadata for a given ORG.md body (without trailing footer).
+export function computeOrgMdMeta(body: string): OrgMdMeta {
+  const sha = createHash('sha256').update(body).digest('hex');
+  const sections = (body.match(/^## /gm) || []).length;
+  return { sha, generatedAt: new Date().toISOString(), sections };
 }
 
 export function generateOrgMd(ctx: OrgContext, forAgentId?: string): string {
@@ -275,7 +289,10 @@ export function generateOrgMd(ctx: OrgContext, forAgentId?: string): string {
   lines.push('The full work contract — columns, work loop, testing rules, comments, handoffs, cross-project blockers, and the complete Org Studio API surface — lives in the **`org-studio-api`** skill. Read it at the start of every session (or when in doubt): the SKILL.md file is the single source of truth for how to work with Org Studio.');
   lines.push('');
 
-  return lines.join('\n');
+  const body = lines.join('\n');
+  const meta = computeOrgMdMeta(body);
+  const footer = `<!-- org-context sha=${meta.sha} generated=${meta.generatedAt} sections=${meta.sections} agent=${forAgentId ?? 'generic'} -->`;
+  return `${body}\n${footer}\n`;
 }
 
 // Generate a generic org context (no agent-specific section)

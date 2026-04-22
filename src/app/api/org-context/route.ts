@@ -11,9 +11,10 @@
  * This is the generic REST API that any agent framework can poll.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { generateOrgMd, AgentPerformance, TeamPerformance } from '@/lib/org-generator';
+import { generateOrgMd, computeOrgMdMeta, AgentPerformance, TeamPerformance } from '@/lib/org-generator';
 import { generatePrinciples } from '@/lib/principles-generator';
 import { getStoreProvider } from '@/lib/store-provider';
+import { recordOrgRefresh } from '@/lib/org-context-refresh-tracker';
 
 async function readStore() {
   try {
@@ -148,6 +149,14 @@ export async function GET(request: NextRequest) {
       ? ctx.teammates.find((t: any) => t.agentId === agentId || t.id === agentId)
       : null;
 
+    // Generate markdown once so JSON consumers get the same meta the agent
+    // would have read, and record the refresh so Mission Control sees it.
+    const mdForMeta = generateOrgMd(ctx, agentId || undefined);
+    const bodyForMeta = mdForMeta.replace(/\n<!-- org-context [^>]*-->\n?$/, '');
+    const meta = computeOrgMdMeta(bodyForMeta);
+    recordOrgRefresh(agentId, meta);
+    console.info(`[OrgContext] Generated for agent=${agentId ?? 'generic'} sha=${meta.sha} sections=${meta.sections}`);
+
     return NextResponse.json({
       mission: ctx.missionStatement,
       values: ctx.values,
@@ -174,11 +183,16 @@ export async function GET(request: NextRequest) {
         agent: agentPerformance || null,
         team: teamPerformance || null,
       },
+      orgContextMeta: meta,
     });
   }
 
   // Markdown format (default) — ready to drop into agent workspace
   const md = generateOrgMd(ctx, agentId || undefined);
+  const body = md.replace(/\n<!-- org-context [^>]*-->\n?$/, '');
+  const meta = computeOrgMdMeta(body);
+  recordOrgRefresh(agentId, meta);
+  console.info(`[OrgContext] Generated for agent=${agentId ?? 'generic'} sha=${meta.sha} sections=${meta.sections}`);
   return new NextResponse(md, {
     headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
   });
