@@ -269,20 +269,21 @@ async function fireOneShot(store: StoreData, loop: AgentLoop): Promise<string | 
     return undefined;
   }
 
-  // Per-agent concurrency gate: if the agent already has an in-progress task, skip.
-  // The agent is already working — re-dispatching just causes duplicate work.
-  const agentNameLower = agentName.toLowerCase();
-  const hasInProgressTask = store.tasks.some(t => {
-    const assignee = (t.assignee || '').toLowerCase();
-    return (assignee === agentNameLower || assignee === loop.agentId)
-      && t.status === 'in-progress'
-      && !t.isArchived
-      && !t.loopPausedAt;
-  });
-  if (hasInProgressTask) {
-    console.log(`[Dispatch] skipping ${agentName} — has in-progress task (concurrency gate)`);
-    return undefined;
-  }
+  // #948: Removed redundant `hasInProgressTask` concurrency gate.
+  //
+  // The `isInFlight` marker above is the authoritative concurrency signal — it is set
+  // when a dispatch enqueues and cleared when the agent completes a task (see
+  // updateTask in src/app/api/store/route.ts, or the safety timeout in
+  // src/lib/runtimes/scheduler-bridge.ts).
+  //
+  // The old gate re-checked `store.tasks` for in-progress tasks assigned to this agent.
+  // That check raced with stale store snapshots: when updateTask silently no-op'd (see
+  // #948's root cause) OR when the read replica lagged behind the last write, the gate
+  // would see a phantom in-progress task that the agent had actually already finished,
+  // and refuse to dispatch the next backlog item. Effect: agents needed manual nudges
+  // to keep working. Dropping this gate is safe because isInFlight covers the real
+  // concurrency concern, and the dispatch message builder (`buildDispatchMessage`)
+  // already picks the right task from the real backlog.
 
   // Build a focused dispatch message (not the full loop prompt)
   const message = await buildDispatchMessage(store, loop.agentId, agentName, agentRole);

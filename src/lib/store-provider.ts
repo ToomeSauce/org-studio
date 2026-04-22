@@ -1049,7 +1049,7 @@ export class PostgresStoreProvider implements StoreProvider {
         ...overflow
       } = updated;
 
-      await client.query(
+      const _updRes = await client.query(
         `UPDATE org_studio_tasks
          SET ticket_number = $1, title = $2, status = $3, project_id = $4, assignee = $5,
              priority = $6, test_type = $7, test_assignee = $8, initiated_by = $9, description = $10,
@@ -1085,6 +1085,11 @@ export class PostgresStoreProvider implements StoreProvider {
           this.workspaceId,
         ]
       );
+
+      // #948 debug — log row count; if 0, the WHERE didn't match and we silently missed.
+      if (_updRes.rowCount === 0) {
+        console.warn(`[updateTask] ⚠️ UPDATE affected 0 rows for taskId=${taskId} destructured-id=${id} workspace_id=${this.workspaceId}`);
+      }
 
       // Emit NOTIFY event for bidirectional sync — include updates + assignee for intent routing
       const changePayload = JSON.stringify({

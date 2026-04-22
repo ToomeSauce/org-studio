@@ -622,10 +622,12 @@ export async function POST(req: NextRequest) {
       case 'updateTask': {
         let triggeredAssignee: string | null = null;
         let versionCompletionTriggered: { projectId: string; project: any; version?: string } | null = null;
+        let taskMatched = false; // #948: detect silent no-ops when the task isn't in the store snapshot.
 
         for (let i = 0; i < store.tasks.length; i++) {
           const t = store.tasks[i];
           if (t.id !== payload.id) continue;
+          taskMatched = true;
 
           // Workspace guard: reject cross-workspace mutations
           if (!belongsToWorkspace(t, workspace.id)) {
@@ -724,8 +726,16 @@ export async function POST(req: NextRequest) {
           // Piggyback stuck-task detection: check if this updated task is now stuck
           checkAndTriggerStuckTask(updated, store);
           
-          // PERF: Use targeted provider.updateTask() instead of full store write
-          await getStoreProvider().updateTask(payload.id, updates);
+          // PERF: Use targeted provider.updateTask() instead of full store write.
+          // #948: wrap in try/catch so silent provider failures surface as 500 instead
+          // of returning a misleading ok:true. Silent failures were breaking the
+          // autonomous delivery chain (agents left stuck in in-progress).
+          try {
+            await getStoreProvider().updateTask(payload.id, updates);
+          } catch (providerErr: any) {
+            console.error(`[updateTask] provider write failed for ${payload.id}:`, providerErr?.message);
+            throw providerErr;
+          }
 
           // Sync roadmap item done flag when task status changes
           if (updates.status && updated.projectId) {
@@ -734,6 +744,55 @@ export async function POST(req: NextRequest) {
             syncRoadmapItemForTask(updated.projectId, payload.id, isDone).catch(() => {});
           }
 
+        }
+
+        // #948: if the for-loop never matched, the task isn't in the store snapshot.
+        // This happens when addTask's Postgres commit isn't yet visible to a subsequent
+        // readStore() call on a different connection. Re-read directly from Postgres via the
+        // provider's targeted read, and if found, apply the update directly (without the full
+        // side-effect pipeline — the caller can retry after consistency converges if they need
+        // notifications). This turns the silent no-op into either success or a clear error.
+        if (!taskMatched) {
+          try {
+            const provider = getStoreProvider();
+            // Read-your-writes fallback: fetch fresh state and retry the mutate.
+            const fresh = await provider.read();
+            const freshTask = fresh.tasks.find((t: any) => t.id === payload.id);
+            if (!freshTask) {
+              console.warn(`[updateTask] task ${payload.id} not found in cache or fresh read`);
+              return NextResponse.json(
+                { error: `Task not found: ${payload.id}` },
+                { status: 404 }
+              );
+            }
+            if (!belongsToWorkspace(freshTask, workspace.id)) {
+              return NextResponse.json(
+                { error: 'Forbidden — task belongs to another workspace' },
+                { status: 403 }
+              );
+            }
+            const fallbackUpdates = { ...payload.updates } as any;
+            // Apply the same status-transition bookkeeping the main branch applies.
+            if (fallbackUpdates.status && freshTask.status !== fallbackUpdates.status) {
+              const now = Date.now();
+              const history = Array.isArray(freshTask.statusHistory) ? [...freshTask.statusHistory] : [];
+              history.push({ status: fallbackUpdates.status, timestamp: now, by: payload.by, model: payload.model });
+              fallbackUpdates.statusHistory = history;
+              fallbackUpdates.lastActivityAt = now;
+              fallbackUpdates.loopCount = 0;
+              fallbackUpdates.loopPausedAt = null;
+              fallbackUpdates.loopPauseReason = null;
+            }
+            await provider.updateTask(payload.id, fallbackUpdates);
+            console.log(`[updateTask] #948 fallback path matched task ${payload.id} via fresh read`);
+            return NextResponse.json({ ok: true, viaFallback: true });
+          } catch (e: any) {
+            console.error(`[updateTask] fallback read failed:`, e?.message);
+            return NextResponse.json(
+              { error: `updateTask no-op: task ${payload.id} not in cache and fallback read failed` },
+              { status: 500 }
+            );
+          }
         }
         if (triggeredAssignee) {
           triggerAgentLoop(triggeredAssignee, store);
