@@ -532,7 +532,18 @@ export async function POST(req: NextRequest) {
 
         const id = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
         const now = Date.now();
-        const initialStatus = payload.task?.status || 'backlog';
+        let initialStatus = payload.task?.status || 'backlog';
+
+        // Auto-promote: if task is for the project's current version, go straight
+        // to backlog instead of planning. Planning is for future versions only.
+        if (initialStatus === 'planning' && payload.task?.version && payload.task?.projectId) {
+          const proj = (store.projects || []).find((p: any) => p.id === payload.task.projectId);
+          if (proj?.currentVersion && payload.task.version === proj.currentVersion) {
+            initialStatus = 'backlog';
+            console.info(`[addTask] Auto-promoted to backlog: version ${payload.task.version} is currentVersion for ${proj.name || proj.id}`);
+          }
+        }
+
         // #862: reject 'qa' as a status — QA is a component, not a column.
         const VALID_STATUSES = ['planning', 'backlog', 'in-progress', 'review', 'done', 'blocked'];
         if (!VALID_STATUSES.includes(initialStatus)) {
