@@ -2356,30 +2356,7 @@ server.listen(port, async () => {
   } else {
     console.log('[Telegram] Comms relay ENABLED (ENABLE_TELEGRAM_COMMS=true)');
   }
-  // Send deprecation notice to Telegram once on startup (best-effort)
-  if (TG_BOT_TOKEN && TG_CHAT_ID) {
-    const deprecationSent = globalThis.__tgDeprecationSent;
-    if (!deprecationSent) {
-      globalThis.__tgDeprecationSent = true;
-      const deprecationMsg = [
-        '📢 *Org Studio v0.15 — Telegram Transition Notice*',
-        '',
-        "We're transitioning to in-app notifications. Task updates and mentions will no longer be sent to Telegram in v0.16.",
-        '',
-        'Please enable in-app push notifications in Settings → Notifications.',
-        '',
-        'Health alerts will continue via this channel for now.',
-        '',
-        '→ Settings: ' + (process.env.ORG_STUDIO_PUBLIC_URL || 'http://localhost:4501') + '/settings',
-      ].join('\n');
-      fetch(`https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: TG_CHAT_ID, text: deprecationMsg, parse_mode: 'Markdown', disable_web_page_preview: true }),
-      }).then(() => console.log('[Telegram] Deprecation notice sent'))
-        .catch(err => console.error('[Telegram] Deprecation notice failed:', err.message));
-    }
-  }
+  // Telegram deprecation notice removed (KISS cleanup) — was spamming on every restart.
 
   // Initialize PostgreSQL LISTEN for bidirectional sync
   await initializePostgresListener();
