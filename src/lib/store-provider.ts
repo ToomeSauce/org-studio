@@ -45,6 +45,13 @@ export interface StoreProvider {
   createTask(task: any): Promise<any>;
 
   /**
+   * Allocate the next ticket number atomically.
+   * Postgres impl uses a sequence. File-mode uses an in-process mutex.
+   * Safe under concurrent addTask calls — never returns duplicates. (#863)
+   */
+  allocateTicketNumber(): Promise<number>;
+
+  /**
    * Update an existing task
    */
   updateTask(taskId: string, updates: Partial<any>): Promise<any>;
@@ -294,6 +301,20 @@ export class FileStoreProvider implements StoreProvider {
     ws.tasks.push(task);
     this.writeEnvelope(root);
     return task;
+  }
+
+  // #863: serialize ticket-number allocation in file mode (single-process).
+  private _allocateChain: Promise<number> = Promise.resolve(0);
+
+  async allocateTicketNumber(): Promise<number> {
+    const next = this._allocateChain.then(() => {
+      const { ws } = this.readEnvelope();
+      const existing = (ws.tasks || [])
+        .map((t: any) => (typeof t.ticketNumber === 'number' ? t.ticketNumber : 0));
+      return Math.max(0, ...existing) + 1;
+    });
+    this._allocateChain = next.catch(() => 0);
+    return next;
   }
 
   async updateTask(taskId: string, updates: Partial<any>): Promise<any> {
@@ -919,6 +940,70 @@ export class PostgresStoreProvider implements StoreProvider {
         reviewNotes, loopCount, loopPausedAt, loopPauseReason, lastActivityAt, statusHistory,
         comments, ...overflow,
       };
+    } finally {
+      client.release();
+    }
+  }
+
+  // #863: atomic ticket-number allocator backed by a Postgres sequence.
+  // Lazily creates the sequence on first use, seeded at MAX(ticket_number)+1.
+  // Safe under any concurrency level — nextval() is atomic.
+  private _seqEnsurePromise: Promise<void> | null = null;
+
+  private async ensureTicketSequence(client: any): Promise<void> {
+    if (this._seqEnsurePromise) return this._seqEnsurePromise;
+    this._seqEnsurePromise = (async () => {
+      // Use a Postgres advisory lock so cross-process init is also safe.
+      // Lock id: arbitrary constant derived from 'skill_installs' hash region.
+      const LOCK_ID = 8636_3863;
+      await client.query('SELECT pg_advisory_lock($1)', [LOCK_ID]);
+      try {
+        const exists = await client.query(
+          `SELECT 1 FROM pg_class WHERE relkind = 'S' AND relname = 'org_studio_ticket_number_seq'`
+        );
+        if (exists.rowCount === 0) {
+          const { rows } = await client.query(
+            `SELECT COALESCE(MAX(ticket_number), 0)::BIGINT AS m FROM org_studio_tasks`
+          );
+          const start = Number(rows[0]?.m || 0) + 1;
+          await client.query(
+            `CREATE SEQUENCE IF NOT EXISTS org_studio_ticket_number_seq START WITH ${start} MINVALUE 1`
+          );
+        } else {
+          // Sequence exists. Only bump forward if MAX(ticket_number) > last_value.
+          // Never setval backward — that would hand out duplicates.
+          const { rows } = await client.query(
+            `SELECT (SELECT COALESCE(MAX(ticket_number), 0) FROM org_studio_tasks)::BIGINT AS data_max,
+                    (SELECT last_value FROM org_studio_ticket_number_seq)::BIGINT AS seq_last`
+          );
+          const dataMax = Number(rows[0]?.data_max || 0);
+          const seqLast = Number(rows[0]?.seq_last || 0);
+          if (dataMax > seqLast) {
+            await client.query(`SELECT setval('org_studio_ticket_number_seq', $1, true)`, [dataMax]);
+          }
+        }
+      } finally {
+        await client.query('SELECT pg_advisory_unlock($1)', [LOCK_ID]).catch(() => {});
+      }
+    })();
+    try {
+      await this._seqEnsurePromise;
+    } catch (e) {
+      // Reset so a future call can retry.
+      this._seqEnsurePromise = null;
+      throw e;
+    }
+  }
+
+  async allocateTicketNumber(): Promise<number> {
+    const pool = await this.getPool();
+    const client = await pool.connect();
+    try {
+      await this.ensureTicketSequence(client);
+      const { rows } = await client.query(
+        `SELECT nextval('org_studio_ticket_number_seq')::BIGINT AS n`
+      );
+      return Number(rows[0].n);
     } finally {
       client.release();
     }

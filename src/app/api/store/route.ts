@@ -77,8 +77,11 @@ async function resolveAgentModel(agentName: string, store: StoreData): Promise<s
   }
 }
 
-/** Generate next ticket number for a new task */
-function getNextTicketNumber(store: StoreData): number {
+/** Generate next ticket number for a new task.
+ *  @deprecated #863 — use getStoreProvider().allocateTicketNumber() which is atomic.
+ *  Kept only as an emergency fallback if the provider call throws.
+ */
+function getNextTicketNumberFallback(store: StoreData): number {
   const existingNumbers = store.tasks
     .map(t => t.ticketNumber || 0)
     .filter(n => typeof n === 'number');
@@ -538,7 +541,14 @@ export async function POST(req: NextRequest) {
             { status: 400 }
           );
         }
-        const ticketNumber = getNextTicketNumber(store);
+        // #863: atomic allocation via provider (Postgres sequence / file-mode mutex).
+        let ticketNumber: number;
+        try {
+          ticketNumber = await getStoreProvider().allocateTicketNumber();
+        } catch (e: any) {
+          console.error('[TicketNumber] allocateTicketNumber failed, using fallback:', e?.message);
+          ticketNumber = getNextTicketNumberFallback(store);
+        }
         const task = {
           id,
           ticketNumber,

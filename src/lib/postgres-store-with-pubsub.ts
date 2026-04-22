@@ -66,6 +66,10 @@ export class PostgresStoreProviderWithPubSub implements StoreProvider {
     return result;
   }
 
+  async allocateTicketNumber(): Promise<number> {
+    return this.baseProvider.allocateTicketNumber();
+  }
+
   async updateTask(taskId: string, updates: Partial<any>): Promise<any> {
     const result = await this.baseProvider.updateTask(taskId, updates);
     if (this.pubsub) {
