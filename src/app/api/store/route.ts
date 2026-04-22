@@ -955,9 +955,75 @@ export async function POST(req: NextRequest) {
         await getStoreProvider().updateProject(payload.id, payload.updates);
         console.log('[API:store:updateProject] completed for', payload.id);
 
+        // When approvedThrough changes, check if a shipped version can now advance.
+        // This closes the gap where auto-advance stopped at the horizon ceiling,
+        // and a later horizon bump had no re-trigger.
+        const newApproved = payload.updates?.autonomy?.approvedThrough;
+        const oldApproved = oldProject?.autonomy?.approvedThrough;
+        if (newApproved && newApproved !== oldApproved) {
+          console.log(`[ApprovedThrough] ${payload.id}: ${oldApproved || 'null'} → ${newApproved}`);
+          // Fire-and-forget: attempt promote if there's a shipped current version
+          (async () => {
+            try {
+              const { promoteProjectToNextVersion } = await import('@/lib/project-state');
+              const pg = await import('pg');
+              const Pool = (pg as any).default?.Pool || (pg as any).Pool;
+              const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 3 });
+              const client = await pool.connect();
+              try {
+                const result = await promoteProjectToNextVersion(payload.id, client);
+                if (result.promoted) {
+                  console.log(`[ApprovedThrough] Promoted ${payload.id}: ${result.from} → ${result.to} (${result.movedTasks} tasks → backlog)`);
+                  // Trigger scheduler for devOwner
+                  const freshStore = await getStoreProvider().read();
+                  const proj = freshStore.projects.find((p: any) => p.id === payload.id);
+                  if (proj?.devOwner && result.movedTasks > 0) {
+                    triggerAgentLoop(proj.devOwner, freshStore);
+                  }
+                } else {
+                  console.log(`[ApprovedThrough] ${payload.id}: promote skipped — ${result.reason}`);
+                }
+              } finally {
+                client.release();
+                await pool.end();
+              }
+            } catch (e: any) {
+              console.error(`[ApprovedThrough] promote check failed for ${payload.id}:`, e?.message);
+            }
+          })();
+        }
+
         // Log project state changes
         if (payload.updates?.state && payload.updates.state !== oldProject?.state) {
           console.log(`[ProjectState] ${payload.id}: ${oldProject?.state || 'undefined'} → ${payload.updates.state}`);
+          // When restarting a stopped project, re-check promote in case horizon was bumped while stopped
+          if (payload.updates.state === 'started' && oldProject?.state === 'stopped') {
+            (async () => {
+              try {
+                const { promoteProjectToNextVersion } = await import('@/lib/project-state');
+                const pg = await import('pg');
+                const Pool = (pg as any).default?.Pool || (pg as any).Pool;
+                const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 3 });
+                const client = await pool.connect();
+                try {
+                  const result = await promoteProjectToNextVersion(payload.id, client);
+                  if (result.promoted) {
+                    console.log(`[ProjectState] Restart promote ${payload.id}: ${result.from} → ${result.to} (${result.movedTasks} tasks → backlog)`);
+                    const freshStore = await getStoreProvider().read();
+                    const proj = freshStore.projects.find((p: any) => p.id === payload.id);
+                    if (proj?.devOwner && result.movedTasks > 0) {
+                      triggerAgentLoop(proj.devOwner, freshStore);
+                    }
+                  }
+                } finally {
+                  client.release();
+                  await pool.end();
+                }
+              } catch (e: any) {
+                console.error(`[ProjectState] restart promote failed for ${payload.id}:`, e?.message);
+              }
+            })();
+          }
         }
 
         // Note: Vision cron management has been replaced by the Launch model
