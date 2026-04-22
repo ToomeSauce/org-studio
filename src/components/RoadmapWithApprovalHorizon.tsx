@@ -359,7 +359,7 @@ export function RoadmapWithApprovalHorizon({
   const renderVersionRow = (version: RoadmapVersion, isApproved: boolean = false, bgColor?: string) => {
     const isEditing = editingVersionId === version.id;
     const isExpanded = expandedVersionIds.has(version.id);
-    const progress = version.progress || { done: version.items.filter((i) => i.done).length, total: version.items.length };
+    const progress = version.progress || { done: (version.items || []).filter((i) => i.done).length, total: (version.items || []).length };
     const versionType = version.version_type || 'outcome';
     const typeBadge = getVersionTypeBadge(versionType);
     const isNonShipped = version.status !== 'shipped';
@@ -564,9 +564,9 @@ export function RoadmapWithApprovalHorizon({
             ) : (
               <>
                 {/* Items View */}
-                {version.items.length > 0 ? (
+                {(version.items || []).length > 0 ? (
                   <div className="space-y-1 text-sm">
-                    {version.items.map((item, idx) => {
+                    {(version.items || []).map((item, idx) => {
                       const statusEmoji = item.done ? '✅' : item.taskId ? '⬜' : '📝';
                       return (
                         <div
@@ -769,7 +769,7 @@ export function RoadmapWithApprovalHorizon({
                 </span>
               </div>
               <span className="text-sm font-medium">
-                {currentVersionObj.items.filter(i => i.done).length}/{currentVersionObj.items.length}
+                {(currentVersionObj.items || []).filter(i => i.done).length}/{(currentVersionObj.items || []).length}
               </span>
             </div>
 
@@ -785,19 +785,19 @@ export function RoadmapWithApprovalHorizon({
             )}
 
             {/* Progress bar */}
-            {currentVersionObj.items.length > 0 && (
+            {(currentVersionObj.items || []).length > 0 && (
               <div className="h-2 bg-[var(--bg-tertiary)] rounded-full overflow-hidden">
                 <div
                   className="h-full bg-[var(--accent-primary)] transition-all"
-                  style={{width: `${(currentVersionObj.items.filter(i => i.done).length / currentVersionObj.items.length) * 100}%`}}
+                  style={{width: `${((currentVersionObj.items || []).filter(i => i.done).length / (currentVersionObj.items || []).length) * 100}%`}}
                 />
               </div>
             )}
 
             {/* Task items with real status + deep links */}
-            {currentVersionObj.items.length > 0 && (
+            {(currentVersionObj.items || []).length > 0 && (
               <div className="space-y-1">
-                {currentVersionObj.items.map((item, idx) => {
+                {(currentVersionObj.items || []).map((item, idx) => {
                   // Find matching task for this roadmap item
                   const matchedTask = versionTasks.find((t: any) => 
                     (item.taskId && t.id === item.taskId) || t.title?.toLowerCase().trim() === item.title?.toLowerCase().trim()

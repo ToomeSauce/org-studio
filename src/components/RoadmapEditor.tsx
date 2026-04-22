@@ -256,7 +256,7 @@ export function RoadmapEditor({ projectId, versions, onVersionsChange }: Roadmap
           <div className="space-y-3">
             {sortedVersions.map((v) => {
                 const badge = getStatusBadge(v.status);
-            const progress = v.progress || { done: v.items.filter((i) => i.done).length, total: v.items.length };
+            const progress = v.progress || { done: (v.items || []).filter((i) => i.done).length, total: (v.items || []).length };
             const isEditing = editingVersionId === v.id;
             const isExpanded = expandedVersionIds.has(v.id);
 
@@ -457,9 +457,9 @@ export function RoadmapEditor({ projectId, versions, onVersionsChange }: Roadmap
                     ) : (
                       <>
                         {/* Items View Mode */}
-                        {v.items.length > 0 ? (
+                        {(v.items || []).length > 0 ? (
                           <div className="space-y-1 text-sm">
-                            {v.items.map((item, idx) => (
+                            {(v.items || []).map((item, idx) => (
                               <div
                                 key={idx}
                                 onClick={() => toggleItemDone(v, idx)}

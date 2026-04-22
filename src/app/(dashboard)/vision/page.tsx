@@ -712,8 +712,8 @@ function VisionCard({
                     const isExpanded = expandedVersions.has(version.version);
                     const isShipped = version.status === 'shipped';
                     const isCurrent = version.status === 'current';
-                    const tasksDone = version.items.filter((item) => item.done).length;
-                    const tasksTotal = version.items.length;
+                    const tasksDone = (version.items || []).filter((item) => item.done).length;
+                    const tasksTotal = (version.items || []).length;
 
                     return (
                       <div
