@@ -6,6 +6,13 @@
  */
 
 import { join } from 'path';
+import {
+  TASK_COLUMNS,
+  PROJECT_COLUMNS,
+  rowToObject,
+  buildInsert,
+  buildUpdate,
+} from './postgres-column-map';
 
 export interface StoreData {
   projects: any[];
@@ -479,24 +486,7 @@ export class PostgresStoreProvider implements StoreProvider {
    * Strips keys with undefined values so the shape matches the file store.
    */
   private reconstructProject(row: any): any {
-    const overflow = typeof row.data === 'string' ? JSON.parse(row.data) : (row.data || {});
-    // Typed columns are the source of truth — they override overflow if both exist.
-    // #shadow-keys (2026-04-23): flipped merge order to prevent stale `data` keys
-    // from shadowing fresh column values. See scripts/strip-shadow-keys.mjs.
-    const obj: Record<string, any> = {
-      ...overflow,
-      id: row.id,
-      name: row.name,
-      description: row.description,
-      phase: row.phase,
-      owner: row.owner,
-      priority: row.priority,
-      sortOrder: row.sort_order,
-      createdAt: this.parseBigint(row.created_at),
-      createdBy: row.created_by,
-    };
-    // Remove keys that are undefined (not null — null is valid)
-    const cleaned = Object.fromEntries(Object.entries(obj).filter(([_, v]) => v !== undefined));
+    const cleaned = rowToObject(row, PROJECT_COLUMNS);
     // Inject default "Main" section if sections missing or empty
     if (!cleaned.sections || (Array.isArray(cleaned.sections) && cleaned.sections.length === 0)) {
       cleaned.sections = [{ id: `sec-main-${row.id}`, name: 'Main', owner: row.owner || '', outcomes: '', contract: '' }];
@@ -505,46 +495,11 @@ export class PostgresStoreProvider implements StoreProvider {
   }
 
   /**
-   * Reconstruct a task object from DB row, merging typed columns with overflow data.
-   * BIGINT columns are coerced back to numbers. Null fields are preserved (matches file store).
+   * Reconstruct a task object from DB row.
+   * All column/field mapping is driven by TASK_COLUMNS — see postgres-column-map.ts.
    */
   private reconstructTask(row: any): any {
-    const overflow = typeof row.data === 'string' ? JSON.parse(row.data) : (row.data || {});
-    const statusHistory = typeof row.status_history === 'string' ? JSON.parse(row.status_history) : (row.status_history || []);
-    const comments = typeof row.comments === 'string' ? JSON.parse(row.comments) : (row.comments || []);
-    
-    const obj: Record<string, any> = {
-      ...overflow,
-      id: row.id,
-      ticketNumber: row.ticket_number,
-      title: row.title,
-      status: row.status,
-      projectId: row.project_id,
-      assignee: row.assignee,
-      priority: row.priority,
-      testType: row.test_type,
-      testAssignee: row.test_assignee,
-      initiatedBy: row.initiated_by,
-      description: row.description,
-      doneWhen: row.done_when,
-      constraints: row.constraints,
-      testPlan: row.test_plan,
-      reviewNotes: row.review_notes,
-      loopCount: row.loop_count,
-      loopPausedAt: this.parseBigint(row.loop_paused_at),
-      loopPauseReason: row.loop_pause_reason,
-      lastActivityAt: this.parseBigint(row.last_activity_at),
-      createdAt: this.parseBigint(row.created_at),
-      version: row.version,
-      statusHistory,
-      comments,
-    };
-    // Typed columns are the source of truth — they override overflow if both exist.
-    // #shadow-keys (2026-04-23): flipped merge order to prevent stale `data` keys
-    // (e.g. data.version = "0.0.0" shadowing column version = "0.2.0") from winning.
-    // See scripts/strip-shadow-keys.mjs for the companion data migration.
-    // Remove keys that are undefined (not null — null is intentional data)
-    return Object.fromEntries(Object.entries(obj).filter(([_, v]) => v !== undefined));
+    return rowToObject(row, TASK_COLUMNS);
   }
 
   async read(): Promise<StoreData> {
@@ -590,108 +545,18 @@ export class PostgresStoreProvider implements StoreProvider {
       // Clear and rewrite projects (scoped to workspace)
       await client.query('DELETE FROM org_studio_projects WHERE workspace_id = $1', [this.workspaceId]);
       for (const project of data.projects) {
-        const {
-          id,
-          name,
-          description,
-          phase,
-          owner,
-          priority,
-          sortOrder,
-          createdAt,
-          createdBy,
-          ...overflow
-        } = project;
-
-        await client.query(
-          `INSERT INTO org_studio_projects
-           (id, name, description, phase, owner, priority, sort_order, created_at, created_by, data, workspace_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-          [
-            id,
-            name || null,
-            description || null,
-            phase || 'active',
-            owner || null,
-            priority || null,
-            sortOrder || 5000,
-            createdAt || null,
-            createdBy || null,
-            JSON.stringify(overflow),
-            this.workspaceId,
-          ]
-        );
+        const plan = buildInsert('org_studio_projects', PROJECT_COLUMNS, project, this.workspaceId);
+        await client.query(plan.sql, plan.values);
       }
 
       // Clear and rewrite tasks (scoped to workspace)
+      // Column/field mapping is driven by TASK_COLUMNS — impossible for
+      // the destructure, INSERT column list, placeholders and values
+      // array to drift out of sync (see postgres-column-map.ts).
       await client.query('DELETE FROM org_studio_tasks WHERE workspace_id = $1', [this.workspaceId]);
       for (const task of data.tasks) {
-        // #shadow-keys (2026-04-23): destructure `version` so it is NOT dumped
-        // back into the `data` overflow blob, and include it as a proper INSERT
-        // column. Previously `version` was missing from both the destructure
-        // list AND the INSERT column list, meaning every bulk write nulled the
-        // typed `version` column and caused Garage's "No active sprint" regression.
-        const {
-          id,
-          ticketNumber,
-          title,
-          status,
-          projectId,
-          assignee,
-          priority,
-          testType,
-          testAssignee,
-          initiatedBy,
-          description,
-          doneWhen,
-          constraints,
-          testPlan,
-          reviewNotes,
-          loopCount,
-          loopPausedAt,
-          loopPauseReason,
-          lastActivityAt,
-          createdAt,
-          version,
-          statusHistory,
-          comments,
-          ...overflow
-        } = task;
-
-        await client.query(
-          `INSERT INTO org_studio_tasks
-           (id, ticket_number, title, status, project_id, assignee, priority, test_type, test_assignee,
-            initiated_by, description, done_when, constraints, test_plan, review_notes, loop_count,
-            loop_paused_at, loop_pause_reason, last_activity_at, created_at, version, status_history, comments, data, workspace_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)`,
-          [
-            id,
-            ticketNumber || null,
-            title || null,
-            status || 'backlog',
-            projectId || null,
-            assignee || null,
-            priority || null,
-            testType || null,
-            testAssignee || null,
-            initiatedBy || null,
-            description || null,
-            doneWhen || null,
-            constraints || null,
-            testPlan || null,
-            reviewNotes || null,
-            loopCount || 0,
-            loopPausedAt || null,
-            loopPauseReason || null,
-            lastActivityAt || null,
-            createdAt || null,
-            version || null,
-            JSON.stringify(statusHistory || []),
-            JSON.stringify(comments || []),
-            JSON.stringify(overflow),
-            this.workspaceId,
-          ]
-        );
+        const plan = buildInsert('org_studio_tasks', TASK_COLUMNS, task, this.workspaceId);
+        await client.query(plan.sql, plan.values);
       }
 
       // Update settings (scoped to workspace)
@@ -725,50 +590,11 @@ export class PostgresStoreProvider implements StoreProvider {
       const createdAt = project.createdAt || Date.now();
       const createdBy = project.createdBy || 'system';
 
-      const {
-        id: _,
-        createdAt: __,
-        createdBy: ___,
-        name,
-        description,
-        phase,
-        owner,
-        priority,
-        sortOrder,
-        ...overflow
-      } = project;
+      const full = { ...project, id, createdAt, createdBy };
+      const plan = buildInsert('org_studio_projects', PROJECT_COLUMNS, full, this.workspaceId);
+      await client.query(plan.sql, plan.values);
 
-      await client.query(
-        `INSERT INTO org_studio_projects
-         (id, name, description, phase, owner, priority, sort_order, created_at, created_by, data, workspace_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-        [
-          id,
-          name || null,
-          description || null,
-          phase || 'active',
-          owner || null,
-          priority || null,
-          sortOrder || 5000,
-          createdAt,
-          createdBy,
-          JSON.stringify(overflow),
-          this.workspaceId,
-        ]
-      );
-
-      return {
-        id,
-        createdAt,
-        createdBy,
-        name,
-        description,
-        phase,
-        owner,
-        priority,
-        sortOrder,
-        ...overflow,
-      };
+      return full;
     } finally {
       client.release();
     }
@@ -787,38 +613,8 @@ export class PostgresStoreProvider implements StoreProvider {
       const current = this.reconstructProject(result.rows[0]);
       const updated = { ...current, ...updates };
 
-      const {
-        id,
-        name,
-        description,
-        phase,
-        owner,
-        priority,
-        sortOrder,
-        createdAt,
-        createdBy,
-        ...overflow
-      } = updated;
-
-      await client.query(
-        `UPDATE org_studio_projects
-         SET name = $1, description = $2, phase = $3, owner = $4, priority = $5,
-             sort_order = $6, created_at = $7, created_by = $8, data = $9
-         WHERE id = $10 AND workspace_id = $11`,
-        [
-          name || null,
-          description || null,
-          phase || 'active',
-          owner || null,
-          priority || null,
-          sortOrder || 5000,
-          createdAt || null,
-          createdBy || null,
-          JSON.stringify(overflow),
-          id,
-          this.workspaceId,
-        ]
-      );
+      const plan = buildUpdate('org_studio_projects', PROJECT_COLUMNS, updated, this.workspaceId);
+      await client.query(plan.sql, plan.values);
 
       // Emit NOTIFY event for bidirectional sync — include updates for intent routing
       const changePayload = JSON.stringify({ type: 'store_update', action: 'updateProject', projectId, updates });
@@ -848,115 +644,24 @@ export class PostgresStoreProvider implements StoreProvider {
       const createdAt = task.createdAt || Date.now();
       const createdBy = task.createdBy || 'system';
 
-      const {
-        id: _,
-        createdAt: __,
-        createdBy: ___,
-        ticketNumber,
-        title,
-        status,
-        projectId,
-        assignee,
-        priority,
-        testType,
-        testAssignee,
-        initiatedBy,
-        description,
-        doneWhen,
-        constraints,
-        testPlan,
-        reviewNotes,
-        loopCount,
-        loopPausedAt,
-        loopPauseReason,
-        lastActivityAt,
-        version,
-        statusHistory,
-        comments,
-        ...overflow
-      } = task;
+      const full = { ...task, id, createdAt, createdBy };
+      const plan = buildInsert('org_studio_tasks', TASK_COLUMNS, full, this.workspaceId);
+      await client.query(plan.sql, plan.values);
 
-      await client.query(
-        `INSERT INTO org_studio_tasks
-         (id, ticket_number, title, status, project_id, assignee, priority, test_type, test_assignee,
-          initiated_by, description, done_when, constraints, test_plan, review_notes, loop_count,
-          loop_paused_at, loop_pause_reason, last_activity_at, created_at, version, status_history, comments, data, workspace_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)`,
-        [
-          id,
-          ticketNumber || null,
-          title || null,
-          status || 'backlog',
-          projectId || null,
-          assignee || null,
-          priority || null,
-          testType || null,
-          testAssignee || null,
-          initiatedBy || null,
-          description || null,
-          doneWhen || null,
-          constraints || null,
-          testPlan || null,
-          reviewNotes || null,
-          loopCount || 0,
-          loopPausedAt || null,
-          loopPauseReason || null,
-          lastActivityAt || null,
-          createdAt,
-          version || null,
-          JSON.stringify(statusHistory || []),
-          JSON.stringify(comments || []),
-          JSON.stringify(overflow),
-          this.workspaceId,
-        ]
-      );
-
-      return {
-        id,
-        createdAt,
-        createdBy,
-        ticketNumber,
-        title,
-        status,
-        projectId,
-        assignee,
-        priority,
-        testType,
-        testAssignee,
-        initiatedBy,
-        description,
-        doneWhen,
-        constraints,
-        testPlan,
-        reviewNotes,
-        loopCount,
-        loopPausedAt,
-        loopPauseReason,
-        lastActivityAt,
-        version,
-        statusHistory,
-        comments,
-        ...overflow,
-      };
-
-      // Emit NOTIFY for task creation — triggers agent dispatch on local server
+      // Emit NOTIFY for task creation — triggers agent dispatch on local server.
+      // (Previously this was dead code after an early return; the refactor restores it.)
       const changePayload = JSON.stringify({
         type: 'task_created',
         taskId: id,
-        status: status || 'backlog',
-        assignee: assignee || null,
-        projectId: projectId || null,
+        status: full.status || 'backlog',
+        assignee: full.assignee || null,
+        projectId: full.projectId || null,
         timestamp: Date.now(),
         source: 'postgres',
       });
       try { await client.query(`NOTIFY org_studio_change, '${changePayload.replace(/'/g, "''")}'`); } catch {} // best-effort
 
-      return {
-        id, createdAt, createdBy, ticketNumber, title, status, projectId, assignee, priority,
-        testType, testAssignee, initiatedBy, description, doneWhen, constraints, testPlan,
-        reviewNotes, loopCount, loopPausedAt, loopPauseReason, lastActivityAt, version, statusHistory,
-        comments, ...overflow,
-      };
+      return full;
     } finally {
       client.release();
     }
@@ -1039,73 +744,12 @@ export class PostgresStoreProvider implements StoreProvider {
       const current = this.reconstructTask(result.rows[0]);
       const updated = { ...current, ...updates };
 
-      const {
-        id,
-        ticketNumber,
-        title,
-        status,
-        projectId,
-        assignee,
-        priority,
-        testType,
-        testAssignee,
-        initiatedBy,
-        description,
-        doneWhen,
-        constraints,
-        testPlan,
-        reviewNotes,
-        loopCount,
-        loopPausedAt,
-        loopPauseReason,
-        lastActivityAt,
-        createdAt,
-        version,
-        statusHistory,
-        comments,
-        ...overflow
-      } = updated;
-
-      const _updRes = await client.query(
-        `UPDATE org_studio_tasks
-         SET ticket_number = $1, title = $2, status = $3, project_id = $4, assignee = $5,
-             priority = $6, test_type = $7, test_assignee = $8, initiated_by = $9, description = $10,
-             done_when = $11, constraints = $12, test_plan = $13, review_notes = $14, loop_count = $15,
-             loop_paused_at = $16, loop_pause_reason = $17, last_activity_at = $18, created_at = $19,
-             version = $20, status_history = $21, comments = $22, data = $23
-         WHERE id = $24 AND workspace_id = $25`,
-        [
-          ticketNumber || null,
-          title || null,
-          status || 'backlog',
-          projectId || null,
-          assignee || null,
-          priority || null,
-          testType || null,
-          testAssignee || null,
-          initiatedBy || null,
-          description || null,
-          doneWhen || null,
-          constraints || null,
-          testPlan || null,
-          reviewNotes || null,
-          loopCount || 0,
-          loopPausedAt || null,
-          loopPauseReason || null,
-          lastActivityAt || null,
-          createdAt || null,
-          version || null,
-          JSON.stringify(statusHistory || []),
-          JSON.stringify(comments || []),
-          JSON.stringify(overflow),
-          id,
-          this.workspaceId,
-        ]
-      );
+      const plan = buildUpdate('org_studio_tasks', TASK_COLUMNS, updated, this.workspaceId);
+      const _updRes = await client.query(plan.sql, plan.values);
 
       // #948 debug — log row count; if 0, the WHERE didn't match and we silently missed.
       if (_updRes.rowCount === 0) {
-        console.warn(`[updateTask] ⚠️ UPDATE affected 0 rows for taskId=${taskId} destructured-id=${id} workspace_id=${this.workspaceId}`);
+        console.warn(`[updateTask] ⚠️ UPDATE affected 0 rows for taskId=${taskId} workspace_id=${this.workspaceId}`);
       }
 
       // Emit NOTIFY event for bidirectional sync — include updates + assignee for intent routing
