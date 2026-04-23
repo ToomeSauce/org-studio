@@ -596,7 +596,17 @@ export async function buildDispatchMessage(
   agentName: string,
   agentRole?: string,
 ): Promise<string | null> {
-  // Find actionable tasks for this agent
+  // #1100: Status taxonomy for dispatch — ALWAYS allowlist, never negation.
+  //   ACTIONABLE  = buckets we build a dispatch prompt for (work IS ready)
+  //   VISIBLE_ONLY = shown for awareness, NOT dispatched (external blocker / awaiting review)
+  //   IGNORED     = not shown at all ('done', 'planning', unknown statuses)
+  //
+  // Never filter via `status !== 'done'` — new statuses silently become
+  // actionable any time someone adds one to the schema. Always allowlist.
+  const ACTIONABLE_STATUSES = new Set(['in-progress', 'backlog', 'qa']);
+  const VISIBLE_ONLY_STATUSES = new Set(['blocked', 'review']);
+
+  // Find tasks assigned to this agent (all non-archived — bucketed by status below)
   const nameLower = agentName.toLowerCase();
   const agentTasks = (store.tasks || []).filter((t: any) => {
     const assignee = (t.assignee || '').toLowerCase();
@@ -604,6 +614,7 @@ export async function buildDispatchMessage(
   });
 
   const inProgress = agentTasks.filter((t: any) => t.status === 'in-progress');
+  const blocked = agentTasks.filter((t: any) => t.status === 'blocked');
 
   // Approval horizon + project-state filter for backlog only. In-progress and QA tasks keep going —
   // they were already approved when the agent picked them up. Only NEW work pulls
@@ -623,9 +634,21 @@ export async function buildDispatchMessage(
   });
   const inQA = agentTasks.filter((t: any) => t.status === 'qa');
 
-  // Nothing to do
+  // Nothing ACTIONABLE to do — don't dispatch even if blocked tasks exist.
+  // (Blocked tasks are visible-only; dispatching with nothing actionable would
+  // produce a noisy "here's what's blocked" with nothing the agent can act on.)
   if (inProgress.length === 0 && backlog.length === 0 && inQA.length === 0) {
     return null;
+  }
+
+  // Runtime sanity: catch accidental status-bucket drift. If a new bucket is
+  // added above but not added to ACTIONABLE_STATUSES/VISIBLE_ONLY_STATUSES,
+  // this warning fires in dev. Cheap insurance.
+  for (const t of agentTasks) {
+    const s = t.status;
+    if (!ACTIONABLE_STATUSES.has(s) && !VISIBLE_ONLY_STATUSES.has(s) && s !== 'done' && s !== 'planning') {
+      console.warn(`[buildDispatchMessage] unknown status '${s}' on task ${t.id} — not bucketed`);
+    }
   }
 
   // Find the project for context
@@ -699,6 +722,19 @@ export async function buildDispatchMessage(
     lines.push('');
   }
 
+  // #1100: Blocked tasks — visibility only. These are NOT part of the dispatch
+  // work queue. Showing them here prevents agents from independently pulling
+  // their own task list, seeing blocked tickets, and trying to work them.
+  if (blocked.length > 0) {
+    lines.push(`**🚫 Blocked (${blocked.length}) — do NOT work these; waiting on external unblock:**`);
+    for (const t of blocked) {
+      const proj = projects.find((p: any) => p.id === t.projectId);
+      const projLabel = proj ? ` [${proj.name}]` : '';
+      lines.push(`- #${t.ticketNumber ?? '?'} ${t.title}${projLabel}`);
+    }
+    lines.push('');
+  }
+
   // Check for handoffs (context injections from other agents)
   const handoffTaskIds: string[] = [];
   const handoffLines: string[] = [];
@@ -724,6 +760,7 @@ export async function buildDispatchMessage(
   lines.push('3. Move task to in-progress, post progress comments, and update status to done when finished (see skill for curl examples).');
   lines.push('4. After updating status, the next task dispatches automatically. Do NOT pull multiple tasks at once.');
   lines.push('5. Do NOT ask the user for permission to continue or present "Next Task" buttons. Just work, update, and stop.');
+  lines.push('6. **Blocked tasks are not yours to work.** They are shown for awareness only — wait for unblock, or post a comment if you can help remove the blocker.');
 
   return lines.join('\n');
 }
