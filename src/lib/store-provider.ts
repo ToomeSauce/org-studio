@@ -626,6 +626,11 @@ export class PostgresStoreProvider implements StoreProvider {
       // Clear and rewrite tasks (scoped to workspace)
       await client.query('DELETE FROM org_studio_tasks WHERE workspace_id = $1', [this.workspaceId]);
       for (const task of data.tasks) {
+        // #shadow-keys (2026-04-23): destructure `version` so it is NOT dumped
+        // back into the `data` overflow blob, and include it as a proper INSERT
+        // column. Previously `version` was missing from both the destructure
+        // list AND the INSERT column list, meaning every bulk write nulled the
+        // typed `version` column and caused Garage's "No active sprint" regression.
         const {
           id,
           ticketNumber,
@@ -647,6 +652,7 @@ export class PostgresStoreProvider implements StoreProvider {
           loopPauseReason,
           lastActivityAt,
           createdAt,
+          version,
           statusHistory,
           comments,
           ...overflow
@@ -656,8 +662,8 @@ export class PostgresStoreProvider implements StoreProvider {
           `INSERT INTO org_studio_tasks
            (id, ticket_number, title, status, project_id, assignee, priority, test_type, test_assignee,
             initiated_by, description, done_when, constraints, test_plan, review_notes, loop_count,
-            loop_paused_at, loop_pause_reason, last_activity_at, created_at, status_history, comments, data, workspace_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
+            loop_paused_at, loop_pause_reason, last_activity_at, created_at, version, status_history, comments, data, workspace_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)`,
           [
             id,
             ticketNumber || null,
@@ -679,6 +685,7 @@ export class PostgresStoreProvider implements StoreProvider {
             loopPauseReason || null,
             lastActivityAt || null,
             createdAt || null,
+            version || null,
             JSON.stringify(statusHistory || []),
             JSON.stringify(comments || []),
             JSON.stringify(overflow),
