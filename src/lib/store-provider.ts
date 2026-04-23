@@ -480,7 +480,11 @@ export class PostgresStoreProvider implements StoreProvider {
    */
   private reconstructProject(row: any): any {
     const overflow = typeof row.data === 'string' ? JSON.parse(row.data) : (row.data || {});
+    // Typed columns are the source of truth — they override overflow if both exist.
+    // #shadow-keys (2026-04-23): flipped merge order to prevent stale `data` keys
+    // from shadowing fresh column values. See scripts/strip-shadow-keys.mjs.
     const obj: Record<string, any> = {
+      ...overflow,
       id: row.id,
       name: row.name,
       description: row.description,
@@ -490,7 +494,6 @@ export class PostgresStoreProvider implements StoreProvider {
       sortOrder: row.sort_order,
       createdAt: this.parseBigint(row.created_at),
       createdBy: row.created_by,
-      ...overflow,
     };
     // Remove keys that are undefined (not null — null is valid)
     const cleaned = Object.fromEntries(Object.entries(obj).filter(([_, v]) => v !== undefined));
@@ -511,6 +514,7 @@ export class PostgresStoreProvider implements StoreProvider {
     const comments = typeof row.comments === 'string' ? JSON.parse(row.comments) : (row.comments || []);
     
     const obj: Record<string, any> = {
+      ...overflow,
       id: row.id,
       ticketNumber: row.ticket_number,
       title: row.title,
@@ -534,8 +538,11 @@ export class PostgresStoreProvider implements StoreProvider {
       version: row.version,
       statusHistory,
       comments,
-      ...overflow,
     };
+    // Typed columns are the source of truth — they override overflow if both exist.
+    // #shadow-keys (2026-04-23): flipped merge order to prevent stale `data` keys
+    // (e.g. data.version = "0.0.0" shadowing column version = "0.2.0") from winning.
+    // See scripts/strip-shadow-keys.mjs for the companion data migration.
     // Remove keys that are undefined (not null — null is intentional data)
     return Object.fromEntries(Object.entries(obj).filter(([_, v]) => v !== undefined));
   }
