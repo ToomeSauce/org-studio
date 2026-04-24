@@ -623,17 +623,53 @@ function ProjectDetailPageInner() {
                 );
                 // If no currentVersion and no approved unshipped versions, disable start
                 if (!currentVersion && (!hasApprovedUnshipped)) {
+                  // Find the next unshipped version (first in roadmap order with status !== 'shipped').
+                  const nextUnshipped = roadmapVersions.find((v) => v.status !== 'shipped');
                   return (
                     <div className="flex items-center gap-2">
-                      <button
-                        disabled
-                        title="Approve versions on the roadmap below to enable start"
-                        className="px-4 py-2 bg-[var(--bg-tertiary)] text-[var(--text-muted)] rounded-lg font-medium text-sm cursor-not-allowed flex items-center gap-2 opacity-60"
-                      >
-                        <span>▶️</span>
-                        Start
-                      </button>
-                      <span className="text-[var(--text-xs)] text-[var(--text-muted)]">✅ All approved versions shipped</span>
+                      {nextUnshipped ? (
+                        <button
+                          onClick={async () => {
+                            try {
+                              await fetch('/api/store', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                  action: 'updateProject',
+                                  id: projectId,
+                                  updates: {
+                                    autonomy: {
+                                      ...(project.autonomy || {}),
+                                      approvedThrough: nextUnshipped.version,
+                                    },
+                                  },
+                                }),
+                              });
+                              // Then launch the next version (flips state to started + sets currentVersion).
+                              await handleLaunch();
+                            } catch (e) {
+                              console.error('Failed to approve+start:', e);
+                            }
+                          }}
+                          title={`Approve ${nextUnshipped.version} and start`}
+                          className="px-4 py-2 bg-[var(--accent-primary)] text-white rounded-lg font-medium text-sm hover:opacity-90 flex items-center gap-2"
+                        >
+                          <span>✅</span>
+                          Approve &amp; Start {nextUnshipped.version}
+                        </button>
+                      ) : (
+                        <>
+                          <button
+                            disabled
+                            title="Add versions to the roadmap to continue"
+                            className="px-4 py-2 bg-[var(--bg-tertiary)] text-[var(--text-muted)] rounded-lg font-medium text-sm cursor-not-allowed flex items-center gap-2 opacity-60"
+                          >
+                            <span>▶️</span>
+                            Start
+                          </button>
+                          <span className="text-[var(--text-xs)] text-[var(--text-muted)]">✅ All versions shipped</span>
+                        </>
+                      )}
                     </div>
                   );
                 }
@@ -694,17 +730,51 @@ function ProjectDetailPageInner() {
                   v.status !== 'shipped' && isVersionInHorizon(v.version, approvedThrough)
                 );
                 if (!hasApprovedUnshipped) {
+                  const nextUnshipped = roadmapVersions.find((v) => v.status !== 'shipped');
                   return (
                     <div className="flex items-center gap-2">
-                      <button
-                        disabled
-                        title="Approve more versions on the roadmap below to re-enable start"
-                        className="px-4 py-2 bg-[var(--bg-tertiary)] text-[var(--text-muted)] rounded-lg font-medium text-sm cursor-not-allowed flex items-center gap-2 opacity-60"
-                      >
-                        <span>▶️</span>
-                        Start
-                      </button>
-                      <span className="text-[var(--text-xs)] text-[var(--text-muted)]">✅ All approved versions shipped</span>
+                      {nextUnshipped ? (
+                        <button
+                          onClick={async () => {
+                            try {
+                              await fetch('/api/store', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                  action: 'updateProject',
+                                  id: projectId,
+                                  updates: {
+                                    autonomy: {
+                                      ...(project.autonomy || {}),
+                                      approvedThrough: nextUnshipped.version,
+                                    },
+                                  },
+                                }),
+                              });
+                              await handleLaunch();
+                            } catch (e) {
+                              console.error('Failed to approve+start:', e);
+                            }
+                          }}
+                          title={`Approve ${nextUnshipped.version} and start`}
+                          className="px-4 py-2 bg-[var(--accent-primary)] text-white rounded-lg font-medium text-sm hover:opacity-90 flex items-center gap-2"
+                        >
+                          <span>✅</span>
+                          Approve &amp; Start {nextUnshipped.version}
+                        </button>
+                      ) : (
+                        <>
+                          <button
+                            disabled
+                            title="Add versions to the roadmap to continue"
+                            className="px-4 py-2 bg-[var(--bg-tertiary)] text-[var(--text-muted)] rounded-lg font-medium text-sm cursor-not-allowed flex items-center gap-2 opacity-60"
+                          >
+                            <span>▶️</span>
+                            Start
+                          </button>
+                          <span className="text-[var(--text-xs)] text-[var(--text-muted)]">✅ All versions shipped</span>
+                        </>
+                      )}
                     </div>
                   );
                 }
