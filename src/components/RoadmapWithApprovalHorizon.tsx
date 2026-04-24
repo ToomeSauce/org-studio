@@ -99,33 +99,77 @@ export function RoadmapWithApprovalHorizon({
   // Thrivor tasks would vanish from the Main pill.
   const versions = (() => {
     if (componentFilter === 'all') return rawVersions;
-    const comps: Array<{ id: string; role?: string }> = ((project as any).components?.length
+    const comps: Array<{ id: string; name?: string; role?: string; waitsFor?: any[] }> = ((project as any).components?.length
       ? (project as any).components
       : (project as any).sections) || [];
     const primaryComp = comps.find((c) => !c.role || (c.role !== 'qa' && c.role !== 'support'));
     const isPrimaryFilter = primaryComp?.id === componentFilter;
+    const activeComp = comps.find((c) => c.id === componentFilter);
 
     const taskSectionById = new Map<string, string>();
     for (const t of (allTasks || [])) {
       if (t && t.id) taskSectionById.set(t.id, t.sectionId || '');
     }
-    const out: RoadmapVersion[] = [];
-    for (const v of rawVersions) {
-      const keptItems = (v.items || []).filter((it) => {
-        // Un-launched items: keep them under the primary pill so planning-stage versions
-        // don't disappear when users switch off "All". Drop them under non-primary pills.
-        if (!it.taskId) return isPrimaryFilter;
-        const sec = taskSectionById.get(it.taskId);
-        if (sec === componentFilter) return true;
-        // Untagged task (no sectionId) → belongs to primary component.
-        if ((!sec || sec === '') && isPrimaryFilter) return true;
-        return false;
-      });
-      if (keptItems.length === 0) continue;
-      const done = keptItems.filter((i) => i.done).length;
-      out.push({ ...v, items: keptItems, progress: { done, total: keptItems.length } });
+
+    // Primary filter: walk the project's own roadmap versions, keep items whose tasks
+    // belong to the primary component (explicitly or via untagged fallback).
+    if (isPrimaryFilter) {
+      const out: RoadmapVersion[] = [];
+      for (const v of rawVersions) {
+        const keptItems = (v.items || []).filter((it) => {
+          if (!it.taskId) return true; // planning items belong to the primary workstream
+          const sec = taskSectionById.get(it.taskId);
+          return sec === componentFilter || !sec || sec === '';
+        });
+        if (keptItems.length === 0) continue;
+        const done = keptItems.filter((i) => i.done).length;
+        out.push({ ...v, items: keptItems, progress: { done, total: keptItems.length } });
+      }
+      return out;
     }
-    return out;
+
+    // Non-primary component (QA / support): tasks typically don't live on the primary
+    // roadmap's items[]. Instead, synthesize one card per gating target from the
+    // component's waitsFor[], showing every task tagged with this component as an item.
+    // If waitsFor is empty, fall back to a single ungrouped card.
+    const componentTasks = (allTasks || []).filter((t: any) => t.sectionId === componentFilter);
+    if (componentTasks.length === 0) return [];
+
+    const compName = activeComp?.name || 'Component';
+    const waitsFor: Array<{ version: string; componentId?: string; projectId?: string }> = activeComp?.waitsFor || [];
+
+    if (waitsFor.length === 0) {
+      const done = componentTasks.filter((t: any) => t.status === 'done').length;
+      return [{
+        id: `synthetic-${componentFilter}-all`,
+        version: '',
+        title: `${compName} tasks`,
+        status: (done === componentTasks.length ? 'shipped' : 'current') as any,
+        items: componentTasks.map((t: any) => ({
+          title: t.title,
+          done: t.status === 'done',
+          taskId: t.id,
+        })),
+        progress: { done, total: componentTasks.length },
+      }];
+    }
+
+    return waitsFor.map((w, i) => {
+      const label = `Waiting on ${w.version}`;
+      const done = componentTasks.filter((t: any) => t.status === 'done').length;
+      return {
+        id: `synthetic-${componentFilter}-${w.componentId || 'x'}-${w.version}-${i}`,
+        version: w.version,
+        title: label,
+        status: (done === componentTasks.length ? 'shipped' : 'current') as any,
+        items: componentTasks.map((t: any) => ({
+          title: t.title,
+          done: t.status === 'done',
+          taskId: t.id,
+        })),
+        progress: { done, total: componentTasks.length },
+      };
+    });
   })();
   const [expandedVersionIds, setExpandedVersionIds] = useState<Set<string>>(
     new Set(versions.filter(v => v.status === 'current').map(v => v.id))
