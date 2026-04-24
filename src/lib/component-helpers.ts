@@ -237,19 +237,14 @@ export function getPrimaryComponent(project: ProjectLike): ComponentLike | undef
   return comps.find((c) => !c.role || (c.role !== 'qa' && c.role !== 'support'));
 }
 
-// ─── Per-component roadmap reads (#1112 PR 3) ───
+// ─── Per-component roadmap reads (#1112 PR 3; PR 6 removed legacy fallbacks) ───
 
 /**
  * Return the effective roadmap versions for a given component.
  *
- * Preference order:
- *   1. `component.versions[]` (PR 3 shape) when populated — the component
- *      owns its own roadmap.
- *   2. For the PRIMARY component only: fall back to `project.versions[]`
- *      (pre-PR-3 shape) when the component has no versions of its own. This
- *      keeps legacy projects rendering and dispatching correctly until PR 6
- *      migrates the data.
- *   3. Empty array for non-primary components with no versions of their own.
+ * Post-#1112 PR 6: this just returns `component.versions[]`. The primary-
+ * component fallback to `project.versions[]` was removed after the data
+ * migration flattened every project into the per-component shape.
  *
  * Returns a fresh array (never mutates input). Order matches source order.
  */
@@ -259,35 +254,21 @@ export function getComponentVersions(
 ): ComponentVersionLike[] {
   const comps = getEffectiveComponents(project);
   const component = comps.find((c) => c.id === componentId);
-  if (!component) return [];
-
-  // (1) Component owns its own roadmap.
-  if (component.versions && component.versions.length > 0) {
-    return component.versions.slice();
-  }
-
-  // (2) Primary-component fallback to the legacy project-level roadmap.
-  const primary = getPrimaryComponent(project);
-  if (primary && primary.id === componentId && project.versions && project.versions.length > 0) {
-    return project.versions.slice();
-  }
-
-  // (3) Non-primary component with no versions: genuinely empty.
-  return [];
+  if (!component || !component.versions || component.versions.length === 0) return [];
+  return component.versions.slice();
 }
 
 /**
  * Return the effective approval banner ("approvedThrough" version string)
  * for a given component.
  *
- * Preference order:
- *   1. `component.approvedThrough` (PR 3 shape) when set — the component owns
- *      its own banner.
- *   2. For the PRIMARY component only: fall back to
- *      `project.autonomy.approvedThrough` (pre-PR-3 shape) when the component
- *      doesn't have its own banner. Keeps legacy projects working until PR 6.
- *   3. `undefined` — no banner set; nothing is dispatch-eligible for this
- *      component.
+ * Post-#1112 PR 6: just reads `component.approvedThrough`. The primary-
+ * component fallback to `project.autonomy.approvedThrough` was removed
+ * after the data migration moved every project's horizon onto its primary
+ * component.
+ *
+ * Returns `undefined` when the component has no banner — nothing is
+ * dispatch-eligible for that component until one is set.
  */
 export function getComponentApprovedThrough(
   project: ProjectLike,
@@ -295,18 +276,5 @@ export function getComponentApprovedThrough(
 ): string | undefined {
   const comps = getEffectiveComponents(project);
   const component = comps.find((c) => c.id === componentId);
-  if (!component) return undefined;
-
-  // (1) Component owns its own banner.
-  if (component.approvedThrough) return component.approvedThrough;
-
-  // (2) Primary-component fallback to the legacy project-level banner.
-  const primary = getPrimaryComponent(project);
-  if (primary && primary.id === componentId) {
-    const legacy = project.autonomy?.approvedThrough;
-    if (legacy) return legacy;
-  }
-
-  // (3) No banner.
-  return undefined;
+  return component?.approvedThrough;
 }

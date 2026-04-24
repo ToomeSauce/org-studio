@@ -306,15 +306,16 @@ describe('getComponentVersions', () => {
     expect(result.map((v) => v.version)).toEqual(['0.1.0', '0.2.0']);
   });
 
-  it('falls back to project.versions[] for the primary component', () => {
+  it('#1112 PR 6: no longer falls back to project.versions[] (legacy shape is migrated away)', () => {
     const proj: ProjectLike = {
       id: 'p',
       name: 'P',
       components: [{ id: 'main', name: 'Main', owner: 'M' }],
-      versions: [v1, v2],
+      versions: [v1, v2],  // legacy field — migration moved these onto the component
     };
-    const result = getComponentVersions(proj, 'main');
-    expect(result.map((v) => v.version)).toEqual(['0.1.0', '0.2.0']);
+    // Post-migration, this field is absent from real data; the helper
+    // ignores it entirely even when (stale) data still carries it.
+    expect(getComponentVersions(proj, 'main')).toEqual([]);
   });
 
   it('does NOT fall back to project.versions[] for a non-primary component', () => {
@@ -358,14 +359,16 @@ describe('getComponentApprovedThrough', () => {
     expect(getComponentApprovedThrough(proj, 'main')).toBe('0.5.0');
   });
 
-  it('falls back to project.autonomy.approvedThrough for the primary component', () => {
+  it('#1112 PR 6: no longer falls back to project.autonomy.approvedThrough (legacy shape is migrated away)', () => {
     const proj: ProjectLike = {
       id: 'p',
       name: 'P',
       components: [{ id: 'main', name: 'Main', owner: 'M' }],
-      autonomy: { approvedThrough: '0.5.0' },
+      autonomy: { approvedThrough: '0.5.0' },  // legacy — migration moved this onto the component
     };
-    expect(getComponentApprovedThrough(proj, 'main')).toBe('0.5.0');
+    // Post-migration, the helper ignores the legacy field even when stale
+    // data still carries it.
+    expect(getComponentApprovedThrough(proj, 'main')).toBeUndefined();
   });
 
   it('does NOT fall back to project.autonomy for a non-primary component', () => {

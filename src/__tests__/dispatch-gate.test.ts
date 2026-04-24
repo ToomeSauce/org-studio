@@ -201,31 +201,31 @@ describe('isComponentVersionShipped', () => {
   });
 });
 
-// ---- isTaskGatedByWaitsFor: legacy component-level waitsFor (PR 2 fallback) ----
+// ---- #1112 PR 6: legacy component-level waitsFor is removed ----
 
-describe('isTaskGatedByWaitsFor — legacy component-level waitsFor (PR 2 shape)', () => {
-  it('gates when component has no versions[] but has legacy waitsFor[] unsatisfied', () => {
+describe('isTaskGatedByWaitsFor — PR 6: no legacy component-level waitsFor fallback', () => {
+  it('does NOT gate on legacy component.waitsFor[] (migration flattened it into per-version waitsFor)', () => {
     const proj = {
       id: 'p1',
       state: 'started',
-      // Main has no per-component versions array — PR 6-pending shape.
-      versions: [{ version: '0.1.0', status: 'planned' }],
-      autonomy: { approvedThrough: '0.1.0' },
       components: [
         { id: 'cmp-main', name: 'Main' },
         {
           id: 'cmp-qa',
           name: 'QA',
-          waitsFor: [{ componentId: 'cmp-main', version: '0.1.0' }], // unsatisfied
+          // Legacy shape. Post-migration this field doesn't exist in real
+          // data; even when stale data still carries it, the predicate
+          // ignores it. QA needs a proper per-version waitsFor now.
+          waitsFor: [{ componentId: 'cmp-main', version: '0.1.0' }],
         },
       ],
     };
-    const store = {
-      projects: [proj],
-      tasks: [],
-    };
+    const store = { projects: [proj], tasks: [] };
     const task = { id: 't1', projectId: 'p1', sectionId: 'cmp-qa', version: '0.1.0', status: 'backlog' };
-    expect(isTaskGatedByWaitsFor(store as any, task)).toBe(true);
+    // No versions[] on QA → the new predicate returns false (not gated);
+    // the real dispatch gate (rule 3, approvedThrough) will filter it out
+    // instead because QA has no approvedThrough either.
+    expect(isTaskGatedByWaitsFor(store as any, task)).toBe(false);
   });
 });
 

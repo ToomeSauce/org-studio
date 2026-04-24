@@ -922,20 +922,19 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        // #1112 PR 2: Component-version completion announcement.
+        // #1112 PR 2/6: Component-version completion announcement.
         //
         // When this task transition to `done` just completed its component's
-        // version, scan all OTHER components (any project) for matching
-        // `waitsFor` entries. On each dependent component that now becomes
-        // dispatch-eligible, post ONE System comment on ONE of its
-        // now-eligible backlog tasks (to avoid per-task spam). Also trigger
-        // that component's owner so the dispatcher picks up the newly-eligible
-        // work immediately.
+        // version, scan all OTHER components (any project) whose own versions
+        // declare a matching `waitsFor` dep. On each dependent component that
+        // now becomes dispatch-eligible, post ONE System comment on ONE of
+        // its now-eligible backlog tasks (to avoid per-task spam). Also
+        // trigger that component's owner so the dispatcher picks up the
+        // newly-eligible work immediately.
         //
-        // This is strictly observability + scheduler nudge. The actual
-        // gating lives in `isTaskGatedByComponentWaitsFor` in scheduler.ts —
-        // the dispatcher reads component.waitsFor directly at eval time; this
-        // block does NOT mutate task statuses.
+        // Strictly observability + scheduler nudge. The actual gating lives
+        // in `isTaskGatedByWaitsFor` (dispatch-gate.ts); this block does NOT
+        // mutate task statuses.
         if (payload.updates?.status === 'done') {
           const completed = store.tasks.find(t => t.id === payload.id);
           const completedSectionId = (completed as any)?.sectionId;
@@ -951,7 +950,7 @@ export async function POST(req: NextRequest) {
               t.status !== 'done'
             );
             if (!stillOpen) {
-              // Component-version complete. Scan for dependents.
+              // Component-version complete. Scan for dependents via per-version waitsFor.
               const completedProjectId = completed.projectId;
               const announcedComponents = new Set<string>();
               for (const proj of store.projects || []) {
@@ -959,41 +958,28 @@ export async function POST(req: NextRequest) {
                   ? (proj as any).components
                   : (proj.sections || []);
                 for (const cmp of comps) {
-                  if (!Array.isArray(cmp.waitsFor) || cmp.waitsFor.length === 0) continue;
-                  const matches = cmp.waitsFor.some((w: any) =>
-                    w.componentId === completedSectionId &&
-                    w.version === completedVersion &&
-                    (w.projectId ? w.projectId === completedProjectId : proj.id === completedProjectId)
-                  );
-                  if (!matches) continue;
-
-                  // Skip if this component still has OTHER unsatisfied waitsFor entries
-                  const stillWaiting = cmp.waitsFor.some((w: any) => {
-                    if (w.componentId === completedSectionId && w.version === completedVersion) return false;
-                    const targetProjectId = w.projectId || proj.id;
-                    // Inline version of isComponentVersionComplete to avoid scheduler import
-                    let sawAny = false;
-                    for (const t of store.tasks || []) {
-                      if (t.isArchived) continue;
-                      if (t.projectId !== targetProjectId) continue;
-                      if ((t as any).sectionId !== w.componentId) continue;
-                      if (t.version !== w.version) continue;
-                      sawAny = true;
-                      if (t.status !== 'done') return true; // still waiting on this entry
-                    }
-                    return !sawAny; // empty set ≠ complete → still waiting
+                  if (!Array.isArray(cmp.versions) || cmp.versions.length === 0) continue;
+                  // Check each version on this component for a waitsFor that
+                  // just got satisfied by our completion.
+                  const matchingVersion = cmp.versions.find((v: any) => {
+                    const w = v?.waitsFor;
+                    if (!w || !w.componentId || !w.version) return false;
+                    return w.componentId === completedSectionId &&
+                      w.version === completedVersion &&
+                      (w.projectId ? w.projectId === completedProjectId : proj.id === completedProjectId);
                   });
-                  if (stillWaiting) continue;
+                  if (!matchingVersion) continue;
 
-                  // Find one surviving backlog task on this component to anchor the announcement
+                  // Find one surviving backlog task on this component-version to anchor the announcement.
                   const anchor = store.tasks.find(t =>
                     !t.isArchived &&
                     t.projectId === proj.id &&
                     (t as any).sectionId === cmp.id &&
+                    t.version === matchingVersion.version &&
                     t.status === 'backlog'
                   );
 
-                  const key = `${proj.id}::${cmp.id}`;
+                  const key = `${proj.id}::${cmp.id}::${matchingVersion.version}`;
                   if (announcedComponents.has(key)) continue;
                   announcedComponents.add(key);
 
@@ -1009,7 +995,7 @@ export async function POST(req: NextRequest) {
                         id: Math.random().toString(36).slice(2, 10) + Date.now().toString(36),
                         createdAt: Date.now(),
                         author: 'System',
-                        content: `🔓 **Component unblocked** — *${completedCmpName}* @ \`${completedVersion}\` shipped. *${cmp.name}* is now dispatch-eligible; this task and siblings can be picked up.`,
+                        content: `🔓 **Component unblocked** — *${completedCmpName}* @ \`${completedVersion}\` shipped. *${cmp.name}* @ \`${matchingVersion.version}\` is now dispatch-eligible; this task and siblings can be picked up.`,
                         type: 'system',
                       } as any);
                     } catch (e: any) {
@@ -1018,7 +1004,7 @@ export async function POST(req: NextRequest) {
                   }
 
                   console.log(
-                    `[Component-unblock] ${completedCmpName}@${completedVersion} shipped → ${cmp.name} (${proj.name}) dispatch-eligible`
+                    `[Component-unblock] ${completedCmpName}@${completedVersion} shipped → ${cmp.name}@${matchingVersion.version} (${proj.name}) dispatch-eligible`
                   );
 
                   // Trigger the dependent component's owner so the now-eligible
@@ -1035,26 +1021,38 @@ export async function POST(req: NextRequest) {
           (async () => {
             try {
               const completedVersion = (versionCompletionTriggered as any).version;
-              
+
               if (completedVersion) {
                 console.log(
                   `[Version Dispatch] All tasks for ${completedVersion} in project ${versionCompletionTriggered.projectId} are done`
                 );
 
-                // Update the version record: status = 'shipped', set approvedAt
-                // Do NOT bump approvedThrough automatically — humans explicitly move the
-                // approval horizon. Auto-advancing past what the human approved violates
-                // the autonomy-within-guardrails contract.
-                const updates: any = {
-                  currentVersion: completedVersion,
-                };
-
-                const versions = versionCompletionTriggered.project.versions || [];
-                const completedVersionRecord = versions.find((v: any) => v.label === completedVersion);
-                if (completedVersionRecord) {
-                  completedVersionRecord.status = 'shipped';
-                  completedVersionRecord.approvedAt = new Date().toISOString();
-                  updates.versions = versions;
+                // #1112 PR 6: Post-migration, versions live on components.
+                // Find the version record on the component matching the
+                // triggering task and mark it shipped. Do NOT bump any
+                // approvedThrough banner automatically — humans explicitly
+                // move the approval horizon.
+                const triggerTask = store.tasks.find((tt: any) => tt.id === payload.id);
+                const compId: string | undefined = (triggerTask as any)?.sectionId;
+                const proj: any = versionCompletionTriggered.project;
+                const compsRef: any[] = proj.components?.length ? proj.components : (proj.sections || []);
+                const ownerCmp = compsRef.find((c) => c.id === compId);
+                const updates: any = { currentVersion: completedVersion };
+                if (ownerCmp && Array.isArray(ownerCmp.versions)) {
+                  const completedVersionRecord = ownerCmp.versions.find(
+                    (v: any) => v.version === completedVersion || v.label === completedVersion,
+                  );
+                  if (completedVersionRecord) {
+                    completedVersionRecord.status = 'shipped';
+                    completedVersionRecord.approvedAt = new Date().toISOString();
+                    // Persist the whole components/sections array so the
+                    // updated version record round-trips to the store.
+                    if (proj.components?.length) {
+                      updates.components = proj.components;
+                    } else if (proj.sections?.length) {
+                      updates.sections = proj.sections;
+                    }
+                  }
                 }
 
                 // Persist all updates
@@ -1112,24 +1110,17 @@ export async function POST(req: NextRequest) {
         if ('devOwner' in project) delete (project as any).devOwner;
         if ('qaOwner' in project) delete (project as any).qaOwner;
 
-        // --- Integrity guard: auto-scaffold missing defaults (#697) ---
-        if (!project.versions || !Array.isArray(project.versions) || project.versions.length === 0) {
-          const versionId = 'rv-' + id + '-v0-1';
-          project.versions = [{
-            id: versionId,
-            version: '0.1',
-            title: '',
-            status: 'planned',
-            items: [],
-            sort_order: 0.1,
-            version_type: 'outcome',
-          }];
-        }
+        // #1112 PR 6: Stop scaffolding legacy project-level roadmap/horizon on
+        // new projects. Roadmaps live on components now — new projects start
+        // with no components by default; the user adds a Main component and
+        // that's where versions[] / approvedThrough get set. The project-level
+        // `autonomy` bag is kept for cadence/approvalMode but no longer carries
+        // `approvedThrough`.
+        if ('versions' in project) delete (project as any).versions;
         if (!project.autonomy) project.autonomy = {};
-        if (project.autonomy.approvedThrough === undefined) {
-          project.autonomy.approvedThrough = null;
+        if ('approvedThrough' in (project as any).autonomy) {
+          delete (project as any).autonomy.approvedThrough;
         }
-        // --- End integrity guard ---
 
         // PERF: Use targeted provider.createProject() instead of full store write
         await getStoreProvider().createProject(project);
