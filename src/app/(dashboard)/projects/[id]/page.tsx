@@ -859,24 +859,33 @@ function ProjectDetailPageInner() {
             >
               All
             </button>
-            {components.map((comp) => {
-              const counts = getComponentCounts(projectTasks, comp.id, currentVersion);
-              const total = getComponentTotalCount(counts);
-              return (
-                <button
-                  key={comp.id}
-                  onClick={() => setComponentFilter(comp.id)}
-                  className={clsx(
-                    'px-3 py-1.5 rounded-full text-xs font-medium transition-colors border',
-                    activeComponentFilter === comp.id
-                      ? 'bg-[var(--accent-primary)] text-white border-transparent'
-                      : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] border-[var(--border-color)] hover:bg-[var(--bg-hover)]'
-                  )}
-                >
-                  {comp.name} {total > 0 && <span className="ml-1 opacity-70">{total}</span>}
-                </button>
-              );
-            })}
+            {(() => {
+              // #1112 PR 3 follow-up: the primary component (first non-QA, non-support) absorbs
+              // untagged tasks for display count, matching how the roadmap filter behaves.
+              const primaryCompId = components.find((c: any) => !c.role || (c.role !== 'qa' && c.role !== 'support'))?.id;
+              return components.map((comp) => {
+                const counts = getComponentCounts(projectTasks, comp.id, currentVersion);
+                let total = getComponentTotalCount(counts);
+                if (comp.id === primaryCompId) {
+                  const untagged = projectTasks.filter((t: any) => !t.sectionId && (!currentVersion || t.version === currentVersion));
+                  total += untagged.length;
+                }
+                return (
+                  <button
+                    key={comp.id}
+                    onClick={() => setComponentFilter(comp.id)}
+                    className={clsx(
+                      'px-3 py-1.5 rounded-full text-xs font-medium transition-colors border',
+                      activeComponentFilter === comp.id
+                        ? 'bg-[var(--accent-primary)] text-white border-transparent'
+                        : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] border-[var(--border-color)] hover:bg-[var(--bg-hover)]'
+                    )}
+                  >
+                    {comp.name} {total > 0 && <span className="ml-1 opacity-70">{total}</span>}
+                  </button>
+                );
+              });
+            })()}
           </div>
         )}
 

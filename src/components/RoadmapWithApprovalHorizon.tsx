@@ -91,9 +91,20 @@ export function RoadmapWithApprovalHorizon({
 }: RoadmapWithApprovalHorizonProps) {
   // #1112 PR 3: filter versions + items to the selected component.
   // A version is kept only if at least one of its items links to a task in the selected component.
-  // Items whose taskId is missing or points at a task outside the filter are dropped from the view.
+  //
+  // Nuance for legacy/unified projects: the "primary" component (first non-QA, non-support
+  // component — typically "Main") absorbs items whose task has no sectionId at all. This is
+  // because tasks created before the Components model didn't carry a sectionId, but
+  // conceptually belong to the project's main workstream. Without this, 176 untagged
+  // Thrivor tasks would vanish from the Main pill.
   const versions = (() => {
     if (componentFilter === 'all') return rawVersions;
+    const comps: Array<{ id: string; role?: string }> = ((project as any).components?.length
+      ? (project as any).components
+      : (project as any).sections) || [];
+    const primaryComp = comps.find((c) => !c.role || (c.role !== 'qa' && c.role !== 'support'));
+    const isPrimaryFilter = primaryComp?.id === componentFilter;
+
     const taskSectionById = new Map<string, string>();
     for (const t of (allTasks || [])) {
       if (t && t.id) taskSectionById.set(t.id, t.sectionId || '');
@@ -101,8 +112,14 @@ export function RoadmapWithApprovalHorizon({
     const out: RoadmapVersion[] = [];
     for (const v of rawVersions) {
       const keptItems = (v.items || []).filter((it) => {
-        if (!it.taskId) return false; // un-launched items can't be attributed to a component
-        return taskSectionById.get(it.taskId) === componentFilter;
+        // Un-launched items: keep them under the primary pill so planning-stage versions
+        // don't disappear when users switch off "All". Drop them under non-primary pills.
+        if (!it.taskId) return isPrimaryFilter;
+        const sec = taskSectionById.get(it.taskId);
+        if (sec === componentFilter) return true;
+        // Untagged task (no sectionId) → belongs to primary component.
+        if ((!sec || sec === '') && isPrimaryFilter) return true;
+        return false;
       });
       if (keptItems.length === 0) continue;
       const done = keptItems.filter((i) => i.done).length;
