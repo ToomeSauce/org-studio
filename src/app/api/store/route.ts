@@ -997,6 +997,13 @@ export async function POST(req: NextRequest) {
         const id = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
         const project = { id, createdAt: Date.now(), ...payload.project, workspace_id: payload.project?.workspace_id || workspace.id };
 
+        // #1112 PR 1: Stop writing `devOwner` / `qaOwner` on new projects. These
+        // fields hardcode a 2-role worldview that the Components model replaces.
+        // Existing projects keep their values (nothing strips them). New projects
+        // get them silently dropped — the Components panel replaces the story.
+        if ('devOwner' in project) delete (project as any).devOwner;
+        if ('qaOwner' in project) delete (project as any).qaOwner;
+
         // --- Integrity guard: auto-scaffold missing defaults (#697) ---
         if (!project.versions || !Array.isArray(project.versions) || project.versions.length === 0) {
           const versionId = 'rv-' + id + '-v0-1';

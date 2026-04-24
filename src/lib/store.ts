@@ -11,6 +11,49 @@ export interface Section {
   archivedBy?: string;   // Who archived this section
 }
 
+// === Components (#1112 Arc — PR 1) ===
+//
+// `Component` is the evolved form of `Section`. Same shape, plus two new
+// capabilities: a descriptive `role` hint and structured inter-component
+// dependencies (`waitsFor`).
+//
+// Design locks (from the arc ticket #1112):
+//  - `role` is DESCRIPTIVE free text. Never an enum. Schedulers never branch
+//    on it. Behaviour comes from the agent's skills + per-component context.
+//  - `waitsFor` references project versions, not component versions. Components
+//    inherit the project's version cycle.
+//  - No ACLs, no permissions, no component-level lifecycle. Keep it minimal.
+//
+// `Section` is retained as a runtime-compatible alias (see below) until every
+// call site has migrated. PR 1 is additive only — nothing in the code base
+// reads `components` yet. PRs 2–4 wire the downstream consumers.
+export interface Component {
+  id: string;
+  name: string;              // "Frontend", "Backend", "QA", "Auth Service"
+  owner: string;             // agent name (free text, matches teammate name)
+  role?: string;             // DESCRIPTIVE free text: "dev" | "qa" | "security" | "docs" | ...
+                             // Schedulers MUST NOT branch on this — it's UI + humans only.
+  outcomes: string;          // free text — what this component exists to deliver
+  contract: string;          // free text — what it gives to / expects from other components
+  // Versioned inter-component dependencies (same project or cross-project).
+  // When all tasks for the referenced component at the referenced version reach
+  // `done`, our component's tasks that were blocked waiting on this entry can be
+  // auto-unblocked (mechanism lands in PR 2, not this PR).
+  waitsFor?: Array<{
+    componentId: string;       // component id we're waiting on
+    projectId?: string;        // optional — if different project. Defaults to same project.
+    version: string;           // the project version of the target component we're waiting on
+  }>;
+  archivedAt?: number;
+  archivedBy?: string;
+}
+
+// `sections` and `Section` remain the on-disk primitive throughout PR 1 so
+// existing readers/writers don't change. `components`, when populated, is an
+// additive secondary shape. PR 3 flips the UI to read `components` with
+// fallback to `sections`. PR 4+ migrates stores. After all call sites are
+// migrated, we remove the `sections` path entirely.
+
 export interface Project {
   id: string;
   name: string;
@@ -64,6 +107,13 @@ export interface Project {
 
   // --- Sections (per-project organizational units) ---
   sections?: Section[];
+
+  // --- Components (#1112 Arc — PR 1, additive) ---
+  // Evolved form of `sections`. See `Component` interface above. PR 1 is
+  // additive: if `components` is populated, readers may prefer it; if not,
+  // existing `sections` continues to work. PR 3 flips UI defaults. PR 4+
+  // migrates stores and removes the `sections` path.
+  components?: Component[];
 
   // --- Archive / migration ---
   isArchived?: boolean;
