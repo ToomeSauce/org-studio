@@ -302,12 +302,25 @@ function getActionableWork(store: StoreData, agentId: string): { hasWork: boolea
     if (isAssigned && status === 'backlog') {
       let gated = false;
       const proj = t.projectId ? (store.projects || []).find((p: any) => p.id === t.projectId) : null;
-      // Project state gate: stopped projects don't dispatch
-      if (proj && !isProjectRunning(proj)) {
+
+      // #1112 PR 2 follow-up: if the task's component declares its own waitsFor,
+      // that component is self-governed — skip the project-level state/horizon gates.
+      // Project-level gates only apply to the primary (un-governed) workstream.
+      const hasOwnWaitsFor = (() => {
+        if (!proj || !(t as any).sectionId) return false;
+        const comps: any[] = ((proj as any).components?.length
+          ? (proj as any).components
+          : ((proj as any).sections || []));
+        const cmp = comps.find((c: any) => c.id === (t as any).sectionId);
+        return !!(cmp && Array.isArray(cmp.waitsFor) && cmp.waitsFor.length > 0);
+      })();
+
+      // Project state gate: stopped projects don't dispatch (primary workstream only)
+      if (!hasOwnWaitsFor && proj && !isProjectRunning(proj)) {
         gated = true;
       }
-      // Approval horizon gate
-      if (!gated && t.projectId && t.version) {
+      // Approval horizon gate (primary workstream only)
+      if (!hasOwnWaitsFor && !gated && t.projectId && t.version) {
         const approvedThrough = proj?.autonomy?.approvedThrough;
         if (!approvedThrough || !isVersionInHorizon(t.version, approvedThrough)) {
           gated = true;
