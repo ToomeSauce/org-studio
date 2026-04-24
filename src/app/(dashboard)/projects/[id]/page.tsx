@@ -1,15 +1,27 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
-import { useRouter, useParams } from 'next/navigation';
+import { useEffect, useState, useRef, useMemo, useCallback, Suspense } from 'react';
+import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { clsx } from 'clsx';
-import { ArrowLeft, Loader, Pencil, X, Archive, ChevronRight, Plus } from 'lucide-react';
+import { ArrowLeft, Loader, Pencil, X, Archive, ChevronRight, Plus, Trash2 } from 'lucide-react';
 import { useWSData } from '@/lib/ws';
 import { getProjectStatusLabel } from '@/lib/vision-status';
 import { TaskDetailPanel } from '@/components/TaskDetailPanel';
-import { updateTask, addComment as addTaskComment, deleteTask } from '@/lib/store';
+import { updateTask, addComment as addTaskComment, deleteTask, addSection, updateSection, deleteSection } from '@/lib/store';
 import { isVersionInHorizon, formatVersion } from '@/lib/version-utils';
+import {
+  getComponentIcon,
+  getComponentCounts,
+  getComponentTotalCount,
+  resolveWaitsForLabel,
+  shouldShowLegacyDrawer,
+  filterTasksByComponent,
+  getEffectiveComponents,
+  type ComponentLike,
+  type ProjectLike,
+  type ComponentCounts as ComponentCountsType,
+} from '@/lib/component-helpers';
 import dynamic from 'next/dynamic';
 
 const RoadmapWithApprovalHorizon = dynamic(
@@ -154,8 +166,17 @@ function getProjectState(
 }
 
 export default function ProjectDetailPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader className="w-8 h-8 animate-spin text-[var(--text-muted)]" /></div>}>
+      <ProjectDetailPageInner />
+    </Suspense>
+  );
+}
+
+function ProjectDetailPageInner() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const projectId = params?.id as string;
 
   const storeData = useWSData('store');
@@ -178,6 +199,18 @@ export default function ProjectDetailPage() {
   const [editingGuardrails, setEditingGuardrails] = useState(false);
   const [guardrailsEditContent, setGuardrailsEditContent] = useState('');
   const [guardrailsSaving, setGuardrailsSaving] = useState(false);
+  // #1112 PR 3: Components panel state
+  const [showAddComponent, setShowAddComponent] = useState(false);
+  const [newComponent, setNewComponent] = useState({ name: '', owner: '', role: '' });
+  const [addingComponent, setAddingComponent] = useState(false);
+  const [editingComponent, setEditingComponent] = useState<string | null>(null); // component id or null
+  const [editComponentForm, setEditComponentForm] = useState<{
+    name: string; owner: string; role: string; outcomes: string; contract: string;
+    waitsFor: Array<{ componentId: string; projectId?: string; version: string }>;
+  }>({ name: '', owner: '', role: '', outcomes: '', contract: '', waitsFor: [] });
+  const [savingComponent, setSavingComponent] = useState(false);
+  // Board filter pill — from URL
+  const activeComponentFilter = searchParams.get('component') || 'all';
   const [proposingRoadmap, setProposingRoadmap] = useState(false);
   const [proposingError, setProposingError] = useState<string | null>(null);
 
@@ -273,6 +306,10 @@ export default function ProjectDetailPage() {
 
   // Parse roadmap
   const roadmapVersions = roadmap;
+
+  // #1112 PR 3: effective components (prefer components[], fall back to sections[])
+  const components = getEffectiveComponents(project as any);
+  const allProjects = (storeData?.projects || []) as ProjectLike[];
 
   // Filter tasks by current version
   const currentVersion = project.currentVersion;
@@ -387,6 +424,79 @@ export default function ProjectDetailPage() {
     } finally {
       setGuardrailsSaving(false);
     }
+  };
+
+  // #1112 PR 3: Component CRUD handlers
+  const handleAddComponent = async () => {
+    if (!newComponent.name.trim()) return;
+    setAddingComponent(true);
+    try {
+      await addSection(projectId, {
+        name: newComponent.name.trim(),
+        owner: newComponent.owner,
+        role: newComponent.role || undefined,
+        outcomes: '',
+        contract: '',
+      } as any);
+      setNewComponent({ name: '', owner: '', role: '' });
+      setShowAddComponent(false);
+    } catch (e) {
+      console.error('Failed to add component:', e);
+    } finally {
+      setAddingComponent(false);
+    }
+  };
+
+  const handleOpenEditComponent = (comp: ComponentLike) => {
+    setEditComponentForm({
+      name: comp.name,
+      owner: comp.owner,
+      role: comp.role || '',
+      outcomes: (comp as any).outcomes || '',
+      contract: (comp as any).contract || '',
+      waitsFor: (comp.waitsFor || []).map(w => ({ ...w })),
+    });
+    setEditingComponent(comp.id);
+  };
+
+  const handleSaveComponent = async () => {
+    if (!editingComponent) return;
+    setSavingComponent(true);
+    try {
+      await updateSection(projectId, editingComponent, {
+        name: editComponentForm.name,
+        owner: editComponentForm.owner,
+        role: editComponentForm.role || undefined,
+        outcomes: editComponentForm.outcomes,
+        contract: editComponentForm.contract,
+        waitsFor: editComponentForm.waitsFor.length > 0 ? editComponentForm.waitsFor : undefined,
+      } as any);
+      setEditingComponent(null);
+    } catch (e) {
+      console.error('Failed to save component:', e);
+    } finally {
+      setSavingComponent(false);
+    }
+  };
+
+  const handleDeleteComponent = async (compId: string) => {
+    if (!confirm('Delete this component? Tasks assigned to it will become unassigned.')) return;
+    try {
+      await deleteSection(projectId, compId);
+      if (editingComponent === compId) setEditingComponent(null);
+    } catch (e) {
+      console.error('Failed to delete component:', e);
+    }
+  };
+
+  const setComponentFilter = (id: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (id === 'all') {
+      params.delete('component');
+    } else {
+      params.set('component', id);
+    }
+    router.replace(`?${params.toString()}`, { scroll: false });
   };
 
   const handleArchiveProject = async () => {
@@ -648,25 +758,127 @@ export default function ProjectDetailPage() {
             </div>
           </div>
 
-          {/* Line 2: Team info */}
-          <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-[var(--text-muted)] ml-6">
-            {(project.visionOwner || project.owner) && (
-              <span>
-                Vision: <strong className="text-[var(--text-primary)]">{project.visionOwner || project.owner}</strong>
-              </span>
-            )}
-            {project.devOwner && (
-              <span>
-                Dev: <strong className="text-[var(--text-primary)]">{project.devOwner}</strong>
-              </span>
-            )}
-            {project.qaOwner && (
-              <span>
-                Backup Dev/QA: <strong className="text-[var(--text-primary)]">{project.qaOwner}</strong>
-              </span>
-            )}
-          </div>
+          {/* Line 2: Vision owner (single line — devOwner/qaOwner moved to Components panel) */}
+          {(project.visionOwner || project.owner) && (
+            <div className="text-sm text-[var(--text-muted)] ml-6">
+              Vision: <strong className="text-[var(--text-primary)]">{project.visionOwner || project.owner}</strong>
+            </div>
+          )}
         </div>
+
+        {/* #1112 PR 3: Components Panel */}
+        {components.length > 0 && (
+          <div className="space-y-2">
+            <h2 className="text-sm font-semibold text-[var(--text-secondary)] uppercase tracking-wide">Components</h2>
+            <div className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)] divide-y divide-[var(--border-color)]">
+              {components.map((comp) => {
+                const counts = getComponentCounts(projectTasks, comp.id, currentVersion);
+                const icon = getComponentIcon(comp.role);
+                return (
+                  <div key={comp.id} className="group">
+                    <button
+                      onClick={() => handleOpenEditComponent(comp)}
+                      className="w-full px-4 py-3 flex items-center gap-3 text-left hover:bg-[var(--bg-hover)] transition-colors"
+                    >
+                      <span className="text-base flex-shrink-0">{icon}</span>
+                      <span className="font-medium text-[var(--text-primary)] min-w-[80px]">{comp.name}</span>
+                      <span className="text-sm text-[var(--text-muted)] truncate">
+                        {comp.owner}{comp.role ? ` · ${comp.role}` : ''}
+                      </span>
+                      <div className="ml-auto flex items-center gap-2 text-xs font-mono flex-shrink-0">
+                        <span className={clsx(counts.backlog > 0 ? 'text-[var(--text-secondary)]' : 'text-[var(--text-muted)] opacity-40')}>{counts.backlog}b</span>
+                        <span className={clsx(counts.inProgress > 0 ? 'text-blue-500' : 'text-[var(--text-muted)] opacity-40')}>{counts.inProgress}p</span>
+                        <span className={clsx(counts.done > 0 ? 'text-green-500' : 'text-[var(--text-muted)] opacity-40')}>{counts.done}d</span>
+                      </div>
+                    </button>
+                    {/* waitsFor chips */}
+                    {comp.waitsFor && comp.waitsFor.length > 0 && (
+                      <div className="px-4 pb-2 flex items-center gap-2 flex-wrap">
+                        <span className="text-xs text-[var(--text-muted)]">⏳ waits for:</span>
+                        {comp.waitsFor.map((w, wi) => {
+                          const resolved = resolveWaitsForLabel(projectId, allProjects as any, w);
+                          return (
+                            <button
+                              key={wi}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (resolved.isCrossProject && resolved.targetProjectId) {
+                                  router.push(`/projects/${resolved.targetProjectId}`);
+                                } else {
+                                  // Scroll to component row (same project)
+                                  const el = document.getElementById(`comp-${w.componentId}`);
+                                  el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                }
+                              }}
+                              className="px-2 py-0.5 text-xs rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 hover:bg-amber-200 dark:hover:bg-amber-900/50 transition-colors"
+                            >
+                              {resolved.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {/* anchor for scroll-to */}
+                    <div id={`comp-${comp.id}`} />
+                  </div>
+                );
+              })}
+            </div>
+            <button
+              onClick={() => setShowAddComponent(true)}
+              className="flex items-center gap-1.5 text-sm text-[var(--accent-primary)] hover:text-[var(--accent-hover)] transition-colors font-medium"
+            >
+              <Plus size={14} />
+              Add component
+            </button>
+          </div>
+        )}
+
+        {/* Add Component - inline if no components yet */}
+        {components.length === 0 && (
+          <button
+            onClick={() => setShowAddComponent(true)}
+            className="flex items-center gap-1.5 text-sm text-[var(--accent-primary)] hover:text-[var(--accent-hover)] transition-colors font-medium"
+          >
+            <Plus size={14} />
+            Add first component
+          </button>
+        )}
+
+        {/* #1112 PR 3: Board Filter Pills */}
+        {components.length > 0 && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={() => setComponentFilter('all')}
+              className={clsx(
+                'px-3 py-1.5 rounded-full text-xs font-medium transition-colors border',
+                activeComponentFilter === 'all'
+                  ? 'bg-[var(--accent-primary)] text-white border-transparent'
+                  : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] border-[var(--border-color)] hover:bg-[var(--bg-hover)]'
+              )}
+            >
+              All
+            </button>
+            {components.map((comp) => {
+              const counts = getComponentCounts(projectTasks, comp.id, currentVersion);
+              const total = getComponentTotalCount(counts);
+              return (
+                <button
+                  key={comp.id}
+                  onClick={() => setComponentFilter(comp.id)}
+                  className={clsx(
+                    'px-3 py-1.5 rounded-full text-xs font-medium transition-colors border',
+                    activeComponentFilter === comp.id
+                      ? 'bg-[var(--accent-primary)] text-white border-transparent'
+                      : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] border-[var(--border-color)] hover:bg-[var(--bg-hover)]'
+                  )}
+                >
+                  {comp.name} {total > 0 && <span className="ml-1 opacity-70">{total}</span>}
+                </button>
+              );
+            })}
+          </div>
+        )}
 
         {/* No Roadmap Banner (#697) */}
         {!roadmapLoading && roadmapVersions.length === 0 && (
@@ -981,6 +1193,22 @@ What makes a good proposal?
           </div>
         </details>
 
+        {/* #1112 PR 3: Legacy owners drawer (conditional) */}
+        {shouldShowLegacyDrawer(project as any) && (
+          <details className="text-sm text-[var(--text-muted)]">
+            <summary className="cursor-pointer select-none hover:text-[var(--text-secondary)] transition-colors">
+              ▸ Legacy owners (read-only)
+            </summary>
+            <div className="mt-2 ml-4 space-y-1 border-l-2 border-[var(--border-color)] pl-3">
+              {project.devOwner && <p>Dev Owner: <strong className="text-[var(--text-primary)]">{project.devOwner}</strong></p>}
+              {project.qaOwner && <p>QA Owner: <strong className="text-[var(--text-primary)]">{project.qaOwner}</strong></p>}
+              <p className="text-xs text-[var(--text-muted)] mt-2 italic">
+                Superseded by Components panel. Kept for historical context; edit via Components going forward.
+              </p>
+            </div>
+          </details>
+        )}
+
         {/* Danger Zone */}
         <div className="rounded-2xl border border-red-200/50 dark:border-red-800/30 overflow-hidden">
           <div className="h-1 bg-red-500 dark:bg-red-400" />
@@ -1090,51 +1318,14 @@ What makes a good proposal?
                     </option>
                   ))}
                 </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">
-                  Dev Owner *
-                </label>
-                <select
-                  value={editProject.devOwner}
-                  onChange={(e) => setEditProject({ ...editProject, devOwner: e.target.value })}
-                  className="w-full px-3 py-2 bg-[var(--bg-primary)] border border-[var(--border-default)] rounded-[var(--radius-md)] text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
-                >
-                  {(storeData?.settings?.teammates || []).map((teammate: any) => (
-                    <option key={teammate.id} value={teammate.name}>
-                      {teammate.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">
-                  Dev Backup / QA (optional)
-                </label>
-                <select
-                  value={editProject.qaOwner}
-                  onChange={(e) => {
-                    console.log('[EditModal] qaOwner changed to:', JSON.stringify(e.target.value));
-                    setEditProject({ ...editProject, qaOwner: e.target.value });
-                  }}
-                  className="w-full px-3 py-2 bg-[var(--bg-primary)] border border-[var(--border-default)] rounded-[var(--radius-md)] text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
-                >
-                  <option value="">None</option>
-                  {(storeData?.settings?.teammates || []).map((teammate: any) => (
-                    <option key={teammate.id} value={teammate.name}>
-                      {teammate.name}
-                    </option>
-                  ))}
-                </select>
+                <p className="text-xs text-[var(--text-muted)] mt-1">Component owners are managed in the Components panel below.</p>
               </div>
             </div>
 
             <div className="flex items-center gap-2 mt-6">
               <button
                 onClick={handleSaveProject}
-                disabled={!editProject.name.trim() || !editProject.visionOwner || !editProject.devOwner || editLoading}
+                disabled={!editProject.name.trim() || !editProject.visionOwner || editLoading}
                 className="flex-1 px-4 py-2 bg-[var(--accent-primary)] text-white rounded-[var(--radius-md)] font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {editLoading ? 'Saving...' : 'Save'}
@@ -1148,6 +1339,253 @@ What makes a good proposal?
             </div>
           </div>
         </div>
+      )}
+
+      {/* #1112 PR 3: Add Component Modal */}
+      {showAddComponent && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-[var(--card)] border border-[var(--border-default)] rounded-[var(--radius-lg)] p-6 max-w-sm w-full mx-4 shadow-lg">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-[var(--text-primary)]">Add Component</h2>
+              <button onClick={() => setShowAddComponent(false)} className="p-1 hover:bg-[var(--bg-hover)] rounded transition-colors">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">Name *</label>
+                <input
+                  type="text"
+                  value={newComponent.name}
+                  onChange={(e) => setNewComponent({ ...newComponent, name: e.target.value })}
+                  placeholder="e.g. Frontend, Backend, QA"
+                  className="w-full px-3 py-2 bg-[var(--bg-primary)] border border-[var(--border-default)] rounded-[var(--radius-md)] text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">Owner</label>
+                <select
+                  value={newComponent.owner}
+                  onChange={(e) => setNewComponent({ ...newComponent, owner: e.target.value })}
+                  className="w-full px-3 py-2 bg-[var(--bg-primary)] border border-[var(--border-default)] rounded-[var(--radius-md)] text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+                >
+                  <option value="">Select owner...</option>
+                  {(storeData?.settings?.teammates || []).map((teammate: any) => (
+                    <option key={teammate.id} value={teammate.name}>{teammate.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">Role</label>
+                <input
+                  type="text"
+                  value={newComponent.role}
+                  onChange={(e) => setNewComponent({ ...newComponent, role: e.target.value })}
+                  placeholder="e.g. dev, qa, design, backend"
+                  className="w-full px-3 py-2 bg-[var(--bg-primary)] border border-[var(--border-default)] rounded-[var(--radius-md)] text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+                />
+              </div>
+            </div>
+            <div className="flex items-center gap-2 mt-4">
+              <button
+                onClick={handleAddComponent}
+                disabled={!newComponent.name.trim() || addingComponent}
+                className="flex-1 px-4 py-2 bg-[var(--accent-primary)] text-white rounded-[var(--radius-md)] font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50"
+              >
+                {addingComponent ? 'Adding...' : 'Add'}
+              </button>
+              <button
+                onClick={() => setShowAddComponent(false)}
+                className="flex-1 px-4 py-2 bg-[var(--bg-tertiary)] text-[var(--text-secondary)] rounded-[var(--radius-md)] font-medium hover:bg-[var(--bg-hover)] transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* #1112 PR 3: Edit Component Drawer (right panel) */}
+      {editingComponent && (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px] transition-opacity duration-200"
+            onClick={() => setEditingComponent(null)}
+          />
+          <div className="fixed top-0 right-0 z-50 h-full w-[480px] max-w-[90vw] bg-[var(--bg-primary)] border-l border-[var(--border-color)] overflow-y-auto shadow-xl">
+            <div className="p-6 space-y-5">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-semibold text-[var(--text-primary)]">Edit Component</h2>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleDeleteComponent(editingComponent)}
+                    className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 rounded transition-colors"
+                    title="Delete component"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                  <button onClick={() => setEditingComponent(null)} className="p-1.5 hover:bg-[var(--bg-hover)] rounded transition-colors">
+                    <X size={18} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">Name</label>
+                  <input
+                    type="text"
+                    value={editComponentForm.name}
+                    onChange={(e) => setEditComponentForm({ ...editComponentForm, name: e.target.value })}
+                    className="w-full px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-md)] text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">Owner</label>
+                  <select
+                    value={editComponentForm.owner}
+                    onChange={(e) => setEditComponentForm({ ...editComponentForm, owner: e.target.value })}
+                    className="w-full px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-md)] text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+                  >
+                    <option value="">Select owner...</option>
+                    {(storeData?.settings?.teammates || []).map((teammate: any) => (
+                      <option key={teammate.id} value={teammate.name}>{teammate.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">Role</label>
+                  <input
+                    type="text"
+                    value={editComponentForm.role}
+                    onChange={(e) => setEditComponentForm({ ...editComponentForm, role: e.target.value })}
+                    placeholder="e.g. dev, qa, design, backend"
+                    className="w-full px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-md)] text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">Outcomes</label>
+                  <textarea
+                    value={editComponentForm.outcomes}
+                    onChange={(e) => setEditComponentForm({ ...editComponentForm, outcomes: e.target.value })}
+                    placeholder="What this component exists to deliver..."
+                    className="w-full px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-md)] text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)] min-h-[80px] resize-y"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">Contract</label>
+                  <textarea
+                    value={editComponentForm.contract}
+                    onChange={(e) => setEditComponentForm({ ...editComponentForm, contract: e.target.value })}
+                    placeholder="What it gives to / expects from other components..."
+                    className="w-full px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-md)] text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)] min-h-[80px] resize-y"
+                  />
+                </div>
+
+                {/* waitsFor editor */}
+                <div>
+                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">Waits For</label>
+                  <div className="space-y-2">
+                    {editComponentForm.waitsFor.map((w, idx) => {
+                      // Build component options grouped by project
+                      const currentComponents = components.filter(c => c.id !== editingComponent);
+                      const otherProjects = (storeData?.projects || []).filter((p: any) => p.id !== projectId && !p.isArchived);
+                      return (
+                        <div key={idx} className="flex items-center gap-2">
+                          <select
+                            value={w.projectId ? `${w.projectId}:${w.componentId}` : w.componentId}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              const updated = [...editComponentForm.waitsFor];
+                              if (val.includes(':')) {
+                                const [pId, cId] = val.split(':');
+                                updated[idx] = { ...updated[idx], componentId: cId, projectId: pId };
+                              } else {
+                                updated[idx] = { ...updated[idx], componentId: val, projectId: undefined };
+                              }
+                              setEditComponentForm({ ...editComponentForm, waitsFor: updated });
+                            }}
+                            className="flex-1 px-2 py-1.5 bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded text-xs text-[var(--text-primary)] focus:outline-none"
+                          >
+                            <option value="">Select component...</option>
+                            {currentComponents.length > 0 && (
+                              <optgroup label="This project">
+                                {currentComponents.map(c => (
+                                  <option key={c.id} value={c.id}>{c.name}</option>
+                                ))}
+                              </optgroup>
+                            )}
+                            {otherProjects.map((p: any) => {
+                              const pComps = getEffectiveComponents(p);
+                              if (pComps.length === 0) return null;
+                              return (
+                                <optgroup key={p.id} label={p.name}>
+                                  {pComps.map((c: any) => (
+                                    <option key={`${p.id}:${c.id}`} value={`${p.id}:${c.id}`}>{c.name}</option>
+                                  ))}
+                                </optgroup>
+                              );
+                            })}
+                          </select>
+                          <span className="text-xs text-[var(--text-muted)]">@</span>
+                          <input
+                            type="text"
+                            value={w.version}
+                            onChange={(e) => {
+                              const updated = [...editComponentForm.waitsFor];
+                              updated[idx] = { ...updated[idx], version: e.target.value };
+                              setEditComponentForm({ ...editComponentForm, waitsFor: updated });
+                            }}
+                            placeholder="0.14.0"
+                            className="w-24 px-2 py-1.5 bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded text-xs text-[var(--text-primary)] focus:outline-none"
+                          />
+                          <button
+                            onClick={() => {
+                              const updated = editComponentForm.waitsFor.filter((_, i) => i !== idx);
+                              setEditComponentForm({ ...editComponentForm, waitsFor: updated });
+                            }}
+                            className="p-1 text-red-400 hover:text-red-500 transition-colors"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      );
+                    })}
+                    <button
+                      onClick={() => {
+                        setEditComponentForm({
+                          ...editComponentForm,
+                          waitsFor: [...editComponentForm.waitsFor, { componentId: '', version: '' }],
+                        });
+                      }}
+                      className="flex items-center gap-1 text-xs text-[var(--accent-primary)] hover:text-[var(--accent-hover)] transition-colors"
+                    >
+                      <Plus size={12} />
+                      Add waitsFor
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 pt-2 border-t border-[var(--border-color)]">
+                <button
+                  onClick={handleSaveComponent}
+                  disabled={!editComponentForm.name.trim() || savingComponent}
+                  className="flex-1 px-4 py-2 bg-[var(--accent-primary)] text-white rounded-[var(--radius-md)] font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50"
+                >
+                  {savingComponent ? 'Saving...' : 'Save'}
+                </button>
+                <button
+                  onClick={() => setEditingComponent(null)}
+                  className="flex-1 px-4 py-2 bg-[var(--bg-tertiary)] text-[var(--text-secondary)] rounded-[var(--radius-md)] font-medium hover:bg-[var(--bg-hover)] transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
       )}
 
       {/* Task Detail Panel */}

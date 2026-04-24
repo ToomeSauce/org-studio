@@ -319,12 +319,17 @@ export async function addComment(taskId: string, comment: Omit<TaskComment, 'id'
 }
 
 // === Section mutators ===
+// #1112 PR 3: dual-write — keep both `sections[]` and `components[]` in sync
+// in the local cache so the new Components panel reads fresh data immediately.
 export async function addSection(projectId: string, section: Omit<Section, 'id'> & { id?: string }): Promise<Section> {
   const result = await mutateStore('addSection', { projectId, section });
-  // Update local cache
+  // Update local cache — dual-write sections + components
   _projects = _projects.map(p => {
     if (p.id !== projectId) return p;
-    return { ...p, sections: [...(p.sections || []), result.section] };
+    const updated: Partial<Project> = { sections: [...(p.sections || []), result.section] };
+    // Mirror into components[] so the new UI sees it immediately
+    updated.components = [...(p.components || []), result.section as Component];
+    return { ...p, ...updated };
   });
   return result.section;
 }
@@ -333,7 +338,11 @@ export async function updateSection(projectId: string, sectionId: string, update
   await mutateStore('updateSection', { projectId, sectionId, updates });
   _projects = _projects.map(p => {
     if (p.id !== projectId) return p;
-    return { ...p, sections: (p.sections || []).map(s => s.id === sectionId ? { ...s, ...updates } : s) };
+    return {
+      ...p,
+      sections: (p.sections || []).map(s => s.id === sectionId ? { ...s, ...updates } : s),
+      components: (p.components || []).map(c => c.id === sectionId ? { ...c, ...updates } : c),
+    };
   });
 }
 
@@ -341,7 +350,11 @@ export async function deleteSection(projectId: string, sectionId: string): Promi
   await mutateStore('deleteSection', { projectId, sectionId });
   _projects = _projects.map(p => {
     if (p.id !== projectId) return p;
-    return { ...p, sections: (p.sections || []).filter(s => s.id !== sectionId) };
+    return {
+      ...p,
+      sections: (p.sections || []).filter(s => s.id !== sectionId),
+      components: (p.components || []).filter(c => c.id !== sectionId),
+    };
   });
 }
 
@@ -352,7 +365,11 @@ export async function reorderSections(projectId: string, sectionIds: string[]): 
     const sMap = new Map((p.sections || []).map(s => [s.id, s]));
     const ordered = sectionIds.filter(id => sMap.has(id)).map(id => sMap.get(id)!);
     const rest = (p.sections || []).filter(s => !sectionIds.includes(s.id));
-    return { ...p, sections: [...ordered, ...rest] };
+    // Mirror reorder to components[]
+    const cMap = new Map((p.components || []).map(c => [c.id, c]));
+    const cOrdered = sectionIds.filter(id => cMap.has(id)).map(id => cMap.get(id)!);
+    const cRest = (p.components || []).filter(c => !sectionIds.includes(c.id));
+    return { ...p, sections: [...ordered, ...rest], components: [...cOrdered, ...cRest] };
   });
 }
 
