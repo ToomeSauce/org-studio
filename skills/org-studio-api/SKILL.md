@@ -92,6 +92,23 @@ That's it. **Cross-domain work** is handled via comment @-pings to the relevant 
 
 If a task is stuck waiting on an external answer or dependency, move it to **blocked** (dedicated status) with a comment explaining what's needed. Blocked ≠ Review. Review is for human sign-off on finished work; blocked is for work that can't proceed.
 
+**Structured `blockedBy` (auto-unblock):** When you flip a task to `blocked` _because of another Org Studio task_, **declare the structured edge** in the `blockedBy` field. Pass an array of the blocker ticket numbers:
+
+```bash
+curl -sX POST http://localhost:4501/api/store -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" -d '{
+  "action": "updateTask",
+  "id": "<your-task-id>",
+  "updates": {
+    "status": "blocked",
+    "blockedBy": [1098, 1099]
+  }
+}'
+```
+
+With `blockedBy` set, the scheduler fans out automatically when **every** declared blocker reaches `status: done`: your task flips back to `backlog`, the loop counters reset, a `🔓 Auto-unblocked` System comment is posted, and your agent loop is triggered. No human nudge needed.
+
+**If the blocker is external** (waiting on a human, a third-party API, a decision) and not an Org Studio task — leave `blockedBy` empty. The task stays blocked until a human manually unblocks it. This is the safe fallback; don't invent fake tickets just to get auto-unblock.
+
 ## Work Loop
 
 This is the canonical work loop for every agent session. Follow it exactly.
