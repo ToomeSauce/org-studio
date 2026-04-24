@@ -200,6 +200,12 @@ function hasActionableWork(store: StoreData, agentId: string): boolean {
  * Returns true when every non-archived task for (componentId, version)
  * on the target project has status === 'done'. Returns false when the set
  * is empty (empty ≠ complete) or when any task is not yet done.
+ *
+ * #1112 PR 2 follow-up: a task with no sectionId on a project that has
+ * components/sections counts against the PRIMARY component (first non-QA,
+ * non-support). Without this, legacy projects (where most tasks predate the
+ * Components model and carry sectionId=null) never satisfy waitsFor on Main,
+ * so dependent components like QA stay gated forever.
  */
 function isComponentVersionComplete(
   store: StoreData,
@@ -207,11 +213,22 @@ function isComponentVersionComplete(
   targetComponentId: string,
   targetVersion: string,
 ): boolean {
+  const proj = (store.projects || []).find((p: any) => p.id === targetProjectId);
+  const components: any[] = proj
+    ? ((proj as any).components && (proj as any).components.length
+        ? (proj as any).components
+        : ((proj as any).sections || []))
+    : [];
+  const primary = components.find((c: any) => !c.role || (c.role !== 'qa' && c.role !== 'support'));
+  const isTargetPrimary = primary?.id === targetComponentId;
+
   let sawAny = false;
   for (const t of store.tasks || []) {
     if (t.isArchived) continue;
     if (t.projectId !== targetProjectId) continue;
-    if ((t as any).sectionId !== targetComponentId) continue;
+    const sec = (t as any).sectionId;
+    const matches = sec === targetComponentId || (isTargetPrimary && (!sec || sec === ''));
+    if (!matches) continue;
     if (t.version !== targetVersion) continue;
     sawAny = true;
     if (t.status !== 'done') return false;
