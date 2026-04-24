@@ -17,8 +17,10 @@ import type { AgentLoop } from '@/lib/store';
 import { authenticateRequest } from '@/lib/auth';
 import { writeHeartbeat } from '@/lib/heartbeats';
 import { getStoreProvider, type StoreData } from '@/lib/store-provider';
-import { isVersionInHorizon } from '@/lib/version-utils';
-import { isProjectRunning } from '@/lib/project-state';
+import {
+  isTaskDispatchEligible,
+  isTaskWaiting,
+} from '@/lib/dispatch-gate';
 const DEFAULT_MODEL = 'foundry-openai-chat/gpt-5.4';
 
 // Minimum seconds between event-driven triggers for the same agent (debounce)
@@ -171,101 +173,18 @@ function hasActionableWork(store: StoreData, agentId: string): boolean {
   return getActionableWork(store, agentId).hasWork;
 }
 
-// #1112 PR 2 — Component-level dispatch gating via `waitsFor`.
+// #1112 PR 4 — pure dispatch gating lives in src/lib/dispatch-gate.ts.
+// Semantics (recap; details in that module):
+//   Rule 1: project.state === 'started'
+//   Rule 2: task has sectionId + version
+//   Rule 3: task.version <= component.approvedThrough
+//   Rule 4: component-version waitsFor satisfied
+//   Rule 5: status=backlog + assignee (checked at this call site)
 //
-// Semantics (design lock, per ticket plan comment):
-//   Option A — DERIVED DISPATCH GATING (chosen over explicit blocked+unblock).
-//
-//   A component's `waitsFor` is enforced at dispatch time, not by flipping
-//   individual tasks to status=blocked. A task in `backlog` whose component has
-//   an unsatisfied `waitsFor` entry is invisible to `getActionableWork`. When
-//   the target component (componentId + version) completes all its non-archived
-//   tasks, its dependents become eligible automatically on the next tick.
-//
-// Why not (B) explicit blocked+unblock:
-//   - (B) would require manually flipping every QA task to blocked, then
-//     unblocking them all later. Noisy, error-prone.
-//   - (A) is stateless: truth lives in `component.waitsFor` + current board.
-//   - Task-level ad-hoc blockers still use the #1102 `blockedBy` mechanism;
-//     the two coexist (component-scope + task-scope).
-//
-// Semantics of "component X completed version Y":
-//   All non-archived tasks with `projectId === X.projectId AND sectionId === X.id
-//   AND version === Y` have `status === done`. If zero such tasks exist, the
-//   component is NOT considered complete for that version — empty set ≠ done.
-//   (This prevents a component that has never been given any v1.0 tasks from
-//   trivially "satisfying" a dependent's waitsFor(v1.0).)
-
-/**
- * Returns true when every non-archived task for (componentId, version)
- * on the target project has status === 'done'. Returns false when the set
- * is empty (empty ≠ complete) or when any task is not yet done.
- *
- * #1112 PR 2 follow-up: a task with no sectionId on a project that has
- * components/sections counts against the PRIMARY component (first non-QA,
- * non-support). Without this, legacy projects (where most tasks predate the
- * Components model and carry sectionId=null) never satisfy waitsFor on Main,
- * so dependent components like QA stay gated forever.
- */
-function isComponentVersionComplete(
-  store: StoreData,
-  targetProjectId: string,
-  targetComponentId: string,
-  targetVersion: string,
-): boolean {
-  const proj = (store.projects || []).find((p: any) => p.id === targetProjectId);
-  const components: any[] = proj
-    ? ((proj as any).components && (proj as any).components.length
-        ? (proj as any).components
-        : ((proj as any).sections || []))
-    : [];
-  const primary = components.find((c: any) => !c.role || (c.role !== 'qa' && c.role !== 'support'));
-  const isTargetPrimary = primary?.id === targetComponentId;
-
-  let sawAny = false;
-  for (const t of store.tasks || []) {
-    if (t.isArchived) continue;
-    if (t.projectId !== targetProjectId) continue;
-    const sec = (t as any).sectionId;
-    const matches = sec === targetComponentId || (isTargetPrimary && (!sec || sec === ''));
-    if (!matches) continue;
-    if (t.version !== targetVersion) continue;
-    sawAny = true;
-    if (t.status !== 'done') return false;
-  }
-  return sawAny;
-}
-
-/**
- * Returns true when the task is gated (NOT dispatch-eligible) by its
- * component's `waitsFor` declarations. Returns false if the task has no
- * component, or the component has no `waitsFor`, or every `waitsFor` entry
- * is satisfied.
- *
- * Works with either `project.components` (new, PR 1) or `project.sections`
- * (legacy). Prefers `components` when populated.
- */
-function isTaskGatedByComponentWaitsFor(store: StoreData, task: any): boolean {
-  const sectionId = task?.sectionId;
-  if (!sectionId) return false;
-  const proj = (store.projects || []).find((p: any) => p.id === task.projectId);
-  if (!proj) return false;
-  const components: any[] = (proj as any).components && (proj as any).components.length
-    ? (proj as any).components
-    : (proj.sections || []);
-  const cmp = components.find((c: any) => c.id === sectionId);
-  if (!cmp) return false;
-  const waitsFor: any[] = Array.isArray(cmp.waitsFor) ? cmp.waitsFor : [];
-  if (waitsFor.length === 0) return false;
-  for (const w of waitsFor) {
-    const targetProjectId = w.projectId || task.projectId;
-    if (!w.componentId || !w.version) continue; // malformed entry — ignore
-    if (!isComponentVersionComplete(store, targetProjectId, w.componentId, w.version)) {
-      return true; // any unsatisfied entry gates the task
-    }
-  }
-  return false;
-}
+// Option A (derived dispatch gating) still applies: truth lives on
+// components[].versions[] + store state, not on per-task `blocked` flips.
+// Task-level ad-hoc blockers still use the #1102 `blockedBy` mechanism —
+// the two coexist (component-scope + task-scope).
 
 /**
  * Detailed check for actionable work. Returns what TYPE of work exists.
@@ -296,41 +215,10 @@ function getActionableWork(store: StoreData, agentId: string): { hasWork: boolea
       continue;
     }
 
-    // Backlog: new work to pick up — but only if the task's project is running
-    // AND its version is within the project's approval horizon
-    // AND its component's waitsFor (if any) is satisfied.
+    // #1112 PR 4 — per-component dispatch gating. Rules 1-4 encoded in
+    // isTaskDispatchEligible(); rule 5 (backlog + assignee) checked here.
     if (isAssigned && status === 'backlog') {
-      let gated = false;
-      const proj = t.projectId ? (store.projects || []).find((p: any) => p.id === t.projectId) : null;
-
-      // #1112 PR 2 follow-up: if the task's component declares its own waitsFor,
-      // that component is self-governed — skip the project-level state/horizon gates.
-      // Project-level gates only apply to the primary (un-governed) workstream.
-      const hasOwnWaitsFor = (() => {
-        if (!proj || !(t as any).sectionId) return false;
-        const comps: any[] = ((proj as any).components?.length
-          ? (proj as any).components
-          : ((proj as any).sections || []));
-        const cmp = comps.find((c: any) => c.id === (t as any).sectionId);
-        return !!(cmp && Array.isArray(cmp.waitsFor) && cmp.waitsFor.length > 0);
-      })();
-
-      // Project state gate: stopped projects don't dispatch (primary workstream only)
-      if (!hasOwnWaitsFor && proj && !isProjectRunning(proj)) {
-        gated = true;
-      }
-      // Approval horizon gate (primary workstream only)
-      if (!hasOwnWaitsFor && !gated && t.projectId && t.version) {
-        const approvedThrough = proj?.autonomy?.approvedThrough;
-        if (!approvedThrough || !isVersionInHorizon(t.version, approvedThrough)) {
-          gated = true;
-        }
-      }
-      // #1112 PR 2: component waitsFor gate
-      if (!gated && isTaskGatedByComponentWaitsFor(store, t)) {
-        gated = true;
-      }
-      if (!gated) hasNewWork = true;
+      if (isTaskDispatchEligible(store, t as any)) hasNewWork = true;
     }
 
     // #862: QA-column routing removed — QA tickets are ordinary tickets owned by the QA component owner (assignee).
@@ -753,17 +641,13 @@ export async function POST(request: NextRequest) {
           const nameLower = agentName.toLowerCase();
           const agentId = loop.agentId;
 
-          // 1. Backlog orphans — tasks in backlog assigned to this agent,
-          //    respecting the per-project approval horizon.
+          // 1. Backlog orphans — tasks in backlog dispatch-eligible for this
+          //    agent (#1112 PR 4 per-component gating).
           const backlogTasks = store.tasks.filter(t => {
             const a = (t.assignee || '').toLowerCase();
             if (!(a === nameLower || a === agentId)) return false;
             if (t.status !== 'backlog') return false;
-            if (!t.projectId || !t.version) return true;
-            const proj = (store.projects || []).find((p: any) => p.id === t.projectId);
-            const approvedThrough = proj?.autonomy?.approvedThrough;
-            if (!approvedThrough) return false;
-            return isVersionInHorizon(t.version, approvedThrough);
+            return isTaskDispatchEligible(store, t as any);
           });
 
           if (backlogTasks.length > 0) {
@@ -825,7 +709,47 @@ export async function POST(request: NextRequest) {
           // No actionable work found for this agent
         }
 
-        return NextResponse.json({ ok: true, swept });
+        // #1112 PR 4 — auto-stop pass.
+        //
+        // For each STARTED project, check whether any component has a
+        // dispatch-eligible task or active work. If nothing is dispatchable
+        // AND nothing is "waiting" (blocked or within-horizon-but-gated),
+        // flip the project to stopped and emit a notification comment.
+        //
+        // Active work (in-progress / review) keeps the project started.
+        // Blocked + waitsFor-gated work keeps the project started (waiting).
+        // Above-horizon work does NOT keep the project started — that's the
+        // user's signal to extend approval.
+        const autoStopped: string[] = [];
+        for (const proj of (store.projects || [])) {
+          if ((proj as any).state !== 'started') continue;
+
+          let keep = false;
+          for (const t of (store.tasks || [])) {
+            if ((t as any).isArchived) continue;
+            if (t.projectId !== proj.id) continue;
+
+            if (t.status === 'in-progress' || t.status === 'review') { keep = true; break; }
+            if (isTaskDispatchEligible(store, t as any)) { keep = true; break; }
+            if (isTaskWaiting(store, t as any)) { keep = true; break; }
+          }
+
+          if (!keep) {
+            try {
+              const provider = await getStoreProvider();
+              await provider.updateProject(proj.id, { state: 'stopped' });
+              await provider.addComment(
+                { kind: 'project', boardProjectId: proj.id },
+                { author: 'system', text: '✅ All approved work shipped. Extend approval on a component to continue.' },
+              );
+              autoStopped.push(proj.id);
+            } catch (err) {
+              console.error(`[AutoStop] ${proj.id} — failed:`, err);
+            }
+          }
+        }
+
+        return NextResponse.json({ ok: true, swept, autoStopped });
       }
 
       case 'resume': {
