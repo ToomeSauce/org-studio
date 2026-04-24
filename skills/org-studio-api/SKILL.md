@@ -109,6 +109,35 @@ With `blockedBy` set, the scheduler fans out automatically when **every** declar
 
 **If the blocker is external** (waiting on a human, a third-party API, a decision) and not an Org Studio task — leave `blockedBy` empty. The task stays blocked until a human manually unblocks it. This is the safe fallback; don't invent fake tickets just to get auto-unblock.
 
+### Component-level `waitsFor` (dispatch gating, no manual block needed)
+
+**`blockedBy` is for task-level blockers. `waitsFor` is for component-level dependencies** — use it when an entire component (e.g. a QA component) can't start until another component (e.g. Dev) ships a version.
+
+A project's `components[]` can declare versioned inter-component dependencies:
+
+```json
+{
+  "id": "cmp-qa",
+  "name": "QA",
+  "owner": "Billy",
+  "role": "qa",
+  "outcomes": "Validate end-to-end for each shipped version",
+  "contract": "Receives dev-complete tasks from Main section",
+  "waitsFor": [
+    { "componentId": "cmp-dev", "version": "0.3.0" },
+    { "componentId": "cmp-ext-api", "projectId": "proj-other", "version": "1.0.0" }
+  ]
+}
+```
+
+Tasks on a component with unsatisfied `waitsFor` entries are **invisible to the dispatcher**. You don't mark them `blocked` — they simply don't dispatch. When every referenced `(componentId, version)` has all its non-archived tasks at `status: done`, dispatch becomes eligible automatically, a one-time `🔓 Component unblocked` System comment is posted on one of the newly-eligible backlog tasks, and the component owner's loop is triggered.
+
+**Rules of thumb:**
+- Use `waitsFor` for the "QA waits for Dev ship" / "Frontend waits for Backend API stable" pattern. One declaration covers every task on the component.
+- Use task-level `blockedBy` for one-off mid-sprint blockers ("this specific task is waiting on that specific ticket").
+- `role` on a component is descriptive free text — schedulers never branch on it.
+- An empty target component (no tasks at all for that version) is NOT treated as complete. If you intend to skip a waitsFor entry, remove the entry; don't leave an empty target expecting auto-satisfaction.
+
 ## Work Loop
 
 This is the canonical work loop for every agent session. Follow it exactly.

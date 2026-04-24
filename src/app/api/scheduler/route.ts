@@ -171,6 +171,85 @@ function hasActionableWork(store: StoreData, agentId: string): boolean {
   return getActionableWork(store, agentId).hasWork;
 }
 
+// #1112 PR 2 — Component-level dispatch gating via `waitsFor`.
+//
+// Semantics (design lock, per ticket plan comment):
+//   Option A — DERIVED DISPATCH GATING (chosen over explicit blocked+unblock).
+//
+//   A component's `waitsFor` is enforced at dispatch time, not by flipping
+//   individual tasks to status=blocked. A task in `backlog` whose component has
+//   an unsatisfied `waitsFor` entry is invisible to `getActionableWork`. When
+//   the target component (componentId + version) completes all its non-archived
+//   tasks, its dependents become eligible automatically on the next tick.
+//
+// Why not (B) explicit blocked+unblock:
+//   - (B) would require manually flipping every QA task to blocked, then
+//     unblocking them all later. Noisy, error-prone.
+//   - (A) is stateless: truth lives in `component.waitsFor` + current board.
+//   - Task-level ad-hoc blockers still use the #1102 `blockedBy` mechanism;
+//     the two coexist (component-scope + task-scope).
+//
+// Semantics of "component X completed version Y":
+//   All non-archived tasks with `projectId === X.projectId AND sectionId === X.id
+//   AND version === Y` have `status === done`. If zero such tasks exist, the
+//   component is NOT considered complete for that version — empty set ≠ done.
+//   (This prevents a component that has never been given any v1.0 tasks from
+//   trivially "satisfying" a dependent's waitsFor(v1.0).)
+
+/**
+ * Returns true when every non-archived task for (componentId, version)
+ * on the target project has status === 'done'. Returns false when the set
+ * is empty (empty ≠ complete) or when any task is not yet done.
+ */
+function isComponentVersionComplete(
+  store: StoreData,
+  targetProjectId: string,
+  targetComponentId: string,
+  targetVersion: string,
+): boolean {
+  let sawAny = false;
+  for (const t of store.tasks || []) {
+    if (t.isArchived) continue;
+    if (t.projectId !== targetProjectId) continue;
+    if ((t as any).sectionId !== targetComponentId) continue;
+    if (t.version !== targetVersion) continue;
+    sawAny = true;
+    if (t.status !== 'done') return false;
+  }
+  return sawAny;
+}
+
+/**
+ * Returns true when the task is gated (NOT dispatch-eligible) by its
+ * component's `waitsFor` declarations. Returns false if the task has no
+ * component, or the component has no `waitsFor`, or every `waitsFor` entry
+ * is satisfied.
+ *
+ * Works with either `project.components` (new, PR 1) or `project.sections`
+ * (legacy). Prefers `components` when populated.
+ */
+function isTaskGatedByComponentWaitsFor(store: StoreData, task: any): boolean {
+  const sectionId = task?.sectionId;
+  if (!sectionId) return false;
+  const proj = (store.projects || []).find((p: any) => p.id === task.projectId);
+  if (!proj) return false;
+  const components: any[] = (proj as any).components && (proj as any).components.length
+    ? (proj as any).components
+    : (proj.sections || []);
+  const cmp = components.find((c: any) => c.id === sectionId);
+  if (!cmp) return false;
+  const waitsFor: any[] = Array.isArray(cmp.waitsFor) ? cmp.waitsFor : [];
+  if (waitsFor.length === 0) return false;
+  for (const w of waitsFor) {
+    const targetProjectId = w.projectId || task.projectId;
+    if (!w.componentId || !w.version) continue; // malformed entry — ignore
+    if (!isComponentVersionComplete(store, targetProjectId, w.componentId, w.version)) {
+      return true; // any unsatisfied entry gates the task
+    }
+  }
+  return false;
+}
+
 /**
  * Detailed check for actionable work. Returns what TYPE of work exists.
  * This distinction matters: an in-progress task means the agent is ALREADY working —
@@ -201,7 +280,8 @@ function getActionableWork(store: StoreData, agentId: string): { hasWork: boolea
     }
 
     // Backlog: new work to pick up — but only if the task's project is running
-    // AND its version is within the project's approval horizon.
+    // AND its version is within the project's approval horizon
+    // AND its component's waitsFor (if any) is satisfied.
     if (isAssigned && status === 'backlog') {
       let gated = false;
       const proj = t.projectId ? (store.projects || []).find((p: any) => p.id === t.projectId) : null;
@@ -215,6 +295,10 @@ function getActionableWork(store: StoreData, agentId: string): { hasWork: boolea
         if (!approvedThrough || !isVersionInHorizon(t.version, approvedThrough)) {
           gated = true;
         }
+      }
+      // #1112 PR 2: component waitsFor gate
+      if (!gated && isTaskGatedByComponentWaitsFor(store, t)) {
+        gated = true;
       }
       if (!gated) hasNewWork = true;
     }

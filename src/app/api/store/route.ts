@@ -922,6 +922,114 @@ export async function POST(req: NextRequest) {
           }
         }
 
+        // #1112 PR 2: Component-version completion announcement.
+        //
+        // When this task transition to `done` just completed its component's
+        // version, scan all OTHER components (any project) for matching
+        // `waitsFor` entries. On each dependent component that now becomes
+        // dispatch-eligible, post ONE System comment on ONE of its
+        // now-eligible backlog tasks (to avoid per-task spam). Also trigger
+        // that component's owner so the dispatcher picks up the newly-eligible
+        // work immediately.
+        //
+        // This is strictly observability + scheduler nudge. The actual
+        // gating lives in `isTaskGatedByComponentWaitsFor` in scheduler.ts —
+        // the dispatcher reads component.waitsFor directly at eval time; this
+        // block does NOT mutate task statuses.
+        if (payload.updates?.status === 'done') {
+          const completed = store.tasks.find(t => t.id === payload.id);
+          const completedSectionId = (completed as any)?.sectionId;
+          const completedVersion = completed?.version;
+          if (completedSectionId && completedVersion && completed?.projectId) {
+            // Did THIS done transition complete the component's version?
+            const stillOpen = store.tasks.some(t =>
+              !t.isArchived &&
+              t.id !== completed.id &&
+              t.projectId === completed.projectId &&
+              (t as any).sectionId === completedSectionId &&
+              t.version === completedVersion &&
+              t.status !== 'done'
+            );
+            if (!stillOpen) {
+              // Component-version complete. Scan for dependents.
+              const completedProjectId = completed.projectId;
+              const announcedComponents = new Set<string>();
+              for (const proj of store.projects || []) {
+                const comps: any[] = (proj as any).components?.length
+                  ? (proj as any).components
+                  : (proj.sections || []);
+                for (const cmp of comps) {
+                  if (!Array.isArray(cmp.waitsFor) || cmp.waitsFor.length === 0) continue;
+                  const matches = cmp.waitsFor.some((w: any) =>
+                    w.componentId === completedSectionId &&
+                    w.version === completedVersion &&
+                    (w.projectId ? w.projectId === completedProjectId : proj.id === completedProjectId)
+                  );
+                  if (!matches) continue;
+
+                  // Skip if this component still has OTHER unsatisfied waitsFor entries
+                  const stillWaiting = cmp.waitsFor.some((w: any) => {
+                    if (w.componentId === completedSectionId && w.version === completedVersion) return false;
+                    const targetProjectId = w.projectId || proj.id;
+                    // Inline version of isComponentVersionComplete to avoid scheduler import
+                    let sawAny = false;
+                    for (const t of store.tasks || []) {
+                      if (t.isArchived) continue;
+                      if (t.projectId !== targetProjectId) continue;
+                      if ((t as any).sectionId !== w.componentId) continue;
+                      if (t.version !== w.version) continue;
+                      sawAny = true;
+                      if (t.status !== 'done') return true; // still waiting on this entry
+                    }
+                    return !sawAny; // empty set ≠ complete → still waiting
+                  });
+                  if (stillWaiting) continue;
+
+                  // Find one surviving backlog task on this component to anchor the announcement
+                  const anchor = store.tasks.find(t =>
+                    !t.isArchived &&
+                    t.projectId === proj.id &&
+                    (t as any).sectionId === cmp.id &&
+                    t.status === 'backlog'
+                  );
+
+                  const key = `${proj.id}::${cmp.id}`;
+                  if (announcedComponents.has(key)) continue;
+                  announcedComponents.add(key);
+
+                  const completedCmp = (store.projects.find(p => p.id === completedProjectId) as any);
+                  const completedCmpList: any[] = completedCmp?.components?.length
+                    ? completedCmp.components
+                    : (completedCmp?.sections || []);
+                  const completedCmpName = completedCmpList.find((c: any) => c.id === completedSectionId)?.name || completedSectionId;
+
+                  if (anchor) {
+                    try {
+                      await getStoreProvider().addComment(anchor.id, {
+                        id: Math.random().toString(36).slice(2, 10) + Date.now().toString(36),
+                        createdAt: Date.now(),
+                        author: 'System',
+                        content: `🔓 **Component unblocked** — *${completedCmpName}* @ \`${completedVersion}\` shipped. *${cmp.name}* is now dispatch-eligible; this task and siblings can be picked up.`,
+                        type: 'system',
+                      } as any);
+                    } catch (e: any) {
+                      console.error(`[Component-unblock] failed to post announcement on #${anchor.ticketNumber}:`, e?.message);
+                    }
+                  }
+
+                  console.log(
+                    `[Component-unblock] ${completedCmpName}@${completedVersion} shipped → ${cmp.name} (${proj.name}) dispatch-eligible`
+                  );
+
+                  // Trigger the dependent component's owner so the now-eligible
+                  // backlog task surfaces on the next tick.
+                  if (cmp.owner) triggerAgentLoop(cmp.owner, store);
+                }
+              }
+            }
+          }
+        }
+
         // **NEW: Handle version completion asynchronously**
         if (versionCompletionTriggered) {
           (async () => {
