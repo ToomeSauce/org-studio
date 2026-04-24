@@ -9,6 +9,11 @@ FROM node:22-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+# #1112 PR 7 (2026-04-24): bake the build SHA into the bundle so the
+# sidebar can show which commit is running. Workflow passes this as
+# --build-arg BUILD_SHA=$SOURCE_SHA. Falls back to 'dev' for local builds.
+ARG BUILD_SHA=dev
+ENV NEXT_PUBLIC_BUILD_SHA=$BUILD_SHA
 RUN npm run build
 
 # Stage 3: Production image

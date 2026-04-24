@@ -23,6 +23,10 @@ const bottomNav = [
   { name: 'Health', href: '/health', icon: Activity, emoji: '🩺' },
 ];
 
+// Baked in at build time by the Docker build (--build-arg BUILD_SHA).
+// Local dev builds fall back to 'dev'. Hovering the pill shows the full SHA.
+const BUILD_SHA = process.env.NEXT_PUBLIC_BUILD_SHA || 'dev';
+
 export function Sidebar() {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
@@ -123,6 +127,14 @@ export function Sidebar() {
             >
               <item.icon size={17} className="shrink-0 opacity-70" />
               {!collapsed && <span className="truncate">{item.name}</span>}
+              {!collapsed && (
+                <span
+                  className="ml-auto font-mono text-[10px] leading-none px-1.5 py-0.5 rounded bg-[var(--bg-hover)] text-[var(--text-tertiary)] tabular-nums"
+                  title={`Build: ${BUILD_SHA}`}
+                >
+                  {BUILD_SHA.slice(0, 7)}
+                </span>
+              )}
             </Link>
           );
         })}
