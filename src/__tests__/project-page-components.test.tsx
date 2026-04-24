@@ -11,7 +11,11 @@ import {
   shouldShowLegacyDrawer,
   filterTasksByComponent,
   getEffectiveComponents,
+  getPrimaryComponent,
+  getComponentVersions,
+  getComponentApprovedThrough,
   type ComponentLike,
+  type ComponentVersionLike,
   type ProjectLike,
   type TaskLike,
 } from '@/lib/component-helpers';
@@ -235,3 +239,158 @@ describe('getEffectiveComponents', () => {
 
 // 2. Row shows owner + role + counts — covered by getComponentCounts + getComponentIcon tests above
 // 8. Edit modal no longer has Dev Owner field — verified by build + UI smoke test (no @testing-library/react)
+
+// ─── #1112 PR 3: per-component roadmap helpers ───
+
+describe('getPrimaryComponent', () => {
+  it('returns first non-QA, non-support component', () => {
+    const proj: ProjectLike = {
+      id: 'p',
+      name: 'P',
+      components: [
+        { id: 'qa', name: 'QA', owner: 'B', role: 'qa' },
+        { id: 'main', name: 'Main', owner: 'M' },
+        { id: 'support', name: 'Support', owner: 'S', role: 'support' },
+      ],
+    };
+    expect(getPrimaryComponent(proj)?.id).toBe('main');
+  });
+
+  it('treats component with no role as primary-eligible', () => {
+    const proj: ProjectLike = {
+      id: 'p',
+      name: 'P',
+      components: [{ id: 'main', name: 'Main', owner: 'M' }],
+    };
+    expect(getPrimaryComponent(proj)?.id).toBe('main');
+  });
+
+  it('falls back to sections[] when components[] empty', () => {
+    const proj: ProjectLike = {
+      id: 'p',
+      name: 'P',
+      sections: [{ id: 'main', name: 'Main', owner: 'M' }],
+    };
+    expect(getPrimaryComponent(proj)?.id).toBe('main');
+  });
+
+  it('returns undefined when every component is qa/support', () => {
+    const proj: ProjectLike = {
+      id: 'p',
+      name: 'P',
+      components: [
+        { id: 'qa', name: 'QA', owner: 'B', role: 'qa' },
+        { id: 'support', name: 'Support', owner: 'S', role: 'support' },
+      ],
+    };
+    expect(getPrimaryComponent(proj)).toBeUndefined();
+  });
+
+  it('returns undefined when project has no components', () => {
+    expect(getPrimaryComponent({ id: 'p', name: 'P' })).toBeUndefined();
+  });
+});
+
+describe('getComponentVersions', () => {
+  const v1: ComponentVersionLike = { version: '0.1.0', status: 'shipped' };
+  const v2: ComponentVersionLike = { version: '0.2.0', status: 'planned' };
+
+  it('returns component.versions[] when populated', () => {
+    const proj: ProjectLike = {
+      id: 'p',
+      name: 'P',
+      components: [{ id: 'main', name: 'Main', owner: 'M', versions: [v1, v2] }],
+      versions: [{ version: '9.9.9', status: 'shipped' }], // ignored
+    };
+    const result = getComponentVersions(proj, 'main');
+    expect(result.map((v) => v.version)).toEqual(['0.1.0', '0.2.0']);
+  });
+
+  it('falls back to project.versions[] for the primary component', () => {
+    const proj: ProjectLike = {
+      id: 'p',
+      name: 'P',
+      components: [{ id: 'main', name: 'Main', owner: 'M' }],
+      versions: [v1, v2],
+    };
+    const result = getComponentVersions(proj, 'main');
+    expect(result.map((v) => v.version)).toEqual(['0.1.0', '0.2.0']);
+  });
+
+  it('does NOT fall back to project.versions[] for a non-primary component', () => {
+    const proj: ProjectLike = {
+      id: 'p',
+      name: 'P',
+      components: [
+        { id: 'main', name: 'Main', owner: 'M' },
+        { id: 'qa', name: 'QA', owner: 'B', role: 'qa' },
+      ],
+      versions: [v1],
+    };
+    expect(getComponentVersions(proj, 'qa')).toEqual([]);
+  });
+
+  it('returns empty array for unknown componentId', () => {
+    expect(getComponentVersions({ id: 'p', name: 'P' }, 'nope')).toEqual([]);
+  });
+
+  it('does not mutate source (returns fresh array)', () => {
+    const src = [v1, v2];
+    const proj: ProjectLike = {
+      id: 'p',
+      name: 'P',
+      components: [{ id: 'main', name: 'Main', owner: 'M', versions: src }],
+    };
+    const result = getComponentVersions(proj, 'main');
+    result.push({ version: 'junk', status: 'planned' });
+    expect(src).toHaveLength(2);
+  });
+});
+
+describe('getComponentApprovedThrough', () => {
+  it('returns component.approvedThrough when set', () => {
+    const proj: ProjectLike = {
+      id: 'p',
+      name: 'P',
+      components: [{ id: 'main', name: 'Main', owner: 'M', approvedThrough: '0.5.0' }],
+      autonomy: { approvedThrough: '9.9.9' }, // ignored
+    };
+    expect(getComponentApprovedThrough(proj, 'main')).toBe('0.5.0');
+  });
+
+  it('falls back to project.autonomy.approvedThrough for the primary component', () => {
+    const proj: ProjectLike = {
+      id: 'p',
+      name: 'P',
+      components: [{ id: 'main', name: 'Main', owner: 'M' }],
+      autonomy: { approvedThrough: '0.5.0' },
+    };
+    expect(getComponentApprovedThrough(proj, 'main')).toBe('0.5.0');
+  });
+
+  it('does NOT fall back to project.autonomy for a non-primary component', () => {
+    const proj: ProjectLike = {
+      id: 'p',
+      name: 'P',
+      components: [
+        { id: 'main', name: 'Main', owner: 'M' },
+        { id: 'qa', name: 'QA', owner: 'B', role: 'qa' },
+      ],
+      autonomy: { approvedThrough: '0.5.0' },
+    };
+    expect(getComponentApprovedThrough(proj, 'qa')).toBeUndefined();
+  });
+
+  it('returns undefined for unknown componentId', () => {
+    expect(getComponentApprovedThrough({ id: 'p', name: 'P' }, 'nope')).toBeUndefined();
+  });
+
+  it('returns undefined when neither component nor project has a banner', () => {
+    const proj: ProjectLike = {
+      id: 'p',
+      name: 'P',
+      components: [{ id: 'main', name: 'Main', owner: 'M' }],
+    };
+    expect(getComponentApprovedThrough(proj, 'main')).toBeUndefined();
+  });
+});
