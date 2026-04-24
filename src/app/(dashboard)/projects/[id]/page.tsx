@@ -18,6 +18,8 @@ import {
   shouldShowLegacyDrawer,
   filterTasksByComponent,
   getEffectiveComponents,
+  getComponentVersions,
+  getComponentApprovedThrough,
   type ComponentLike,
   type ProjectLike,
   type ComponentCounts as ComponentCountsType,
@@ -209,8 +211,9 @@ function ProjectDetailPageInner() {
     waitsFor: Array<{ componentId: string; projectId?: string; version: string }>;
   }>({ name: '', owner: '', role: '', outcomes: '', contract: '', waitsFor: [] });
   const [savingComponent, setSavingComponent] = useState(false);
-  // Board filter pill — from URL
-  const activeComponentFilter = searchParams.get('component') || 'all';
+  // #1112 PR 5: component selector is for scroll-to-anchor nav, not filtering.
+  // Stacked layout renders every component inline, so filtering is obsolete.
+  const activeComponentAnchor = searchParams.get('component') || '';
   const [proposingRoadmap, setProposingRoadmap] = useState(false);
   const [proposingError, setProposingError] = useState<string | null>(null);
 
@@ -489,14 +492,20 @@ function ProjectDetailPageInner() {
     }
   };
 
-  const setComponentFilter = (id: string) => {
+  // #1112 PR 5: anchor-nav helper — sets the URL param and scrolls to the
+  // component's roadmap section on the stacked page.
+  const setComponentAnchor = (id: string) => {
     const params = new URLSearchParams(searchParams.toString());
-    if (id === 'all') {
+    if (!id) {
       params.delete('component');
     } else {
       params.set('component', id);
     }
     router.replace(`?${params.toString()}`, { scroll: false });
+    if (id) {
+      const el = typeof document !== 'undefined' ? document.getElementById(`comp-roadmap-${id}`) : null;
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   };
 
   const handleArchiveProject = async () => {
@@ -845,23 +854,25 @@ function ProjectDetailPageInner() {
           </button>
         )}
 
-        {/* #1112 PR 3: Board Filter Pills */}
+        {/* #1112 PR 5: Component jump-nav pills. Stacked layout renders every
+            component inline below — clicking a pill scrolls to that roadmap. */}
         {components.length > 0 && (
           <div className="flex items-center gap-2 flex-wrap">
             <button
-              onClick={() => setComponentFilter('all')}
+              onClick={() => setComponentAnchor('')}
               className={clsx(
                 'px-3 py-1.5 rounded-full text-xs font-medium transition-colors border',
-                activeComponentFilter === 'all'
+                !activeComponentAnchor
                   ? 'bg-[var(--accent-primary)] text-white border-transparent'
                   : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] border-[var(--border-color)] hover:bg-[var(--bg-hover)]'
               )}
+              title="Show all component roadmaps (top of list)"
             >
               All
             </button>
             {(() => {
-              // #1112 PR 3 follow-up: the primary component (first non-QA, non-support) absorbs
-              // untagged tasks for display count, matching how the roadmap filter behaves.
+              // Primary component absorbs untagged tasks for display count, matching
+              // how the per-component roadmap renders them (PR 5).
               const primaryCompId = components.find((c: any) => !c.role || (c.role !== 'qa' && c.role !== 'support'))?.id;
               return components.map((comp) => {
                 const counts = getComponentCounts(projectTasks, comp.id, currentVersion);
@@ -873,13 +884,14 @@ function ProjectDetailPageInner() {
                 return (
                   <button
                     key={comp.id}
-                    onClick={() => setComponentFilter(comp.id)}
+                    onClick={() => setComponentAnchor(comp.id)}
                     className={clsx(
                       'px-3 py-1.5 rounded-full text-xs font-medium transition-colors border',
-                      activeComponentFilter === comp.id
+                      activeComponentAnchor === comp.id
                         ? 'bg-[var(--accent-primary)] text-white border-transparent'
                         : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] border-[var(--border-color)] hover:bg-[var(--bg-hover)]'
                     )}
+                    title={`Jump to ${comp.name} roadmap`}
                   >
                     {comp.name} {total > 0 && <span className="ml-1 opacity-70">{total}</span>}
                   </button>
@@ -941,26 +953,133 @@ function ProjectDetailPageInner() {
         )}
 
 
-        {/* Roadmap Section with Approval Horizon */}
-        <div className="space-y-4">
+        {/* #1112 PR 5: Stacked per-component roadmaps.
+            Each component renders its own version list with its own
+            approval banner. Primary-component legacy fallback
+            (project.versions[] / autonomy.approvedThrough) is handled
+            inside getComponentVersions / getComponentApprovedThrough —
+            PR 6 migrates the data and removes that fallback. */}
+        <div className="space-y-8">
           {roadmapLoading ? (
             <div className="flex items-center justify-center py-8">
               <Loader className="w-5 h-5 animate-spin text-[var(--text-muted)]" />
             </div>
-          ) : (
+          ) : components.length === 0 ? (
+            // No components yet — fall back to the project-level roadmap as one
+            // implicit "primary" stream. Keeps freshly-created projects working
+            // before the user defines a Main component.
             <RoadmapWithApprovalHorizon
               projectId={projectId}
               project={project}
               versions={roadmapVersions}
               tasks={allTasks}
               onVersionsChange={setRoadmap}
-              componentFilter={activeComponentFilter}
               selectedTask={selectedTask}
               onTaskSelect={(task) => {
                 setSelectedTask(task);
                 setShowDetailPanel(true);
               }}
             />
+          ) : (
+            components.map((comp: any) => {
+              const compVersions = getComponentVersions(project as any, comp.id) as any[];
+              const compApprovedThrough = getComponentApprovedThrough(project as any, comp.id);
+              // Primary component absorbs untagged tasks (legacy shape, pre PR 6).
+              const primaryId = components.find((c: any) => !c.role || (c.role !== 'qa' && c.role !== 'support'))?.id;
+              const isPrimary = comp.id === primaryId;
+              const compTasks = (allTasks || []).filter((t: any) => {
+                if (t.projectId !== projectId) return false;
+                const sec = t.sectionId || '';
+                return sec === comp.id || (isPrimary && !sec);
+              });
+              // Next planned version above the banner — read-only hint for PR 5.
+              const nextPlanned = (() => {
+                if (!compApprovedThrough) return null;
+                const sorted = [...compVersions].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+                const idx = sorted.findIndex((v: any) => v.version === compApprovedThrough);
+                if (idx < 0) return null;
+                const next = sorted[idx + 1];
+                return next && next.status !== 'shipped' ? next : null;
+              })();
+              return (
+                <section
+                  key={comp.id}
+                  id={`comp-roadmap-${comp.id}`}
+                  className="space-y-3 scroll-mt-24"
+                  data-testid={`component-roadmap-${comp.id}`}
+                >
+                  {/* Component header */}
+                  <div className="flex items-center justify-between gap-3 pb-2 border-b border-[var(--border-color)]">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-xl flex-shrink-0" aria-hidden>
+                        {getComponentIcon(comp.role)}
+                      </span>
+                      <h3 className="text-base font-semibold text-[var(--text-primary)] truncate">
+                        {comp.name}
+                      </h3>
+                      {comp.role && (
+                        <span className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] px-1.5 py-0.5 rounded bg-[var(--bg-secondary)] flex-shrink-0">
+                          {comp.role}
+                        </span>
+                      )}
+                      {comp.owner && (
+                        <span className="text-xs text-[var(--text-muted)] flex-shrink-0">
+                          — {comp.owner}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0 text-xs">
+                      {compApprovedThrough ? (
+                        <span
+                          className="px-2 py-1 rounded-md border border-[var(--border-color)] bg-[var(--bg-secondary)] text-[var(--text-secondary)]"
+                          title="Approved-through version for this component"
+                          data-testid={`component-approval-${comp.id}`}
+                        >
+                          Approved through <span className="font-mono font-semibold text-[var(--text-primary)]">{formatVersion(compApprovedThrough)}</span>
+                        </span>
+                      ) : (
+                        <span className="px-2 py-1 rounded-md border border-dashed border-[var(--border-color)] text-[var(--text-muted)]">
+                          No approval banner
+                        </span>
+                      )}
+                      {nextPlanned && (
+                        <button
+                          type="button"
+                          disabled
+                          className="px-2 py-1 rounded-md border border-dashed border-[var(--border-color)] text-[var(--text-muted)] opacity-60 cursor-not-allowed"
+                          title="PR 6 wires the write path"
+                        >
+                          Extend to {formatVersion(nextPlanned.version)}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Per-component roadmap list */}
+                  {compVersions.length === 0 ? (
+                    <div
+                      className="text-sm text-[var(--text-muted)] italic px-4 py-6 rounded-lg border border-dashed border-[var(--border-color)] text-center"
+                      data-testid={`component-empty-${comp.id}`}
+                    >
+                      No versions planned for {comp.name} yet.
+                    </div>
+                  ) : (
+                    <RoadmapWithApprovalHorizon
+                      projectId={projectId}
+                      project={project}
+                      versions={compVersions as any}
+                      tasks={compTasks}
+                      onVersionsChange={isPrimary ? setRoadmap : undefined}
+                      selectedTask={selectedTask}
+                      onTaskSelect={(task) => {
+                        setSelectedTask(task);
+                        setShowDetailPanel(true);
+                      }}
+                    />
+                  )}
+                </section>
+              );
+            })
           )}
         </div>
 

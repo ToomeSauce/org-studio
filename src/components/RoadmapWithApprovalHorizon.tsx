@@ -74,103 +74,20 @@ interface RoadmapWithApprovalHorizonProps {
   onVersionsChange?: (versions: RoadmapVersion[]) => void;
   selectedTask?: any;
   onTaskSelect?: (task: any) => void;
-  /** #1112 PR 3: component pill filter. 'all' (default) shows everything. Any component id filters
-   *  version items to tasks whose sectionId matches, and hides versions with 0 matching items. */
-  componentFilter?: string;
 }
 
 export function RoadmapWithApprovalHorizon({
   projectId,
   project,
-  versions: rawVersions,
+  versions,
   tasks: allTasks,
   onVersionsChange,
   selectedTask,
   onTaskSelect,
-  componentFilter = 'all',
 }: RoadmapWithApprovalHorizonProps) {
-  // #1112 PR 3: filter versions + items to the selected component.
-  // A version is kept only if at least one of its items links to a task in the selected component.
-  //
-  // Nuance for legacy/unified projects: the "primary" component (first non-QA, non-support
-  // component — typically "Main") absorbs items whose task has no sectionId at all. This is
-  // because tasks created before the Components model didn't carry a sectionId, but
-  // conceptually belong to the project's main workstream. Without this, 176 untagged
-  // Thrivor tasks would vanish from the Main pill.
-  const versions = (() => {
-    if (componentFilter === 'all') return rawVersions;
-    const comps: Array<{ id: string; name?: string; role?: string; waitsFor?: any[] }> = ((project as any).components?.length
-      ? (project as any).components
-      : (project as any).sections) || [];
-    const primaryComp = comps.find((c) => !c.role || (c.role !== 'qa' && c.role !== 'support'));
-    const isPrimaryFilter = primaryComp?.id === componentFilter;
-    const activeComp = comps.find((c) => c.id === componentFilter);
-
-    const taskSectionById = new Map<string, string>();
-    for (const t of (allTasks || [])) {
-      if (t && t.id) taskSectionById.set(t.id, t.sectionId || '');
-    }
-
-    // Primary filter: walk the project's own roadmap versions, keep items whose tasks
-    // belong to the primary component (explicitly or via untagged fallback).
-    if (isPrimaryFilter) {
-      const out: RoadmapVersion[] = [];
-      for (const v of rawVersions) {
-        const keptItems = (v.items || []).filter((it) => {
-          if (!it.taskId) return true; // planning items belong to the primary workstream
-          const sec = taskSectionById.get(it.taskId);
-          return sec === componentFilter || !sec || sec === '';
-        });
-        if (keptItems.length === 0) continue;
-        const done = keptItems.filter((i) => i.done).length;
-        out.push({ ...v, items: keptItems, progress: { done, total: keptItems.length } });
-      }
-      return out;
-    }
-
-    // Non-primary component (QA / support): tasks typically don't live on the primary
-    // roadmap's items[]. Instead, synthesize one card per gating target from the
-    // component's waitsFor[], showing every task tagged with this component as an item.
-    // If waitsFor is empty, fall back to a single ungrouped card.
-    const componentTasks = (allTasks || []).filter((t: any) => t.sectionId === componentFilter);
-    if (componentTasks.length === 0) return [];
-
-    const compName = activeComp?.name || 'Component';
-    const waitsFor: Array<{ version: string; componentId?: string; projectId?: string }> = activeComp?.waitsFor || [];
-
-    if (waitsFor.length === 0) {
-      const done = componentTasks.filter((t: any) => t.status === 'done').length;
-      return [{
-        id: `synthetic-${componentFilter}-all`,
-        version: '',
-        title: `${compName} tasks`,
-        status: (done === componentTasks.length ? 'shipped' : 'current') as any,
-        items: componentTasks.map((t: any) => ({
-          title: t.title,
-          done: t.status === 'done',
-          taskId: t.id,
-        })),
-        progress: { done, total: componentTasks.length },
-      }];
-    }
-
-    return waitsFor.map((w, i) => {
-      const label = `Waiting on ${w.version}`;
-      const done = componentTasks.filter((t: any) => t.status === 'done').length;
-      return {
-        id: `synthetic-${componentFilter}-${w.componentId || 'x'}-${w.version}-${i}`,
-        version: w.version,
-        title: label,
-        status: (done === componentTasks.length ? 'shipped' : 'current') as any,
-        items: componentTasks.map((t: any) => ({
-          title: t.title,
-          done: t.status === 'done',
-          taskId: t.id,
-        })),
-        progress: { done, total: componentTasks.length },
-      };
-    });
-  })();
+  // #1112 PR 5: filtering / synthetic-card code removed — the parent page now
+  // passes per-component versions directly. This component renders whatever
+  // versions it's given, unfiltered.
   const [expandedVersionIds, setExpandedVersionIds] = useState<Set<string>>(
     new Set(versions.filter(v => v.status === 'current').map(v => v.id))
   );
@@ -179,21 +96,6 @@ export function RoadmapWithApprovalHorizon({
   const [editingVersionId, setEditingVersionId] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [dragOverSlot, setDragOverSlot] = useState<number | null>(null);
-
-  // #1112 PR 3 follow-up: when the component pill changes, auto-expand versions that still
-  // have items in the filtered view. Otherwise switching to "QA" shows all collapsed cards.
-  useEffect(() => {
-    if (componentFilter === 'all') return;
-    setExpandedVersionIds((prev) => {
-      const next = new Set(prev);
-      for (const v of versions) {
-        if ((v.items || []).length > 0) next.add(v.id);
-      }
-      return next;
-    });
-    // intentional: we only want to react to filter changes, not versions identity churn
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [componentFilter]);
 
   const [editForm, setEditForm] = useState<{
     version: string;

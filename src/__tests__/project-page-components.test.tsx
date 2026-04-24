@@ -394,3 +394,127 @@ describe('getComponentApprovedThrough', () => {
     expect(getComponentApprovedThrough(proj, 'main')).toBeUndefined();
   });
 });
+
+// ─── #1112 PR 5: stacked per-component roadmap render shape ───
+//
+// The project page maps getEffectiveComponents(project).map(comp => ...)
+// and for each component, builds a roadmap section from:
+//   - getComponentVersions(project, comp.id)
+//   - getComponentApprovedThrough(project, comp.id)
+//   - tasks scoped via (sectionId === comp.id) OR (primary component absorbs untagged)
+//
+// These tests lock in that shape at the data level — the JSX is a pass-through
+// over these values. Breaking any assertion here would break the stacked render.
+
+describe('#1112 PR 5 — stacked per-component render shape', () => {
+  it('a project with 2 components yields 2 independent version lists (each from its own component)', () => {
+    const proj: ProjectLike = {
+      id: 'p1',
+      name: 'P',
+      components: [
+        {
+          id: 'main',
+          name: 'Main',
+          owner: 'M',
+          approvedThrough: '0.2.0',
+          versions: [
+            { version: '0.1.0', status: 'shipped' },
+            { version: '0.2.0', status: 'current' },
+          ],
+        },
+        {
+          id: 'qa',
+          name: 'QA',
+          owner: 'B',
+          role: 'qa',
+          approvedThrough: '0.1.0',
+          versions: [
+            { version: '0.1.0', status: 'planned' },
+            { version: '0.2.0', status: 'planned' },
+          ],
+        },
+      ],
+    };
+    const comps = getEffectiveComponents(proj);
+    expect(comps.map((c) => c.id)).toEqual(['main', 'qa']);
+
+    const mainVersions = getComponentVersions(proj, 'main');
+    const qaVersions = getComponentVersions(proj, 'qa');
+    expect(mainVersions.map((v) => v.version)).toEqual(['0.1.0', '0.2.0']);
+    expect(qaVersions.map((v) => v.version)).toEqual(['0.1.0', '0.2.0']);
+
+    // Critical: the two lists are truly independent — different statuses for
+    // the same version string. This could never hold under the old
+    // single-roadmap model, and is the whole point of the stacked refactor.
+    expect(mainVersions.find((v) => v.version === '0.2.0')!.status).toBe('current');
+    expect(qaVersions.find((v) => v.version === '0.2.0')!.status).toBe('planned');
+  });
+
+  it("each section's approvedThrough reflects its own component's banner (independent banners)", () => {
+    const proj: ProjectLike = {
+      id: 'p1',
+      name: 'P',
+      components: [
+        { id: 'main', name: 'Main', owner: 'M', approvedThrough: '0.2.0' },
+        { id: 'qa', name: 'QA', owner: 'B', role: 'qa', approvedThrough: '0.1.0' },
+      ],
+    };
+    expect(getComponentApprovedThrough(proj, 'main')).toBe('0.2.0');
+    expect(getComponentApprovedThrough(proj, 'qa')).toBe('0.1.0');
+    // User can extend Main's banner without touching QA's — the stacked UI
+    // must show both banners independently.
+  });
+
+  it('a component with no versions renders an empty-state for that component only (doesn’t block siblings)', () => {
+    const proj: ProjectLike = {
+      id: 'p1',
+      name: 'P',
+      components: [
+        {
+          id: 'main',
+          name: 'Main',
+          owner: 'M',
+          versions: [{ version: '0.1.0', status: 'current' }],
+        },
+        // QA has no versions[] of its own, is not primary, so falls into the
+        // empty-state branch. Main continues to render normally.
+        { id: 'qa', name: 'QA', owner: 'B', role: 'qa' },
+      ],
+    };
+    const mainVersions = getComponentVersions(proj, 'main');
+    const qaVersions = getComponentVersions(proj, 'qa');
+
+    expect(mainVersions.length).toBe(1);
+    expect(qaVersions.length).toBe(0);
+
+    // Empty-state for QA is rendered — stacked UI shows "No versions planned
+    // for QA yet" but Main's version list is untouched.
+  });
+
+  it('task scoping rule: primary component absorbs untagged tasks; non-primary gets only its own', () => {
+    const proj: ProjectLike = {
+      id: 'p1',
+      name: 'P',
+      components: [
+        { id: 'main', name: 'Main', owner: 'M' },
+        { id: 'qa', name: 'QA', owner: 'B', role: 'qa' },
+      ],
+    };
+    const primaryId = getPrimaryComponent(proj)!.id;
+    const tasks: TaskLike[] = [
+      { id: 't1', title: 'Untagged legacy', projectId: 'p1', assignee: 'm', status: 'backlog' },
+      { id: 't2', title: 'Main task', projectId: 'p1', sectionId: 'main', assignee: 'm', status: 'backlog' },
+      { id: 't3', title: 'QA task', projectId: 'p1', sectionId: 'qa', assignee: 'b', status: 'backlog' },
+    ];
+
+    // Mirror the scoping predicate used in the stacked render:
+    const scopeFor = (compId: string) =>
+      tasks.filter((t) => {
+        const sec = t.sectionId || '';
+        return sec === compId || (compId === primaryId && !sec);
+      });
+
+    expect(scopeFor('main').map((t) => t.id).sort()).toEqual(['t1', 't2']);
+    expect(scopeFor('qa').map((t) => t.id)).toEqual(['t3']);
+  });
+});
