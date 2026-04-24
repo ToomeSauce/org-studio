@@ -74,17 +74,42 @@ interface RoadmapWithApprovalHorizonProps {
   onVersionsChange?: (versions: RoadmapVersion[]) => void;
   selectedTask?: any;
   onTaskSelect?: (task: any) => void;
+  /** #1112 PR 3: component pill filter. 'all' (default) shows everything. Any component id filters
+   *  version items to tasks whose sectionId matches, and hides versions with 0 matching items. */
+  componentFilter?: string;
 }
 
 export function RoadmapWithApprovalHorizon({
   projectId,
   project,
-  versions,
+  versions: rawVersions,
   tasks: allTasks,
   onVersionsChange,
   selectedTask,
   onTaskSelect,
+  componentFilter = 'all',
 }: RoadmapWithApprovalHorizonProps) {
+  // #1112 PR 3: filter versions + items to the selected component.
+  // A version is kept only if at least one of its items links to a task in the selected component.
+  // Items whose taskId is missing or points at a task outside the filter are dropped from the view.
+  const versions = (() => {
+    if (componentFilter === 'all') return rawVersions;
+    const taskSectionById = new Map<string, string>();
+    for (const t of (allTasks || [])) {
+      if (t && t.id) taskSectionById.set(t.id, t.sectionId || '');
+    }
+    const out: RoadmapVersion[] = [];
+    for (const v of rawVersions) {
+      const keptItems = (v.items || []).filter((it) => {
+        if (!it.taskId) return false; // un-launched items can't be attributed to a component
+        return taskSectionById.get(it.taskId) === componentFilter;
+      });
+      if (keptItems.length === 0) continue;
+      const done = keptItems.filter((i) => i.done).length;
+      out.push({ ...v, items: keptItems, progress: { done, total: keptItems.length } });
+    }
+    return out;
+  })();
   const [expandedVersionIds, setExpandedVersionIds] = useState<Set<string>>(
     new Set(versions.filter(v => v.status === 'current').map(v => v.id))
   );

@@ -945,6 +945,7 @@ function ProjectDetailPageInner() {
               versions={roadmapVersions}
               tasks={allTasks}
               onVersionsChange={setRoadmap}
+              componentFilter={activeComponentFilter}
               selectedTask={selectedTask}
               onTaskSelect={(task) => {
                 setSelectedTask(task);
