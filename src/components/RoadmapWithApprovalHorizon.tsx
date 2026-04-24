@@ -119,6 +119,21 @@ export function RoadmapWithApprovalHorizon({
   const [dragActive, setDragActive] = useState(false);
   const [dragOverSlot, setDragOverSlot] = useState<number | null>(null);
 
+  // #1112 PR 3 follow-up: when the component pill changes, auto-expand versions that still
+  // have items in the filtered view. Otherwise switching to "QA" shows all collapsed cards.
+  useEffect(() => {
+    if (componentFilter === 'all') return;
+    setExpandedVersionIds((prev) => {
+      const next = new Set(prev);
+      for (const v of versions) {
+        if ((v.items || []).length > 0) next.add(v.id);
+      }
+      return next;
+    });
+    // intentional: we only want to react to filter changes, not versions identity churn
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [componentFilter]);
+
   const [editForm, setEditForm] = useState<{
     version: string;
     title: string;
