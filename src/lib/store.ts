@@ -136,6 +136,13 @@ export interface Task {
   };
   taskType?: 'feature' | 'bug' | 'chore' | 'spike' | 'followup';
   roadmapItemId?: string;  // links roadmap tasks back to their RoadmapItem (items[].id). Presence = roadmap task.
+  // #1102: structured blocker graph. Ticket numbers this task is blocked by.
+  // When ALL listed tickets reach status=done, the task is auto-flipped back to backlog
+  // and the assignee's loop is triggered. Empty/null = manual-unblock-only (external blocker).
+  blockedBy?: number[];
+  // #1102: audit trail of blockers that triggered an auto-unblock. Preserved across unblocks
+  // for history. Never read by the dispatcher — purely observability.
+  previouslyBlockedBy?: number[];
   comments?: TaskComment[];
   statusHistory?: { status: string; timestamp: number; by?: string; model?: string }[];
 }

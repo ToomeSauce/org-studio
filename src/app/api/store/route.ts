@@ -838,6 +838,90 @@ export async function POST(req: NextRequest) {
           }
         }
 
+        // #1102: Auto-unblock fan-out on blocker completion.
+        //
+        // When a task transitions to `done`, scan for any non-archived blocked
+        // tasks that declared it in their `blockedBy` array. For each such
+        // downstream task: if ALL of its `blockedBy` tickets are now done,
+        // flip it back to `backlog` and trigger the assignee's loop. Also
+        // move `blockedBy` → `previouslyBlockedBy` for the audit trail.
+        //
+        // Contract:
+        //  - Structural edges only: reads from `task.blockedBy: number[]`.
+        //    Free-text "blocked by #N" comments are NOT parsed here.
+        //  - Unspecified blocks (blockedBy empty/null) stay manual-unblock-only.
+        //    Preserves today's behaviour for tasks that were blocked without
+        //    declaring a structured edge.
+        if (payload.updates?.status === 'done') {
+          const completedTask = store.tasks.find(t => t.id === payload.id);
+          const completedTicket = completedTask?.ticketNumber;
+          if (completedTicket) {
+            const unblocked: { task: any; clearedBy: number[] }[] = [];
+            for (const t of store.tasks) {
+              if (t.isArchived) continue;
+              if (t.status !== 'blocked') continue;
+              const bb = Array.isArray((t as any).blockedBy) ? (t as any).blockedBy as number[] : [];
+              if (bb.length === 0) continue;
+              if (!bb.includes(completedTicket)) continue;
+
+              // Check: are ALL blockers now done?
+              const allResolved = bb.every(tn => {
+                if (tn === completedTicket) return true; // this one is the just-completed task
+                const blocker = store.tasks.find(x => x.ticketNumber === tn);
+                return blocker?.status === 'done';
+              });
+              if (!allResolved) continue;
+
+              unblocked.push({ task: t, clearedBy: bb });
+            }
+
+            for (const { task: t, clearedBy } of unblocked) {
+              const updates: any = {
+                status: 'backlog',
+                blockedBy: [],
+                previouslyBlockedBy: [
+                  ...((t as any).previouslyBlockedBy || []),
+                  ...clearedBy,
+                ],
+                loopCount: 0,
+                loopPausedAt: null,
+                loopPauseReason: null,
+              };
+
+              try {
+                await getStoreProvider().updateTask(t.id, updates);
+                console.log(
+                  `[Auto-unblock] #${t.ticketNumber} → backlog (all blockers [${clearedBy.join(',')}] done)`
+                );
+              } catch (e: any) {
+                console.error(`[Auto-unblock] failed for #${t.ticketNumber}:`, e?.message);
+                continue;
+              }
+
+              // Post system comment on the unblocked task
+              try {
+                const blockerList = clearedBy.map(n => `#${n}`).join(', ');
+                await getStoreProvider().addComment(t.id, {
+                  id: Math.random().toString(36).slice(2, 10) + Date.now().toString(36),
+                  createdAt: Date.now(),
+                  author: 'System',
+                  content: `🔓 **Auto-unblocked** — all declared blockers resolved (${blockerList}). Returned to backlog.`,
+                  type: 'system',
+                } as any);
+              } catch {}
+
+              // Refresh the task in the local snapshot so downstream logic sees
+              // it as backlog (e.g. triggerAgentLoop reads store.tasks).
+              Object.assign(t, updates);
+
+              // Trigger the assignee's loop
+              if (t.assignee) {
+                triggerAgentLoop(t.assignee, store);
+              }
+            }
+          }
+        }
+
         // **NEW: Handle version completion asynchronously**
         if (versionCompletionTriggered) {
           (async () => {
