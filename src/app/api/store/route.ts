@@ -1238,6 +1238,114 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: true });
       }
 
+      case 'updateComponent': {
+        /**
+         * #1112 PR 6 follow-up: targeted update for a single component on a
+         * project. Used by the per-component approval banner so writes go to
+         * `components[i].approvedThrough` instead of the legacy project-wide
+         * field.
+         *
+         * Side effect: when `approvedThrough` is the changing field, fires the
+         * same promote/scheduler-trigger flow that legacy approvedThrough
+         * changes used to — because extending a component's banner can unblock
+         * waiting tasks on that component the same way bumping the project-wide
+         * banner used to.
+         *
+         * Body: { projectId, componentId, updates: Partial<Component> }
+         */
+        const { projectId, componentId: targetComponentId, updates: compUpdates } = payload;
+        if (!projectId || !targetComponentId || !compUpdates) {
+          return NextResponse.json(
+            { error: 'Missing projectId, componentId, or updates' },
+            { status: 400 },
+          );
+        }
+        const targetProject = store.projects.find((p: any) => p.id === projectId);
+        if (!targetProject) {
+          return NextResponse.json({ error: 'Project not found' }, { status: 404 });
+        }
+        if (!belongsToWorkspace(targetProject, workspace.id)) {
+          return NextResponse.json(
+            { error: 'Forbidden — project belongs to another workspace' },
+            { status: 403 },
+          );
+        }
+
+        // Components live in `components` going forward; older projects may
+        // still have them under `sections`. Tolerate both, write back on the
+        // same key the project already uses.
+        const compsKey = Array.isArray((targetProject as any).components)
+          ? 'components'
+          : 'sections';
+        const comps: any[] = Array.isArray((targetProject as any)[compsKey])
+          ? [...(targetProject as any)[compsKey]]
+          : [];
+        const compIdx = comps.findIndex((c) => c?.id === targetComponentId);
+        if (compIdx < 0) {
+          return NextResponse.json({ error: 'Component not found on project' }, { status: 404 });
+        }
+
+        const oldComp = comps[compIdx];
+        const oldApprovedThrough = oldComp?.approvedThrough ?? null;
+        const newComp = { ...oldComp, ...compUpdates };
+        // Normalize: explicit null clears the field rather than persisting null.
+        if (compUpdates.approvedThrough === null) {
+          delete newComp.approvedThrough;
+        }
+        comps[compIdx] = newComp;
+
+        await getStoreProvider().updateProject(projectId, { [compsKey]: comps } as any);
+        console.log(
+          `[API:store:updateComponent] ${projectId}/${targetComponentId}`,
+          JSON.stringify(compUpdates).slice(0, 200),
+        );
+
+        // Promote re-trigger when component approval banner moves.
+        const newApprovedThrough = newComp.approvedThrough ?? null;
+        if ('approvedThrough' in compUpdates && newApprovedThrough !== oldApprovedThrough) {
+          console.log(
+            `[ComponentApproval] ${projectId}/${targetComponentId}: ${oldApprovedThrough || 'null'} → ${newApprovedThrough || 'null'}`,
+          );
+          // Fire-and-forget promote against this project. promoteProjectToNextVersion
+          // walks every component (post follow-up) and advances any whose horizon
+          // has expanded enough to make a shipped/current version unstick.
+          (async () => {
+            try {
+              const { promoteProjectToNextVersion } = await import('@/lib/project-state');
+              const pg = await import('pg');
+              const Pool = (pg as any).default?.Pool || (pg as any).Pool;
+              const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 3 });
+              const client = await pool.connect();
+              try {
+                const result = await promoteProjectToNextVersion(projectId, client);
+                if (result.promoted) {
+                  console.log(
+                    `[ComponentApproval] Promoted ${projectId}: ${result.from} → ${result.to} (${result.movedTasks} tasks → backlog)`,
+                  );
+                  const freshStore = await getStoreProvider().read();
+                  const proj = freshStore.projects.find((p: any) => p.id === projectId);
+                  // Trigger the component's owner if known, else any project devOwner.
+                  const ownerToWake = newComp.owner || proj?.devOwner;
+                  if (ownerToWake && result.movedTasks > 0) {
+                    triggerAgentLoop(ownerToWake, freshStore);
+                  }
+                }
+              } finally {
+                client.release();
+                await pool.end();
+              }
+            } catch (e: any) {
+              console.error(
+                `[ComponentApproval] promote check failed for ${projectId}:`,
+                e?.message,
+              );
+            }
+          })();
+        }
+
+        return NextResponse.json({ ok: true });
+      }
+
       case 'deleteProject': {
         // Workspace guard
         const delProj = store.projects.find((p: any) => p.id === payload.id);

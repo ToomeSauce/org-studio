@@ -74,6 +74,21 @@ interface RoadmapWithApprovalHorizonProps {
   onVersionsChange?: (versions: RoadmapVersion[]) => void;
   selectedTask?: any;
   onTaskSelect?: (task: any) => void;
+  /**
+   * #1112 PR 6 follow-up: when set, the approval banner is scoped to this
+   * component — writes go to `components[i].approvedThrough` instead of the
+   * legacy project-wide `project.autonomy.approvedThrough`. Reads also pull
+   * from the component's own `approvedThrough` field. When unset (no
+   * components defined yet), falls back to legacy project-level write so
+   * brand-new projects still work before they grow a Main component.
+   */
+  componentId?: string;
+  /**
+   * The component object itself — used to read its own `approvedThrough`
+   * without re-traversing `project.components[]` on every render. Required
+   * when `componentId` is set; ignored otherwise.
+   */
+  component?: { id: string; approvedThrough?: string | null; [key: string]: any };
 }
 
 export function RoadmapWithApprovalHorizon({
@@ -84,6 +99,8 @@ export function RoadmapWithApprovalHorizon({
   onVersionsChange,
   selectedTask,
   onTaskSelect,
+  componentId,
+  component,
 }: RoadmapWithApprovalHorizonProps) {
   // #1112 PR 5: filtering / synthetic-card code removed — the parent page now
   // passes per-component versions directly. This component renders whatever
@@ -119,10 +136,18 @@ export function RoadmapWithApprovalHorizon({
 
   // Optimistic local state for approval — overrides prop for instant UI response
   const [optimisticApproval, setOptimisticApproval] = useState<string | null | undefined>(undefined);
-  const approvedThrough = optimisticApproval !== undefined ? optimisticApproval : (project.autonomy?.approvedThrough || null);
-  
+
+  // #1112 PR 6 follow-up: source of truth depends on scope. When this
+  // instance is bound to a component, read its own `approvedThrough`. Else
+  // fall back to legacy project-level (used for the no-components fallback
+  // render in page.tsx).
+  const scopedApproval = componentId
+    ? (component?.approvedThrough ?? null)
+    : (project.autonomy?.approvedThrough ?? null);
+  const approvedThrough = optimisticApproval !== undefined ? optimisticApproval : scopedApproval;
+
   // Sync optimistic state back to prop when it catches up (via useEffect, not during render)
-  const propApproval = project.autonomy?.approvedThrough || null;
+  const propApproval = scopedApproval;
   useEffect(() => {
     if (optimisticApproval !== undefined && optimisticApproval === propApproval) {
       setOptimisticApproval(undefined);
@@ -240,21 +265,35 @@ export function RoadmapWithApprovalHorizon({
   const updateApproval = (versionNum: string | null) => {
     // Optimistic — update UI instantly
     setOptimisticApproval(versionNum);
-    
+
+    // Pick write path based on scope.
+    // When bound to a component: hit the targeted updateComponent action so
+    // the server can re-trigger promote/scheduler against the right
+    // component identity. When unscoped (legacy fallback): write the old
+    // project-wide field for brand-new projects with no components yet.
+    const body = componentId
+      ? {
+          action: 'updateComponent',
+          projectId,
+          componentId,
+          updates: { approvedThrough: versionNum },
+        }
+      : {
+          action: 'updateProject',
+          id: projectId,
+          updates: {
+            autonomy: {
+              ...project.autonomy,
+              approvedThrough: versionNum,
+            },
+          },
+        };
+
     // Fire API in background (no await)
     fetch('/api/store', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action: 'updateProject',
-        id: projectId,
-        updates: {
-          autonomy: {
-            ...project.autonomy,
-            approvedThrough: versionNum,
-          },
-        },
-      }),
+      body: JSON.stringify(body),
     }).catch((e) => {
       console.error('Failed to update approval:', e);
       // Revert on failure

@@ -535,12 +535,25 @@ function ProjectDetailPageInner() {
   const handleLaunch = async () => {
     setLaunching(true);
     try {
-      const approvedThrough = project.autonomy?.approvedThrough;
+      // #1112 PR 6 follow-up: launch advances the *primary* component's roadmap.
+      // QA / support components don't get manually launched — their versions
+      // unstick automatically via per-version `waitsFor` once Main ships.
+      // Determine the primary component (no role, or role !== 'qa'/'support').
+      const primary = components.find(
+        (c: any) => !c.role || (c.role !== 'qa' && c.role !== 'support'),
+      );
+      const horizon = primary
+        ? getComponentApprovedThrough(project as any, primary.id)
+        : project.autonomy?.approvedThrough;
+      const candidateVersions = primary
+        ? (getComponentVersions(project as any, primary.id) as any[])
+        : roadmapVersions;
+
       // Find the first unshipped version that's within the approval horizon
-      const nextVersion = roadmapVersions.find((v) => {
+      const nextVersion = candidateVersions.find((v) => {
         if (v.status === 'shipped') return false;
-        if (!approvedThrough) return false;
-        return isVersionInHorizon(v.version, approvedThrough);
+        if (!horizon) return false;
+        return isVersionInHorizon(v.version, horizon);
       });
       if (!nextVersion) return;
 
@@ -579,6 +592,38 @@ function ProjectDetailPageInner() {
       setLaunching(false);
     }
   };
+
+  /**
+   * #1112 PR 6 follow-up: component-aware Start-button gate.
+   *
+   * Returns true when SOMETHING is dispatch-eligible — either:
+   *   (a) any component has a non-shipped version within its own
+   *       `approvedThrough` horizon, OR
+   *   (b) (legacy fallback) the project has no components yet, and the
+   *       project-level `autonomy.approvedThrough` covers a non-shipped
+   *       version in `roadmapVersions`.
+   *
+   * Components are the source of truth post-PR 6. The legacy branch only
+   * fires for brand-new projects that have not grown a Main component yet.
+   */
+  const hasAnyApprovedUnshippedWork = (() => {
+    if (components.length > 0) {
+      return components.some((c: any) => {
+        const horizon = getComponentApprovedThrough(project as any, c.id);
+        if (!horizon) return false;
+        const compVers = getComponentVersions(project as any, c.id) as any[];
+        return compVers.some(
+          (v: any) => v.status !== 'shipped' && isVersionInHorizon(v.version, horizon),
+        );
+      });
+    }
+    // No components: legacy fallback for unconfigured projects only.
+    const legacyApproved = project.autonomy?.approvedThrough;
+    if (!legacyApproved) return false;
+    return roadmapVersions.some(
+      (v) => v.status !== 'shipped' && isVersionInHorizon(v.version, legacyApproved),
+    );
+  })();
 
   return (
     <div className="flex-1 overflow-auto bg-[var(--bg-primary)]">
@@ -626,17 +671,13 @@ function ProjectDetailPageInner() {
             <div className="flex items-center gap-2 ml-auto flex-shrink-0">
               {/* Start button — shown when project is stopped */}
               {(project as any).state === 'stopped' && (() => {
-                const approvedThrough = project.autonomy?.approvedThrough;
-                const hasApprovedUnshipped = approvedThrough && roadmapVersions.some(v =>
-                  v.status !== 'shipped' && isVersionInHorizon(v.version, approvedThrough)
-                );
-                // If no currentVersion and no approved unshipped versions, disable start
-                if (!currentVersion && (!hasApprovedUnshipped)) {
+                // If no currentVersion and no approved unshipped versions anywhere, disable start
+                if (!currentVersion && !hasAnyApprovedUnshippedWork) {
                   return (
                     <div className="flex items-center gap-2">
                       <button
                         disabled
-                        title="Approve versions on the roadmap below to enable start"
+                        title="Approve a version on a component roadmap below to enable start"
                         className="px-4 py-2 bg-[var(--bg-tertiary)] text-[var(--text-muted)] rounded-lg font-medium text-sm cursor-not-allowed flex items-center gap-2 opacity-60"
                       >
                         <span>▶️</span>
@@ -697,17 +738,13 @@ function ProjectDetailPageInner() {
                 );
               })()}
               {/* Start button for projects without explicit state (legacy/running) that have no currentVersion */}
-              {(project as any).state !== 'stopped' && !currentVersion && roadmapVersions.length > 0 && (() => {
-                const approvedThrough = project.autonomy?.approvedThrough;
-                const hasApprovedUnshipped = approvedThrough && roadmapVersions.some(v =>
-                  v.status !== 'shipped' && isVersionInHorizon(v.version, approvedThrough)
-                );
-                if (!hasApprovedUnshipped) {
+              {(project as any).state !== 'stopped' && !currentVersion && (roadmapVersions.length > 0 || components.length > 0) && (() => {
+                if (!hasAnyApprovedUnshippedWork) {
                   return (
                     <div className="flex items-center gap-2">
                       <button
                         disabled
-                        title="Approve more versions on the roadmap below to re-enable start"
+                        title="Extend a component approval banner below to re-enable start"
                         className="px-4 py-2 bg-[var(--bg-tertiary)] text-[var(--text-muted)] rounded-lg font-medium text-sm cursor-not-allowed flex items-center gap-2 opacity-60"
                       >
                         <span>▶️</span>
@@ -1075,6 +1112,8 @@ function ProjectDetailPageInner() {
                         setSelectedTask(task);
                         setShowDetailPanel(true);
                       }}
+                      componentId={comp.id}
+                      component={comp}
                     />
                   )}
                 </section>

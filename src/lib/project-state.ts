@@ -93,7 +93,22 @@ export async function promoteProjectToNextVersion(
   }
 
   const fromVersion = projData.currentVersion || null;
-  const approvedThrough: string | undefined = projData.autonomy?.approvedThrough;
+
+  // #1112 PR 6 follow-up: horizon source-of-truth is the primary component's
+  // own `approvedThrough`. The legacy project-wide `autonomy.approvedThrough`
+  // is consulted as a last-resort fallback so brand-new projects without a
+  // Main component still launch via the no-components UI path.
+  const componentsList: any[] =
+    Array.isArray(projData.components) && projData.components.length > 0
+      ? projData.components
+      : Array.isArray(projData.sections)
+        ? projData.sections
+        : [];
+  const primaryComponent = componentsList.find(
+    (c: any) => !c?.role || (c.role !== 'qa' && c.role !== 'support'),
+  );
+  const approvedThrough: string | undefined =
+    primaryComponent?.approvedThrough ?? projData.autonomy?.approvedThrough;
 
   // 3. Find target version
   let targetVersion = opts?.targetVersion;
