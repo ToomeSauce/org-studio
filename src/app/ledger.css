@@ -126,3 +126,57 @@
 .ledger-stagger > *:nth-child(4) { animation-delay: 270ms; }
 .ledger-stagger > *:nth-child(5) { animation-delay: 340ms; }
 .ledger-stagger > *:nth-child(6) { animation-delay: 410ms; }
+
+/* -- Accessibility & responsiveness -------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  [data-theme="ledger"] .ledger-rise,
+  [data-theme="ledger"] .ledger-stagger > * {
+    animation: none !important;
+  }
+  [data-theme="ledger"] * {
+    transition-duration: 0ms !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  [data-theme="ledger"] {
+    --ledger-ink-soft:  #2a2620;
+    --ledger-ink-mute:  #4a443c;
+    --ledger-rule:      #8a7f6a;
+    --ledger-rule-soft: #a39880;
+  }
+}
+
+/* Mobile: tighten the page padding & stack the metadata rail under the main
+   content. The grid already collapses to 1 column at <1024px via the
+   lg:grid-cols-* rule on the inner container, so this is mostly spacing. */
+@media (max-width: 768px) {
+  [data-theme="ledger"] .ledger-page {
+    padding-left: 1.25rem !important;
+    padding-right: 1.25rem !important;
+    padding-top: 2rem !important;
+  }
+}
+
+/* -- Print -------------------------------------------------------------- */
+
+@media print {
+  [data-theme="ledger"] body {
+    background: #fff !important;
+    background-image: none !important;
+  }
+  [data-theme="ledger"] .ledger-page {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+  [data-theme="ledger"] header,
+  [data-theme="ledger"] aside,
+  [data-theme="ledger"] nav[role="tablist"],
+  [data-theme="ledger"] button {
+    display: none !important;
+  }
+  [data-theme="ledger"] main {
+    display: block !important;
+  }
+}
