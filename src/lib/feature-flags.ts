@@ -3,6 +3,8 @@
  * Controlled by env vars and stored in localStorage.
  */
 
+import * as React from 'react';
+
 export const FEATURE_FLAGS = {
   // Mobile-first threaded UX (v0.15+): tabs, threads, unified inbox
   MOBILE_FIRST_UX: 'mobile-first-ux',
@@ -10,6 +12,9 @@ export const FEATURE_FLAGS = {
   PUSH_NOTIFICATIONS: 'push-notifications',
   // Telegram migration tools (v0.16+)
   TELEGRAM_MIGRATION: 'telegram-migration',
+  // Studio Ledger UX for the project page (v0.17+): editorial / archival aesthetic
+  // Default off during build-out; cutover flips default and removes legacy page.
+  STUDIO_LEDGER_UX: 'studio-ledger-ux',
 } as const;
 
 export type FeatureFlag = (typeof FEATURE_FLAGS)[keyof typeof FEATURE_FLAGS];
@@ -78,4 +83,3 @@ export function useFeatureFlag(flag: FeatureFlag): [boolean, () => void] {
   return [enabled, () => toggleFeatureFlag(flag)];
 }
 
-import React from 'react';

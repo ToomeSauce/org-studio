@@ -7,6 +7,7 @@ import Link from 'next/link';
 import { Save, RefreshCw, ChevronDown, ChevronUp, WifiOff, RotateCcw, History, Eye, AlertTriangle, X, Database, Cloud, HardDrive, CheckCircle2, Building2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { WorkspaceInfoCard, WorkspaceSwitcher } from '@/components/WorkspaceSwitcher';
+import { FeatureFlagsSection } from '@/components/FeatureFlagsSection';
 
 function ResetOnboardingSection() {
   const [resetting, setResetting] = useState(false);
@@ -629,6 +630,9 @@ export default function SettingsPage() {
 
       {/* Onboarding Reset */}
       <ResetOnboardingSection />
+
+      {/* Experimental UX flags */}
+      <FeatureFlagsSection />
 
       {/* Backup History */}
       <BackupHistorySection />

@@ -10,6 +10,8 @@ import { getProjectStatusLabel } from '@/lib/vision-status';
 import { TaskDetailPanel } from '@/components/TaskDetailPanel';
 import { updateTask, addComment as addTaskComment, deleteTask, addSection, updateSection, deleteSection } from '@/lib/store';
 import { isVersionInHorizon, formatVersion } from '@/lib/version-utils';
+import { FEATURE_FLAGS, useFeatureFlag } from '@/lib/feature-flags';
+import LedgerProjectPage from '@/components/ledger/LedgerProjectPage';
 import {
   getComponentIcon,
   getComponentCounts,
@@ -168,6 +170,10 @@ function getProjectState(
 }
 
 export default function ProjectDetailPage() {
+  // Fork to Studio Ledger UX when the flag is on. Identical data hooks; only
+  // the presentation layer differs. Cutover removes this branch.
+  const [ledgerEnabled] = useFeatureFlag(FEATURE_FLAGS.STUDIO_LEDGER_UX);
+  if (ledgerEnabled) return <LedgerProjectPage />;
   return (
     <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader className="w-8 h-8 animate-spin text-[var(--text-muted)]" /></div>}>
       <ProjectDetailPageInner />
