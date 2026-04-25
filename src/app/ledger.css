@@ -95,6 +95,18 @@ html[data-theme="ledger"] ::selection {
 .ledger-mono   { font-family: var(--ledger-font-mono); }
 .ledger-body   { font-family: var(--ledger-font-body); }
 
+/* Drop cap on the first paragraph of a markdown-rendered ledger doc. */
+html[data-theme="ledger"] .ledger-prose > p:first-of-type::first-letter {
+  font-family: var(--ledger-font-display);
+  font-size: 4.4em;
+  line-height: 0.85;
+  font-weight: 300;
+  float: left;
+  margin: 0.05em 0.1em -0.05em 0;
+  color: var(--ledger-oxblood);
+  font-variation-settings: "opsz" 144, "SOFT" 60;
+}
+
 /* Animations used by ledger pages. */
 @keyframes ledger-rise {
   from { opacity: 0; transform: translateY(14px); }

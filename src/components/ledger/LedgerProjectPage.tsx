@@ -21,6 +21,8 @@
 import { useEffect, useMemo, useState, Suspense, useCallback } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
+import remarkGfm from 'remark-gfm';
 import { useWSData } from '@/lib/ws';
 import {
   getEffectiveComponents,
@@ -31,6 +33,8 @@ import {
 import { isVersionInHorizon } from '@/lib/version-utils';
 import { TaskDetailPanel } from '@/components/TaskDetailPanel';
 import { updateTask, addComment as addTaskComment, deleteTask } from '@/lib/store';
+
+const ReactMarkdown = dynamic(() => import('react-markdown'), { ssr: false });
 
 /* -------------------------------------------------------------------------- */
 /* Helpers                                                                    */
@@ -456,7 +460,7 @@ function LedgerProjectPageInner() {
               )}
 
               {/* VISION & GUARDRAILS */}
-              <VisionAndGuardrails project={project} />
+              <VisionAndGuardrails project={project} projectId={projectId} />
             </article>
           ) : (
             <div className="pt-10 ledger-serif italic text-[var(--ledger-ink-mute)]">This project has no components yet.</div>
@@ -561,23 +565,147 @@ function LedgerProjectPageInner() {
 /* Vision & guardrails block                                                  */
 /* -------------------------------------------------------------------------- */
 
-function VisionAndGuardrails({ project }: { project: any }) {
+function VisionAndGuardrails({ project, projectId }: { project: any; projectId: string }) {
   const autonomy = project.autonomy || {};
   const guardrails: string[] = (project.guardrails || []).filter(Boolean);
   const cadence = autonomy.cadence;
   const approvalMode = autonomy.approvalMode;
   const approvedThrough = autonomy.approvedThrough;
 
-  const showAny = project.vision || cadence || approvalMode || approvedThrough || guardrails.length > 0;
-  if (!showAny) return null;
+  // Fetch the project's full vision document from Postgres-backed
+  // /api/vision/[id]/doc. Falls back gracefully — a missing doc is
+  // common for thin projects.
+  const [doc, setDoc] = useState<string | null>(null);
+  const [docLoading, setDocLoading] = useState(true);
+  useEffect(() => {
+    let alive = true;
+    setDocLoading(true);
+    fetch(`/api/vision/${projectId}/doc`)
+      .then((r) => (r.ok ? r.json() : Promise.resolve({ content: '' })))
+      .then((d) => { if (alive) setDoc((d?.content as string) || ''); })
+      .catch(() => { if (alive) setDoc(''); })
+      .finally(() => { if (alive) setDocLoading(false); });
+    return () => { alive = false; };
+  }, [projectId]);
+
+  const hasDoc = !!(doc && doc.trim());
+  const hasInlineVision = !!project.vision;
+  const showAny = hasDoc || hasInlineVision || cadence || approvalMode || approvedThrough || guardrails.length > 0;
+  if (!showAny && !docLoading) return null;
+
+  // Studio-Ledger markdown styling. Headings echo masthead rules; body uses
+  // Fraunces serif at reading size; code drops to JetBrains Mono on a paper
+  // tone. First paragraph in the doc receives a drop cap via .ledger-prose.
+  const mdComponents = {
+    h1: ({ children }: any) => (
+      <h2
+        className="ledger-serif text-[var(--ledger-ink)] mt-0 mb-6 pb-3 border-b border-[var(--ledger-ink)]"
+        style={{ fontSize: '34px', lineHeight: 1.05, fontWeight: 350, letterSpacing: '-0.015em', fontVariationSettings: '"opsz" 96, "SOFT" 30' }}
+      >
+        {children}
+      </h2>
+    ),
+    h2: ({ children }: any) => (
+      <h3
+        className="ledger-serif text-[var(--ledger-oxblood)] mt-10 mb-4 pb-2 border-b border-[var(--ledger-rule)]"
+        style={{ fontSize: '22px', lineHeight: 1.15, fontWeight: 400, fontVariationSettings: '"opsz" 60' }}
+      >
+        {children}
+      </h3>
+    ),
+    h3: ({ children }: any) => (
+      <h4 className="ledger-mono text-[10.5px] uppercase tracking-[0.22em] text-[var(--ledger-ink-soft)] mt-7 mb-2 font-semibold">
+        {children}
+      </h4>
+    ),
+    p: ({ children }: any) => (
+      <p className="ledger-serif text-[15.5px] leading-[1.65] text-[var(--ledger-ink)] mb-4" style={{ fontWeight: 350 }}>
+        {children}
+      </p>
+    ),
+    ul: ({ children }: any) => (
+      <ul className="ledger-serif text-[15px] leading-[1.6] text-[var(--ledger-ink-soft)] mb-4 pl-5 space-y-1.5 list-none">
+        {children}
+      </ul>
+    ),
+    ol: ({ children }: any) => (
+      <ol className="ledger-serif text-[15px] leading-[1.6] text-[var(--ledger-ink-soft)] mb-4 pl-6 space-y-1.5 list-decimal">
+        {children}
+      </ol>
+    ),
+    li: ({ children }: any) => (
+      <li className="ledger-serif text-[15px] leading-[1.6] relative pl-4">
+        <span className="absolute left-0 top-0 text-[var(--ledger-ink-mute)]">·</span>
+        {children}
+      </li>
+    ),
+    strong: ({ children }: any) => (
+      <strong className="font-semibold text-[var(--ledger-ink)]">{children}</strong>
+    ),
+    em: ({ children }: any) => (
+      <em className="italic text-[var(--ledger-oxblood)]">{children}</em>
+    ),
+    a: ({ href, children }: any) => (
+      <a href={href} className="text-[var(--ledger-oxblood)] underline decoration-[var(--ledger-rule)] underline-offset-[3px] hover:decoration-[var(--ledger-oxblood)]" target="_blank" rel="noopener noreferrer">
+        {children}
+      </a>
+    ),
+    code: ({ children, className }: any) => {
+      const isBlock = className?.includes('language-');
+      if (isBlock) {
+        return (
+          <code className="block bg-[var(--ledger-paper-deep)] border border-[var(--ledger-rule-soft)] rounded-sm px-3 py-2.5 ledger-mono text-[12px] text-[var(--ledger-ink)] overflow-x-auto mb-4">
+            {children}
+          </code>
+        );
+      }
+      return (
+        <code className="bg-[var(--ledger-paper-deep)] px-1.5 py-0.5 rounded-sm ledger-mono text-[12px] text-[var(--ledger-ink)]">
+          {children}
+        </code>
+      );
+    },
+    pre: ({ children }: any) => (
+      <pre className="bg-[var(--ledger-paper-deep)] border border-[var(--ledger-rule-soft)] rounded-sm p-4 overflow-x-auto mb-5">
+        {children}
+      </pre>
+    ),
+    blockquote: ({ children }: any) => (
+      <blockquote className="border-l-2 border-[var(--ledger-oxblood)] pl-5 my-5 ledger-serif italic text-[var(--ledger-ink-soft)]" style={{ fontSize: '16px', lineHeight: 1.55 }}>
+        {children}
+      </blockquote>
+    ),
+    hr: () => (
+      <hr className="my-8 border-0 border-t border-[var(--ledger-rule)]" />
+    ),
+    table: ({ children }: any) => (
+      <table className="border-collapse w-full mb-5 ledger-serif text-[14px]">{children}</table>
+    ),
+    thead: ({ children }: any) => (
+      <thead className="border-b border-[var(--ledger-ink)]">{children}</thead>
+    ),
+    th: ({ children }: any) => (
+      <th className="text-left ledger-mono text-[10px] uppercase tracking-[0.18em] text-[var(--ledger-ink-mute)] py-2 pr-4 font-medium">{children}</th>
+    ),
+    td: ({ children }: any) => (
+      <td className="py-2 pr-4 align-top border-b border-[var(--ledger-rule-soft)] text-[var(--ledger-ink-soft)]">{children}</td>
+    ),
+  };
 
   return (
     <section className="mt-16 pt-10 border-t border-[var(--ledger-ink)] grid grid-cols-1 md:grid-cols-[1fr_240px] gap-x-12 gap-y-8">
       <div>
-        <h3 className="ledger-mono text-[10px] uppercase tracking-[0.28em] text-[var(--ledger-oxblood)] mb-4 font-medium">
+        <h3 className="ledger-mono text-[10px] uppercase tracking-[0.28em] text-[var(--ledger-oxblood)] mb-6 font-medium">
           Vision
         </h3>
-        {project.vision ? (
+
+        {hasDoc ? (
+          <div className="ledger-prose">
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+              {doc as string}
+            </ReactMarkdown>
+          </div>
+        ) : hasInlineVision ? (
           <p className="ledger-serif text-[18px] leading-[1.55] text-[var(--ledger-ink)] m-0" style={{ fontWeight: 350 }}>
             <span
               className="ledger-serif float-left mr-3 mt-1"
@@ -593,6 +721,8 @@ function VisionAndGuardrails({ project }: { project: any }) {
             </span>
             {String(project.vision).trim().slice(1)}
           </p>
+        ) : docLoading ? (
+          <p className="ledger-serif italic text-[var(--ledger-ink-mute)] m-0 text-[15px]">Loading…</p>
         ) : (
           <p className="ledger-serif italic text-[var(--ledger-ink-mute)] m-0 text-[15px]">No vision recorded.</p>
         )}
