@@ -73,6 +73,18 @@ function LedgerProjectPageInner() {
   const searchParams = useSearchParams();
   const projectId = params?.id as string;
 
+  // Activate Studio Ledger theme on the document root for the lifetime of
+  // this page, then clean up so other routes keep the dashboard's dark UI.
+  useEffect(() => {
+    const el = document.documentElement;
+    const prev = el.getAttribute('data-theme');
+    el.setAttribute('data-theme', 'ledger');
+    return () => {
+      if (prev == null) el.removeAttribute('data-theme');
+      else el.setAttribute('data-theme', prev);
+    };
+  }, []);
+
   const storeData = useWSData<any>('store');
   const project = useMemo<any>(() => {
     if (!storeData?.projects) return null;

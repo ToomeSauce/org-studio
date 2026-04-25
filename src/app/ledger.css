@@ -1,21 +1,14 @@
 /*
- * Studio Ledger UX — design tokens & global type rules.
+ * Studio Ledger — design tokens & global type rules.
  *
- * Activated only when <html data-theme="ledger"> is set (controlled by
- * <LedgerThemeBoot/> based on the STUDIO_LEDGER_UX feature flag).
- *
- * Scope:
- *  - Adds --ledger-* design tokens.
- *  - Re-points --bg-primary / --text-primary / etc. to ledger values when
- *    data-theme="ledger" is on, so existing components inherit the paper
- *    palette without each component being rewritten.
- *  - Sets --font-body and --font-mono to ledger faces.
- *
- * Cutover: when the flag is removed, fold these into globals.css :root and
- * delete the [data-theme="ledger"] override block.
+ * This stylesheet only takes effect when an ancestor element carries
+ * `data-theme="ledger"`. The Studio Ledger project page sets it on the
+ * <html> element on mount; the rest of the app keeps its dark dashboard
+ * styling. (The transitional opt-in feature flag was removed during the
+ * v0.17 cutover — the project page is now Ledger by default.)
  */
 
-:root {
+[data-theme="ledger"] {
   /* --- Ledger palette --- */
   --ledger-paper:        #f3eee4;
   --ledger-paper-deep:   #ebe4d6;
@@ -31,16 +24,13 @@
   --ledger-gilt:         #b8893d;
   --ledger-shadow:       0 1px 0 rgba(29,26,22,.04), 0 30px 60px -40px rgba(29,26,22,.18);
 
-  /* Ledger fonts. Set as next/font css variables in layout.tsx — the names
-     here are fallbacks for SSR / dev. */
+  /* Ledger fonts (next/font CSS variables wired in src/app/layout.tsx). */
   --ledger-font-display: var(--font-fraunces, 'Fraunces'), 'Iowan Old Style', Georgia, serif;
   --ledger-font-mono:    var(--font-jetbrains-mono, 'JetBrains Mono'), ui-monospace, monospace;
   --ledger-font-body:    var(--font-jetbrains-mono, 'JetBrains Mono'), 'Inter Tight', system-ui, sans-serif;
-}
 
-/* When data-theme="ledger" is active, swap the foundation tokens.
-   Existing components reading --bg-primary etc. inherit ledger palette. */
-[data-theme="ledger"] {
+  /* Foundation tokens — re-pointed to ledger values *only* under this scope.
+     The dashboard chrome outside the ledger page keeps its own dark tokens. */
   --bg-primary:        var(--ledger-paper);
   --bg-secondary:      var(--ledger-paper-deep);
   --bg-tertiary:       #e0d8c5;
@@ -69,13 +59,9 @@
   --accent-2-subtle:   rgba(184, 137, 61, 0.12);
 
   --success:           var(--ledger-moss);
-  --success-subtle:    rgba(74, 93, 58, 0.12);
   --warning:           var(--ledger-gilt);
-  --warning-subtle:    rgba(184, 137, 61, 0.12);
   --error:             var(--ledger-oxblood);
-  --error-subtle:      rgba(122, 31, 36, 0.10);
   --info:              var(--ledger-ink-soft);
-  --info-subtle:       rgba(74, 68, 60, 0.10);
 
   --card:              var(--ledger-paper-deep);
   --card-highlight:    rgba(255, 255, 255, 0.5);
@@ -85,27 +71,23 @@
   --shadow-lg:         0 12px 32px rgba(29, 26, 22, 0.16);
   --shadow-glow:       0 0 30px var(--accent-glow);
 
-  --font-body:         var(--ledger-font-body);
-  --font-mono:         var(--ledger-font-mono);
+  caret-color:         var(--ledger-oxblood);
 }
 
-/* Body texture — paper grain + faint ink/gilt washes. Applied at <body> level
-   so all routes inherit it when ledger is active. */
-[data-theme="ledger"] body {
+/* Body texture — paper grain + faint ink/gilt washes. Applied to the body
+   only when <html data-theme="ledger">. */
+html[data-theme="ledger"] body {
   background-color: var(--ledger-paper);
   background-image:
     radial-gradient(circle at 10% -10%, rgba(184, 137, 61, 0.05), transparent 40%),
     radial-gradient(circle at 110% 30%, rgba(122, 31, 36, 0.04), transparent 50%),
     url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.11 0 0 0 0 0.10 0 0 0 0 0.08 0 0 0 0.045 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  color: var(--ledger-ink);
 }
 
-/* Selection + caret colour to match. */
-[data-theme="ledger"] ::selection {
+html[data-theme="ledger"] ::selection {
   background: var(--ledger-oxblood);
   color: var(--ledger-paper);
-}
-[data-theme="ledger"] {
-  caret-color: var(--ledger-oxblood);
 }
 
 /* Helper utility classes used by ledger components. */
@@ -134,9 +116,6 @@
   [data-theme="ledger"] .ledger-stagger > * {
     animation: none !important;
   }
-  [data-theme="ledger"] * {
-    transition-duration: 0ms !important;
-  }
 }
 
 @media (prefers-contrast: more) {
@@ -148,9 +127,6 @@
   }
 }
 
-/* Mobile: tighten the page padding & stack the metadata rail under the main
-   content. The grid already collapses to 1 column at <1024px via the
-   lg:grid-cols-* rule on the inner container, so this is mostly spacing. */
 @media (max-width: 768px) {
   [data-theme="ledger"] .ledger-page {
     padding-left: 1.25rem !important;
@@ -170,13 +146,10 @@
     max-width: none !important;
     padding: 0 !important;
   }
-  [data-theme="ledger"] header,
-  [data-theme="ledger"] aside,
-  [data-theme="ledger"] nav[role="tablist"],
-  [data-theme="ledger"] button {
+  [data-theme="ledger"] .ledger-page > header,
+  [data-theme="ledger"] .ledger-page > aside,
+  [data-theme="ledger"] .ledger-page nav[role="tablist"],
+  [data-theme="ledger"] .ledger-page button {
     display: none !important;
-  }
-  [data-theme="ledger"] main {
-    display: block !important;
   }
 }

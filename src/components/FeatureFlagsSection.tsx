@@ -14,13 +14,6 @@ interface FlagDef {
 
 const FLAG_DEFS: FlagDef[] = [
   {
-    flag: FEATURE_FLAGS.STUDIO_LEDGER_UX,
-    label: 'Studio Ledger UX',
-    blurb:
-      'Project pages render in the editorial Studio Ledger theme — Fraunces serif, paper palette, oxblood + gilt accents. Will become default once the rollout is complete.',
-    experimental: true,
-  },
-  {
     flag: FEATURE_FLAGS.MOBILE_FIRST_UX,
     label: 'Mobile-first threaded UX',
     blurb:

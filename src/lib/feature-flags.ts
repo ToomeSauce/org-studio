@@ -12,9 +12,6 @@ export const FEATURE_FLAGS = {
   PUSH_NOTIFICATIONS: 'push-notifications',
   // Telegram migration tools (v0.16+)
   TELEGRAM_MIGRATION: 'telegram-migration',
-  // Studio Ledger UX for the project page (v0.17+): editorial / archival aesthetic
-  // Default off during build-out; cutover flips default and removes legacy page.
-  STUDIO_LEDGER_UX: 'studio-ledger-ux',
 } as const;
 
 export type FeatureFlag = (typeof FEATURE_FLAGS)[keyof typeof FEATURE_FLAGS];

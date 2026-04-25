@@ -5,12 +5,10 @@ import { Fraunces, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { MobileMenuProvider } from "@/lib/mobile-menu-context";
-import { LedgerThemeBoot } from "@/components/ledger/LedgerThemeBoot";
 import { ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 
-// Studio Ledger typography. Loaded site-wide so the ledger UX has zero font-flash
-// when toggled, but only applied via [data-theme="ledger"] root attribute.
+// Studio Ledger typography (canonical post-cutover).
 const fraunces = Fraunces({
   subsets: ["latin"],
   weight: "variable",
@@ -43,7 +41,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       suppressHydrationWarning
     >
       <body className="font-[var(--font-body)] antialiased">
-        <LedgerThemeBoot />
         <ThemeProvider>
           <MobileMenuProvider>
             {children}
