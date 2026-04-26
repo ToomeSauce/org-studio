@@ -1,0 +1,167 @@
+/*
+ * Studio Ledger — design tokens & global type rules.
+ *
+ * This stylesheet only takes effect when an ancestor element carries
+ * `data-theme="ledger"`. The Studio Ledger project page sets it on the
+ * <html> element on mount; the rest of the app keeps its dark dashboard
+ * styling. (The transitional opt-in feature flag was removed during the
+ * v0.17 cutover — the project page is now Ledger by default.)
+ */
+
+[data-theme="ledger"] {
+  /* --- Ledger palette --- */
+  --ledger-paper:        #f3eee4;
+  --ledger-paper-deep:   #ebe4d6;
+  --ledger-paper-soft:   rgba(255, 255, 255, 0.35);
+  --ledger-ink:          #1d1a16;
+  --ledger-ink-soft:     #4a443c;
+  --ledger-ink-mute:     #7a7165;
+  --ledger-rule:         #c9bfaa;
+  --ledger-rule-soft:    #d8cfbb;
+  --ledger-oxblood:      #7a1f24;
+  --ledger-oxblood-deep: #5a161a;
+  --ledger-moss:         #4a5d3a;
+  --ledger-gilt:         #b8893d;
+  --ledger-shadow:       0 1px 0 rgba(29,26,22,.04), 0 30px 60px -40px rgba(29,26,22,.18);
+
+  /* Ledger fonts (next/font CSS variables wired in src/app/layout.tsx). */
+  --ledger-font-display: var(--font-fraunces, 'Fraunces'), 'Iowan Old Style', Georgia, serif;
+  --ledger-font-mono:    var(--font-jetbrains-mono, 'JetBrains Mono'), ui-monospace, monospace;
+  --ledger-font-body:    var(--font-jetbrains-mono, 'JetBrains Mono'), 'Inter Tight', system-ui, sans-serif;
+
+  /* Foundation tokens — re-pointed to ledger values *only* under this scope.
+     The dashboard chrome outside the ledger page keeps its own dark tokens. */
+  --bg-primary:        var(--ledger-paper);
+  --bg-secondary:      var(--ledger-paper-deep);
+  --bg-tertiary:       #e0d8c5;
+  --bg-hover:          rgba(255, 255, 255, 0.45);
+  --bg-active:         rgba(255, 255, 255, 0.6);
+  --bg-elevated:       var(--ledger-paper-deep);
+
+  --border-default:    var(--ledger-rule);
+  --border-subtle:     var(--ledger-rule-soft);
+  --border-strong:     var(--ledger-ink);
+  --border-hover:      var(--ledger-ink-soft);
+
+  --text-primary:      var(--ledger-ink);
+  --text-secondary:    var(--ledger-ink-soft);
+  --text-tertiary:     var(--ledger-ink-mute);
+  --text-muted:        var(--ledger-ink-mute);
+
+  --accent-primary:    var(--ledger-oxblood);
+  --accent:            var(--ledger-oxblood);
+  --accent-hover:      var(--ledger-oxblood-deep);
+  --accent-muted:      rgba(122, 31, 36, 0.10);
+  --accent-glow:       rgba(122, 31, 36, 0.18);
+  --accent-contrast:   var(--ledger-paper);
+
+  --accent-2:          var(--ledger-gilt);
+  --accent-2-subtle:   rgba(184, 137, 61, 0.12);
+
+  --success:           var(--ledger-moss);
+  --warning:           var(--ledger-gilt);
+  --error:             var(--ledger-oxblood);
+  --info:              var(--ledger-ink-soft);
+
+  --card:              var(--ledger-paper-deep);
+  --card-highlight:    rgba(255, 255, 255, 0.5);
+
+  --shadow-sm:         0 1px 0 rgba(29, 26, 22, 0.04);
+  --shadow-md:         0 4px 14px rgba(29, 26, 22, 0.10);
+  --shadow-lg:         0 12px 32px rgba(29, 26, 22, 0.16);
+  --shadow-glow:       0 0 30px var(--accent-glow);
+
+  caret-color:         var(--ledger-oxblood);
+}
+
+/* Body texture — paper grain + faint ink/gilt washes. Applied to the body
+   only when <html data-theme="ledger">. */
+html[data-theme="ledger"] body {
+  background-color: var(--ledger-paper);
+  background-image:
+    radial-gradient(circle at 10% -10%, rgba(184, 137, 61, 0.05), transparent 40%),
+    radial-gradient(circle at 110% 30%, rgba(122, 31, 36, 0.04), transparent 50%),
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.11 0 0 0 0 0.10 0 0 0 0 0.08 0 0 0 0.045 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  color: var(--ledger-ink);
+}
+
+html[data-theme="ledger"] ::selection {
+  background: var(--ledger-oxblood);
+  color: var(--ledger-paper);
+}
+
+/* Helper utility classes used by ledger components. */
+.ledger-serif  { font-family: var(--ledger-font-display); font-feature-settings: 'ss01','ss02'; }
+.ledger-mono   { font-family: var(--ledger-font-mono); }
+.ledger-body   { font-family: var(--ledger-font-body); }
+
+/* Drop cap on the first paragraph of a markdown-rendered ledger doc. */
+html[data-theme="ledger"] .ledger-prose > p:first-of-type::first-letter {
+  font-family: var(--ledger-font-display);
+  font-size: 4.4em;
+  line-height: 0.85;
+  font-weight: 300;
+  float: left;
+  margin: 0.05em 0.1em -0.05em 0;
+  color: var(--ledger-oxblood);
+  font-variation-settings: "opsz" 144, "SOFT" 60;
+}
+
+/* Animations used by ledger pages. */
+@keyframes ledger-rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.ledger-rise { animation: ledger-rise 700ms cubic-bezier(.2,.7,.2,1) both; }
+.ledger-stagger > * { animation: ledger-rise 600ms cubic-bezier(.2,.7,.2,1) both; }
+.ledger-stagger > *:nth-child(1) { animation-delay:  60ms; }
+.ledger-stagger > *:nth-child(2) { animation-delay: 130ms; }
+.ledger-stagger > *:nth-child(3) { animation-delay: 200ms; }
+.ledger-stagger > *:nth-child(4) { animation-delay: 270ms; }
+.ledger-stagger > *:nth-child(5) { animation-delay: 340ms; }
+.ledger-stagger > *:nth-child(6) { animation-delay: 410ms; }
+
+/* -- Accessibility & responsiveness -------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  [data-theme="ledger"] .ledger-rise,
+  [data-theme="ledger"] .ledger-stagger > * {
+    animation: none !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  [data-theme="ledger"] {
+    --ledger-ink-soft:  #2a2620;
+    --ledger-ink-mute:  #4a443c;
+    --ledger-rule:      #8a7f6a;
+    --ledger-rule-soft: #a39880;
+  }
+}
+
+@media (max-width: 768px) {
+  [data-theme="ledger"] .ledger-page {
+    padding-left: 1.25rem !important;
+    padding-right: 1.25rem !important;
+    padding-top: 2rem !important;
+  }
+}
+
+/* -- Print -------------------------------------------------------------- */
+
+@media print {
+  [data-theme="ledger"] body {
+    background: #fff !important;
+    background-image: none !important;
+  }
+  [data-theme="ledger"] .ledger-page {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+  [data-theme="ledger"] .ledger-page > header,
+  [data-theme="ledger"] .ledger-page > aside,
+  [data-theme="ledger"] .ledger-page nav[role="tablist"],
+  [data-theme="ledger"] .ledger-page button {
+    display: none !important;
+  }
+}

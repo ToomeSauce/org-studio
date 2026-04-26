@@ -3,6 +3,8 @@
  * Controlled by env vars and stored in localStorage.
  */
 
+import * as React from 'react';
+
 export const FEATURE_FLAGS = {
   // Mobile-first threaded UX (v0.15+): tabs, threads, unified inbox
   MOBILE_FIRST_UX: 'mobile-first-ux',
@@ -65,17 +67,27 @@ export function getAllFeatureFlags(): Record<FeatureFlag, boolean> {
  * Hook for React components to listen to feature flag changes
  */
 export function useFeatureFlag(flag: FeatureFlag): [boolean, () => void] {
-  const [enabled, setEnabled] = React.useState(() => isFeatureEnabled(flag));
+  // Initial render must be deterministic across SSR/CSR — start at the
+  // SSR-safe value (false) and re-sync from localStorage after mount.
+  const [enabled, setEnabled] = React.useState<boolean>(false);
 
   React.useEffect(() => {
+    setEnabled(isFeatureEnabled(flag));
     const handler = (e: CustomEvent) => {
       if (e.detail.flag === flag) setEnabled(e.detail.enabled);
     };
     window.addEventListener('feature-flag-changed', handler as EventListener);
-    return () => window.removeEventListener('feature-flag-changed', handler as EventListener);
+    // Cross-tab sync
+    const storage = (e: StorageEvent) => {
+      if (e.key === `ff:${flag}`) setEnabled(isFeatureEnabled(flag));
+    };
+    window.addEventListener('storage', storage);
+    return () => {
+      window.removeEventListener('feature-flag-changed', handler as EventListener);
+      window.removeEventListener('storage', storage);
+    };
   }, [flag]);
 
   return [enabled, () => toggleFeatureFlag(flag)];
 }
 
-import React from 'react';
