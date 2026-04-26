@@ -552,6 +552,18 @@ export async function POST(req: NextRequest) {
             { status: 400 }
           );
         }
+        // #1138 follow-up: blocked status requires a non-empty blockedReason.
+        // Without one, blocked tasks accumulate as silent dead weight — 16 of
+        // them in the active store as of 2026-04-26 with no context for why.
+        if (initialStatus === 'blocked') {
+          const reason = (payload.task?.blockedReason || '').trim();
+          if (!reason) {
+            return NextResponse.json(
+              { error: "Tasks created with status='blocked' must include a non-empty blockedReason. Describe what's blocking it and what would unblock." },
+              { status: 400 }
+            );
+          }
+        }
         // #863: atomic allocation via provider (Postgres sequence / file-mode mutex).
         let ticketNumber: number;
         try {
@@ -653,6 +665,21 @@ export async function POST(req: NextRequest) {
             if (!VALID_STATUSES.includes(updates.status)) {
               return NextResponse.json(
                 { error: `Invalid status '${updates.status}'. Allowed: ${VALID_STATUSES.join(', ')}. (QA is a component, not a column — see #862.)` },
+                { status: 400 }
+              );
+            }
+          }
+
+          // #1138 follow-up: transitioning TO blocked requires a non-empty
+          // blockedReason — either set in this update or already present on
+          // the task. Lets agents flip status without clobbering an existing
+          // reason, but blocks the silent-dead-weight failure mode.
+          if (updates.status === 'blocked' && t.status !== 'blocked') {
+            const incomingReason = typeof updates.blockedReason === 'string' ? updates.blockedReason.trim() : '';
+            const existingReason = typeof t.blockedReason === 'string' ? t.blockedReason.trim() : '';
+            if (!incomingReason && !existingReason) {
+              return NextResponse.json(
+                { error: "Moving a task to status='blocked' requires a non-empty blockedReason. Describe what's blocking it and what would unblock." },
                 { status: 400 }
               );
             }
