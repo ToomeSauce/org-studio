@@ -44,6 +44,15 @@ export interface ComponentVersionLike {
    * code — see skills/org-studio-api/SKILL.md).
    */
   waitsFor?: ComponentWaitsFor;
+  /**
+   * #1126 PR 1 (additive): per-version owner override. When set, this owner
+   * takes precedence over the section's default `owner` for tasks created in
+   * this version. Enables "versioned ownership" patterns — e.g. a single QA
+   * owner takes over a specific version slice without modeling QA as a
+   * separate component. Versions remain just versions; the version string is
+   * unaffected. See `getEffectiveOwner()`.
+   */
+  owner?: string;
 }
 
 export interface ComponentLike {
@@ -277,4 +286,39 @@ export function getComponentApprovedThrough(
   const comps = getEffectiveComponents(project);
   const component = comps.find((c) => c.id === componentId);
   return component?.approvedThrough;
+}
+
+/**
+ * #1126 PR 1: resolve the effective owner for a (component, version) pair.
+ *
+ * Precedence (highest first):
+ *   1. `version.owner` — per-version override on the component
+ *   2. `component.owner` — section default
+ *   3. `undefined` — no owner resolvable (caller decides fallback)
+ *
+ * NOTE: this helper does NOT consult `task.assignee`. Per-task assignee is
+ * the highest-precedence layer in the full chain
+ * (`task.assignee > version.owner > component.owner`), but tasks may not
+ * exist yet at call sites that resolve the default for new-task creation.
+ * Callers that have a task in hand should check `task.assignee` first and
+ * only fall back to this helper when no explicit assignee is set.
+ *
+ * Returns `undefined` if the component or version cannot be resolved on the
+ * project, or if neither layer carries an owner. Callers handle that case.
+ */
+export function getEffectiveOwner(
+  project: ProjectLike,
+  componentId: string,
+  versionId: string | undefined,
+): string | undefined {
+  const comps = getEffectiveComponents(project);
+  const component = comps.find((c) => c.id === componentId);
+  if (!component) return undefined;
+  if (versionId && component.versions && component.versions.length > 0) {
+    const version = component.versions.find((v) => v.id === versionId);
+    if (version && typeof version.owner === 'string' && version.owner.trim().length > 0) {
+      return version.owner;
+    }
+  }
+  return component.owner && component.owner.trim().length > 0 ? component.owner : undefined;
 }
