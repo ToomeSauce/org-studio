@@ -161,19 +161,12 @@ export function isTaskDispatchEligible(store: StoreLike, task: TaskLike): boolea
   // Rule 5 (#1126 PR 2): all prior versions on this component must be shipped.
   // Sequential dispatch — versions queue up, tasks within a version don't.
   //
-  // PR2→PR4 transitional carve-out: legacy `role: 'qa'` sections are exempt
-  // from this rule. They still flow through their existing component-level
-  // waitsFor edges (Rule 4) until PR 5 migrates Thrivor and PR 6 rips the
-  // role: 'qa' branch entirely. Without this carve-out, applying sequential
-  // gating to Thrivor's QA section would deadlock dispatch in the migration
-  // window.
-  const proj2 = (store.projects || []).find((p) => p.id === task.projectId);
-  const cmp = proj2 ? getEffectiveComponents(proj2).find((c) => c.id === task.sectionId) : undefined;
-  const isLegacyQaSection = cmp?.role === 'qa';
-  if (!isLegacyQaSection) {
-    if (!priorVersionsComplete(store, task.projectId!, task.sectionId!, task.version!)) {
-      return false;
-    }
+  // The PR2→PR5 transitional `role: 'qa'` carve-out was removed in PR 6
+  // after the Thrivor migration folded the only remaining QA section
+  // into Main. Versioned ownership is now uniform: every section runs
+  // through the same gate.
+  if (!priorVersionsComplete(store, task.projectId!, task.sectionId!, task.version!)) {
+    return false;
   }
 
   return true;
@@ -208,12 +201,10 @@ export function isTaskWaiting(store: StoreLike, task: TaskLike): boolean {
 
   // #1126 PR 2: waiting because a prior version on the same component is
   // not yet shipped. The work IS approved (within horizon) but blocked on
-  // the queue ahead of it. That's a wait, not idle. Same legacy carve-out
-  // as the dispatch gate: role: 'qa' sections aren't sequence-gated until
-  // PR 5/6 lands.
-  const cmp = getEffectiveComponents(proj).find((c) => c.id === task.sectionId);
-  const isLegacyQaSection = cmp?.role === 'qa';
-  if (!isLegacyQaSection && !priorVersionsComplete(store, task.projectId!, task.sectionId!, task.version!)) {
+  // the queue ahead of it. That's a wait, not idle. The PR2→PR5 `role:
+  // 'qa'` carve-out was removed in PR 6 — versioned ownership is now
+  // uniform across all sections.
+  if (!priorVersionsComplete(store, task.projectId!, task.sectionId!, task.version!)) {
     return true;
   }
   return false;
