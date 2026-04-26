@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # The airlock: production build must pass. Mirrors what the private deploy
+  # repo (teampartial/org-studio-deploy) tries to do every 30 min. If this is
+  # green, deploy is unlikely to fail at build-time.
+  build:
+    name: build (gating)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Production build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_BUILD_SHA: ci-${{ github.sha }}
+
+  # Tests run in advisory mode for now — there are pre-existing failures
+  # (see follow-up ticket) and we don't want to gate PRs on them until that's
+  # cleaned up. Once the suite is green, drop continue-on-error to make this
+  # a gating check.
+  test:
+    name: test (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Vitest
+        run: npm test
