@@ -198,7 +198,7 @@ describe('hasActionableWork', () => {
   it('matches case-insensitively', () => {
     addTask({ title: 'Case test', status: 'backlog', assignee: 'MIKEY' });
 
-    expect(hasActionableWork('alex')).toBe(true);
+    expect(hasActionableWork('mikey')).toBe(true);
   });
 
   it('matches by agentId directly', () => {
