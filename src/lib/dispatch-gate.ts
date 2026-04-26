@@ -15,8 +15,10 @@ import {
   getComponentApprovedThrough,
   getComponentVersions,
   getEffectiveComponents,
+  type ComponentVersionLike,
   type ProjectLike,
 } from '@/lib/component-helpers';
+import { compareVersions } from '@/lib/version-utils';
 import { isVersionLessOrEqual } from '@/lib/version-utils';
 
 interface TaskLike {
@@ -78,6 +80,61 @@ export function isTaskGatedByWaitsFor(store: StoreLike, task: TaskLike): boolean
 }
 
 /**
+ * Canonical version sort: explicit `sort_order` ASC first, then semver ASC.
+ * Mirrors the sort applied at the roadmap read path; isolating it here keeps
+ * the sequential gate consistent with what the UI shows users.
+ */
+function sortVersionsCanonical(versions: ComponentVersionLike[]): ComponentVersionLike[] {
+  return versions.slice().sort((a, b) => {
+    if (a.sort_order != null && b.sort_order != null) return a.sort_order - b.sort_order;
+    if (a.sort_order != null) return -1;
+    if (b.sort_order != null) return 1;
+    return compareVersions(a.version, b.version);
+  });
+}
+
+/**
+ * #1126 PR 2: Returns true iff every version that comes BEFORE `targetVersion`
+ * (canonical order) on this component is `status: 'shipped'` (or `'done'` as
+ * a tolerant alias for legacy data).
+ *
+ * Used by the sequential dispatch gate: a version cannot dispatch tasks
+ * until every prior version is shipped. Versions within a single component
+ * are an ordered queue; tasks within a single version remain unordered.
+ *
+ * Edge cases:
+ *   - Component has no `versions[]` at all → returns true (no prior to check).
+ *   - `targetVersion` is the first version in canonical order → returns true.
+ *   - `targetVersion` is not present in `versions[]` → returns true (caller's
+ *     other rules will handle the unknown-version case; this predicate is
+ *     specifically about "prior versions complete", not version validity).
+ *
+ * NOTE: this predicate does not look at task statuses. The component's own
+ * `version.status` IS the source of truth for shipped/not. PR 5 of the
+ * roadmap-sync work flips drifted statuses based on linked task completion;
+ * the sequential gate trusts that result.
+ */
+export function priorVersionsComplete(
+  store: StoreLike,
+  projectId: string,
+  componentId: string,
+  targetVersion: string,
+): boolean {
+  const proj = (store.projects || []).find((p) => p.id === projectId);
+  if (!proj) return true;
+  const versions = getComponentVersions(proj, componentId);
+  if (versions.length === 0) return true;
+  const sorted = sortVersionsCanonical(versions);
+  const idx = sorted.findIndex((v) => v.version === targetVersion);
+  if (idx <= 0) return true; // first version OR not found
+  for (let i = 0; i < idx; i++) {
+    const status = sorted[i].status;
+    if (status !== 'shipped' && status !== 'done') return false;
+  }
+  return true;
+}
+
+/**
  * Returns true iff the task is dispatch-eligible (all rules 1-4 satisfied).
  * The caller is responsible for rules 5 (status === 'backlog' and assignee
  * matches).
@@ -100,6 +157,24 @@ export function isTaskDispatchEligible(store: StoreLike, task: TaskLike): boolea
 
   // Rule 4: component-version waitsFor must be satisfied.
   if (isTaskGatedByWaitsFor(store, task)) return false;
+
+  // Rule 5 (#1126 PR 2): all prior versions on this component must be shipped.
+  // Sequential dispatch — versions queue up, tasks within a version don't.
+  //
+  // PR2→PR4 transitional carve-out: legacy `role: 'qa'` sections are exempt
+  // from this rule. They still flow through their existing component-level
+  // waitsFor edges (Rule 4) until PR 5 migrates Thrivor and PR 6 rips the
+  // role: 'qa' branch entirely. Without this carve-out, applying sequential
+  // gating to Thrivor's QA section would deadlock dispatch in the migration
+  // window.
+  const proj2 = (store.projects || []).find((p) => p.id === task.projectId);
+  const cmp = proj2 ? getEffectiveComponents(proj2).find((c) => c.id === task.sectionId) : undefined;
+  const isLegacyQaSection = cmp?.role === 'qa';
+  if (!isLegacyQaSection) {
+    if (!priorVersionsComplete(store, task.projectId!, task.sectionId!, task.version!)) {
+      return false;
+    }
+  }
 
   return true;
 }
@@ -126,5 +201,20 @@ export function isTaskWaiting(store: StoreLike, task: TaskLike): boolean {
 
   const approvedThrough = getComponentApprovedThrough(proj, task.sectionId);
   const withinHorizon = !!approvedThrough && isVersionLessOrEqual(task.version, approvedThrough);
-  return withinHorizon && isTaskGatedByWaitsFor(store, task);
+  if (!withinHorizon) return false;
+
+  // Waiting on a per-version waitsFor edge (existing).
+  if (isTaskGatedByWaitsFor(store, task)) return true;
+
+  // #1126 PR 2: waiting because a prior version on the same component is
+  // not yet shipped. The work IS approved (within horizon) but blocked on
+  // the queue ahead of it. That's a wait, not idle. Same legacy carve-out
+  // as the dispatch gate: role: 'qa' sections aren't sequence-gated until
+  // PR 5/6 lands.
+  const cmp = getEffectiveComponents(proj).find((c) => c.id === task.sectionId);
+  const isLegacyQaSection = cmp?.role === 'qa';
+  if (!isLegacyQaSection && !priorVersionsComplete(store, task.projectId!, task.sectionId!, task.version!)) {
+    return true;
+  }
+  return false;
 }
