@@ -28,6 +28,7 @@ const TRIGGER_COOLDOWN_MS = 60_000; // 1 minute
 const lastTriggerByAgent: Record<string, number> = {};
 
 // Loop detection: max loops on same task+status before escalation
+// (constants moved into the v2 section below — see #1138)
 
 const NOTIFY_CHAT_ID = process.env.NOTIFY_CHAT_ID || '';
 
@@ -71,19 +72,58 @@ function getAgentRole(store: StoreData, agentId: string): string | undefined {
 }
 
 /**
- * Loop detection: increment loopCount on in-progress/QA tasks for an agent.
- * Returns tasks that have exceeded the max loop threshold (stalled).
- * 
- * A "loop" means the scheduler dispatched the agent but the task status didn't change.
- * Comments and other activity reset the counter — the agent IS making progress.
+ * Stall detection (#1138 v2 — time-based + stale-claim aware).
+ *
+ * The old heuristic counted scheduler dispatches that didn't change task
+ * status. That conflated two things:
+ *   1. an agent stuck in a tool loop with no real output, and
+ *   2. an agent doing real multi-step work where status legitimately stays
+ *      `in-progress` for many tool calls (read 5 files → think → write code).
+ * It also fired on stale `in-progress` claims for tasks the agent had
+ * already shipped or moved past — see ticket #1138 for the 5 false-positive
+ * post-mortem.
+ *
+ * v2 requires THREE signals before escalating, in priority order:
+ *   (a) MAX_LOOPS_BEFORE_ESCALATION dispatches without progress
+ *       (existing — coarse: "this isn't a one-off")
+ *   (b) lastActivityAt is older than STALL_QUIET_THRESHOLD_MS
+ *       (NEW — "the agent really hasn't done anything on this task lately";
+ *        comments, status changes, store updates all bump lastActivityAt)
+ *   (c) the assignee's most recent activity on ANY other task is OLDER
+ *       than this task's lastActivityAt
+ *       (NEW — if they're working other tasks, this one is a stale claim,
+ *        not a stall; we annotate and skip the page instead of paging)
+ *
+ * Stale-claim case: comment + leave assignee/status alone (no Telegram).
+ * Real stall: full pause + Telegram alert (existing behaviour).
  */
-const MAX_LOOPS_BEFORE_ESCALATION = 6; // raised from 3 — agents need room for complex tasks
+const MAX_LOOPS_BEFORE_ESCALATION = 12; // raised from 6 (#1138, was raised 3→6 earlier)
+const STALL_QUIET_THRESHOLD_MS = 15 * 60 * 1000; // 15 minutes of no lastActivityAt bump
+const STALE_CLAIM_COMMENT_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 1 stale-claim hint per task per day
 
-async function detectAndIncrementLoops(store: StoreData, agentId: string): Promise<{ stalled: any[]; incremented: number }> {
+/**
+ * Returns the most recent lastActivityAt across all OTHER tasks owned by
+ * `assigneeLower` (i.e. excluding `excludeTaskId`). Used to detect stale
+ * claims: if the agent is busy elsewhere, this task isn't a stall.
+ */
+function maxOtherTaskActivity(store: StoreData, assigneeLower: string, excludeTaskId: string): number {
+  let max = 0;
+  for (const t of store.tasks) {
+    if (t.id === excludeTaskId) continue;
+    if ((t.assignee || '').toLowerCase() !== assigneeLower) continue;
+    const ts = t.lastActivityAt || 0;
+    if (ts > max) max = ts;
+  }
+  return max;
+}
+
+async function detectAndIncrementLoops(store: StoreData, agentId: string): Promise<{ stalled: any[]; staleClaims: any[]; incremented: number }> {
   const agentName = getAgentName(store, agentId);
   const nameLower = agentName.toLowerCase();
   const stalled: any[] = [];
+  const staleClaims: any[] = [];
   let incremented = 0;
+  const now = Date.now();
 
   for (let i = 0; i < store.tasks.length; i++) {
     const t = store.tasks[i];
@@ -92,31 +132,86 @@ async function detectAndIncrementLoops(store: StoreData, agentId: string): Promi
     if (t.status !== 'in-progress') continue;
     if (t.loopPausedAt) continue; // already paused
 
-    // Reset loop count if agent posted a comment since last dispatch
+    // Reset loop count if agent posted a non-system comment since last dispatch
     // (comments = progress, even without status change)
-    const lastComment = (t.comments || []).filter((c: any) => 
+    const lastComment = (t.comments || []).filter((c: any) =>
       (c.author?.toLowerCase() === nameLower || c.author?.toLowerCase() === agentId) && c.type !== 'system'
     ).pop();
     const lastDispatchTime = t._lastDispatchedAt || 0;
     if (lastComment?.createdAt && lastComment.createdAt > lastDispatchTime) {
-      store.tasks[i] = { ...t, loopCount: 0, _lastDispatchedAt: Date.now() };
+      store.tasks[i] = { ...t, loopCount: 0, _lastDispatchedAt: now };
       continue; // has recent activity, don't increment
     }
 
     const newCount = (t.loopCount || 0) + 1;
-    store.tasks[i] = { ...t, loopCount: newCount, _lastDispatchedAt: Date.now() };
+    store.tasks[i] = { ...t, loopCount: newCount, _lastDispatchedAt: now };
     incremented++;
 
-    if (newCount >= MAX_LOOPS_BEFORE_ESCALATION) {
-      stalled.push(store.tasks[i]);
+    if (newCount < MAX_LOOPS_BEFORE_ESCALATION) continue;
+
+    // (b) Time-based gate: must also have been quiet on this task for a while.
+    // lastActivityAt is bumped on comments, status changes, and store updates,
+    // so a busy agent passes through this gate even mid-multi-step work.
+    const lastActivity = t.lastActivityAt || t.createdAt || 0;
+    const quietMs = now - lastActivity;
+    if (quietMs < STALL_QUIET_THRESHOLD_MS) {
+      // Loop count hit threshold but the agent has touched this task recently.
+      // Almost certainly real work in progress. Don't escalate yet.
+      continue;
     }
+
+    // (c) Stale-claim check: is the agent more recently active on OTHER tasks?
+    // If yes, this 'in-progress' is a forgotten claim — don't page, just note.
+    const otherActivity = maxOtherTaskActivity(store, assignee, t.id);
+    if (otherActivity > lastActivity) {
+      staleClaims.push(store.tasks[i]);
+      continue;
+    }
+
+    stalled.push(store.tasks[i]);
   }
 
   if (incremented > 0) {
     await writeStore(store);
   }
 
-  return { stalled, incremented };
+  return { stalled, staleClaims, incremented };
+}
+
+/**
+ * Annotate stale-claim tasks: drop a one-line system comment hinting that
+ * the assignee may have moved on, but DO NOT pause or page. Caller decides
+ * cadence; we cooldown per task to avoid spamming the comment thread.
+ */
+async function annotateStaleClaims(store: StoreData, agentId: string, staleClaims: any[]): Promise<void> {
+  if (staleClaims.length === 0) return;
+  const agentName = getAgentName(store, agentId);
+  const now = Date.now();
+  let mutated = false;
+
+  for (const task of staleClaims) {
+    const idx = store.tasks.findIndex(t => t.id === task.id);
+    if (idx < 0) continue;
+    const existing = store.tasks[idx].comments || [];
+    // Cooldown: skip if we already noted this task within the last 24h.
+    const recentNote = existing
+      .filter((c: any) => c.type === 'system' && typeof c.id === 'string' && c.id.startsWith('sys-stale-claim-'))
+      .pop();
+    if (recentNote && (now - (recentNote.createdAt || 0)) < STALE_CLAIM_COMMENT_COOLDOWN_MS) continue;
+
+    const note = `🔍 **Possible stale claim** — ${agentName} appears to be active on other tasks more recently than this one. If this task is done or no longer assigned to ${agentName}, please update its status. (No agent loop paused.)`;
+    existing.push({
+      id: `sys-stale-claim-${now}-${task.id}`,
+      author: 'System',
+      content: note,
+      createdAt: now,
+      type: 'system',
+    });
+    store.tasks[idx] = { ...store.tasks[idx], comments: existing };
+    mutated = true;
+  }
+
+  if (mutated) await writeStore(store);
 }
 
 /**
@@ -602,9 +697,14 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ ok: true, skipped: true, reason: 'No actionable work' });
         }
 
-        // Loop detection: increment counts and check for stalled tasks
+        // Loop detection (#1138 v2): time-based + stale-claim aware.
         const freshStore = await readStore();
-        const { stalled, incremented } = await detectAndIncrementLoops(freshStore, agentId);
+        const { stalled, staleClaims, incremented } = await detectAndIncrementLoops(freshStore, agentId);
+
+        // Stale claims: annotate (system comment) but don't pause or page.
+        if (staleClaims.length > 0) {
+          await annotateStaleClaims(await readStore(), agentId, staleClaims);
+        }
 
         if (stalled.length > 0) {
           // Pause stalled tasks and send alerts instead of firing another loop
