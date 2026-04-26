@@ -518,7 +518,7 @@ describe('StoreProvider Abstraction', () => {
       const sec2 = await sectionProvider.addSection(project.id, { name: 'Backend', owner: 'dev', outcomes: '', contract: '' });
 
       // Read to see how many sections exist before delete
-      let store = JSON.parse(fs.readFileSync(path.join(sectionTempDir, 'store.json'), 'utf-8'));
+      let store = await sectionProvider.read();
       let proj = store.projects.find((p: any) => p.id === project.id);
       const countBefore = proj.sections.length;
 
@@ -526,7 +526,7 @@ describe('StoreProvider Abstraction', () => {
       await sectionProvider.deleteSection(project.id, sec2.id);
 
       // Section should still exist with archivedAt set
-      store = JSON.parse(fs.readFileSync(path.join(sectionTempDir, 'store.json'), 'utf-8'));
+      store = await sectionProvider.read();
       proj = store.projects.find((p: any) => p.id === project.id);
       expect(proj.sections.length).toBe(countBefore); // Same count — soft-deleted
       const archived = proj.sections.find((s: any) => s.id === sec2.id);
@@ -546,13 +546,13 @@ describe('StoreProvider Abstraction', () => {
       const sec2 = await sectionProvider.addSection(project.id, { name: 'ToRemove', owner: 'dev', outcomes: '', contract: '' });
 
       // Read to see how many sections exist before purge
-      let store = JSON.parse(fs.readFileSync(path.join(sectionTempDir, 'store.json'), 'utf-8'));
+      let store = await sectionProvider.read();
       let proj = store.projects.find((p: any) => p.id === project.id);
       const countBefore = proj.sections.length;
 
       await sectionProvider.purgeSection(project.id, sec2.id);
 
-      store = JSON.parse(fs.readFileSync(path.join(sectionTempDir, 'store.json'), 'utf-8'));
+      store = await sectionProvider.read();
       proj = store.projects.find((p: any) => p.id === project.id);
       expect(proj.sections.length).toBe(countBefore - 1);
       expect(proj.sections.find((s: any) => s.id === sec2.id)).toBeUndefined();

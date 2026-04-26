@@ -281,6 +281,20 @@ export class FileStoreProvider implements StoreProvider {
     const { root, ws } = this.readEnvelope();
     project.id = project.id || `proj-${Date.now()}`;
     project.createdAt = project.createdAt || Date.now();
+    // #1145: persist the default Main section explicitly. The legacy behavior
+    // injected it virtually inside read(), which made the disk reality drift
+    // from the read reality — addSection couldn't find it, deleteSection
+    // couldn't reference it, and tests reading the file directly saw no
+    // sections. Persist on create so disk and read agree.
+    if (!project.sections || project.sections.length === 0) {
+      project.sections = [{
+        id: `sec-main-${project.id}`,
+        name: 'Main',
+        owner: project.owner || '',
+        outcomes: '',
+        contract: '',
+      }];
+    }
     ws.projects.push(project);
     this.writeEnvelope(root);
     return project;
