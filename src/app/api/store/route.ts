@@ -572,6 +572,39 @@ export async function POST(req: NextRequest) {
           console.error('[TicketNumber] allocateTicketNumber failed, using fallback:', e?.message);
           ticketNumber = getNextTicketNumberFallback(store);
         }
+
+        // #1126 PR 4: assignee defaulting from version.owner / section.owner.
+        //
+        // Precedence: task.assignee (explicit) > version.owner > section.owner.
+        // If the caller already supplied an assignee, we leave it alone. If
+        // they didn't, and the task targets a (sectionId, version) pair where
+        // the version carries an owner override OR the section has a default
+        // owner, we snapshot that owner onto the task explicitly. We do NOT
+        // re-derive on read — once a task is created the assignee is
+        // pinned, so editing version.owner later doesn't silently reassign
+        // live tasks.
+        const explicitAssignee = (payload.task?.assignee || '').trim();
+        if (!explicitAssignee && payload.task?.projectId && payload.task?.sectionId) {
+          try {
+            const proj = (store.projects || []).find((p: any) => p.id === payload.task.projectId);
+            if (proj) {
+              const { getEffectiveOwner, getEffectiveComponents } = await import('@/lib/component-helpers');
+              // Find the versionId for this task's (sectionId, version) pair.
+              // version.id is the canonical lookup key for getEffectiveOwner;
+              // the task itself stores the version string, not the version id.
+              const cmp = getEffectiveComponents(proj).find((c: any) => c.id === payload.task.sectionId);
+              const versionRow = cmp?.versions?.find((v: any) => v.version === payload.task.version);
+              const owner = getEffectiveOwner(proj, payload.task.sectionId, versionRow?.id);
+              if (owner) {
+                payload.task.assignee = owner;
+                console.log(`[addTask] Defaulted assignee=${owner} for ${payload.task.sectionId}/v${payload.task.version} (snapshot-on-create per #1126).`);
+              }
+            }
+          } catch (e: any) {
+            console.error('[addTask #1126] Effective-owner lookup failed (non-fatal):', e?.message);
+          }
+        }
+
         const task = {
           id,
           ticketNumber,

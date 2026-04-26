@@ -387,6 +387,15 @@ function LedgerProjectPageInner() {
                             <span className="mr-1.5">{statusGlyph(v.status)}</span>
                             {v.status}
                           </div>
+                          {v.owner && activeComp.owner !== v.owner && (
+                            <div
+                              className="ledger-mono text-[9.5px] uppercase tracking-[0.18em] mt-2"
+                              style={{ color: 'var(--ledger-oxblood)' }}
+                              title={`This version's tasks default to ${v.owner} instead of the section owner (${activeComp.owner}).`}
+                            >
+                              · owner: <span style={{ color: 'var(--ledger-ink)' }}>{v.owner}</span>
+                            </div>
+                          )}
                           {v.waitsFor && (
                             <div className="ledger-mono text-[10px] uppercase tracking-[0.16em] text-[var(--ledger-ink-mute)] mt-2 italic">
                               waits on {v.waitsFor.componentId} v{v.waitsFor.version}
