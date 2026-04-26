@@ -176,6 +176,7 @@ export interface Task {
   loopCount?: number;       // Scheduler loops on this task at same status (resets on status change)
   loopPausedAt?: number;    // Timestamp when loop was paused due to stall detection
   loopPauseReason?: string; // Why the loop was paused
+  blockedReason?: string;   // Why the task is blocked (required when status='blocked' — see #1138 follow-up)
   inFlightRunId?: string;   // Subagent runId working on this task (observable, not enforced)
   needsReview?: boolean;    // Agent self-flags: true = must go through review column, false/absent = direct to done
   reviewReason?: string;    // Why review is needed (e.g. 'irreversible DB migration', 'cross-domain change')
