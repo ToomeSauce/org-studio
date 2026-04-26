@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Cancel in-progress runs for the same PR/branch when a new commit lands.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: typecheck + build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Build (Next.js production)
+        run: npm run build
+        env:
+          # The bundle bakes BUILD_SHA via NEXT_PUBLIC_BUILD_SHA. CI builds aren't
+          # deployed (deploy repo handles that), so 'ci' is fine here.
+          NEXT_PUBLIC_BUILD_SHA: ci-${{ github.sha }}
