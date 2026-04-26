@@ -2,7 +2,7 @@
  * #1126 PR 2 — sequential dispatch gate unit tests.
  *
  * Locks in the new "prior versions must ship before next dispatches" rule
- * and the legacy `role: 'qa'` carve-out used during the PR2→PR4 migration
+ * and the inverted-after-PR-6 behavior for `role: 'qa'` sections.
  * window. Carve-out is removed in PR 6.
  */
 import { describe, it, expect } from 'vitest';
@@ -189,30 +189,22 @@ describe('isTaskDispatchEligible — sequential gate (#1126 PR 2)', () => {
     expect(isTaskDispatchEligible(store, task)).toBe(true);
   });
 
-  it('legacy role:qa sections bypass the sequential gate (PR2→PR4 carve-out)', () => {
-    // Thrivor-shaped: QA section with planned-prior versions should still
-    // dispatch. PR 6 will rip this carve-out.
+  it('role:qa sections are NO LONGER exempt from the sequential gate (#1126 PR 6 — carve-out removed)', () => {
+    // Pre-PR-6: legacy carve-out let role:qa sections dispatch even with
+    // unfinished priors. After Thrivor's QA was folded into Main and the
+    // carve-out was ripped, ALL sections — including any future role:qa
+    // ones (which addSection now also rejects) — are sequence-gated
+    // uniformly. This test guards against accidental re-introduction.
     const store = {
       projects: [
         {
-          id: 'thrivor',
+          id: 'thrivor-shaped',
           state: 'started',
           components: [
             {
-              id: 'sec-main',
-              name: 'Main',
-              owner: 'Basil',
-              approvedThrough: '0.908.1',
-              versions: [
-                { version: '0.1.0', status: 'shipped', sort_order: 1 },
-                { version: '0.2.0', status: 'shipped', sort_order: 2 },
-                { version: '0.908.1', status: 'shipped', sort_order: 3 },
-              ],
-            },
-            {
               id: 'sec-qa',
               name: 'QA',
-              role: 'qa',
+              role: 'qa', // wouldn't be creatable anymore, but defended in code
               owner: 'Billy',
               approvedThrough: '0.908.1',
               versions: [
@@ -228,13 +220,14 @@ describe('isTaskDispatchEligible — sequential gate (#1126 PR 2)', () => {
     };
     const qaTask = {
       id: 'q1',
-      projectId: 'thrivor',
+      projectId: 'thrivor-shaped',
       sectionId: 'sec-qa',
       version: '0.908.1',
       status: 'backlog',
       assignee: 'Billy',
     };
-    expect(isTaskDispatchEligible(store, qaTask)).toBe(true);
+    // Was true under the carve-out. Now false: the gate applies uniformly.
+    expect(isTaskDispatchEligible(store, qaTask)).toBe(false);
   });
 
   it('non-qa role still gets the sequential gate applied', () => {
@@ -279,7 +272,10 @@ describe('isTaskWaiting — sequential gate (#1126 PR 2)', () => {
     expect(isTaskWaiting(store, task)).toBe(false);
   });
 
-  it('legacy role:qa task is not waiting on a prior-unshipped version (carve-out)', () => {
+  it('role:qa tasks ARE now marked waiting when blocked by prior unshipped version (#1126 PR 6 — carve-out removed)', () => {
+    // Inverted from pre-PR-6: the role:qa carve-out used to also exempt
+    // these tasks from being labeled "waiting". After PR 6 they go
+    // through the same path as everyone else.
     const store = {
       projects: [
         {
@@ -303,6 +299,7 @@ describe('isTaskWaiting — sequential gate (#1126 PR 2)', () => {
       tasks: [],
     };
     const qaTask = { id: 'q', projectId: 'thrivor', sectionId: 'sec-qa', version: '0.3.0', status: 'backlog' };
-    expect(isTaskWaiting(store, qaTask)).toBe(false);
+    // Was false under the carve-out. Now true: gated like everyone else.
+    expect(isTaskWaiting(store, qaTask)).toBe(true);
   });
 });

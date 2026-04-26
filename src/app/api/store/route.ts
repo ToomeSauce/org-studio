@@ -1864,6 +1864,16 @@ export async function POST(req: NextRequest) {
       }
 
       case 'updateSection': {
+        // #1126 PR 6: reject any attempt to set `role: 'qa'`. After the Thrivor
+        // migration folded QA into Main, no `role: 'qa'` sections exist. The
+        // gate's carve-out was removed; allowing a new one to be created
+        // would silently break sequential dispatch on that section.
+        if ((payload.updates || {}).role === 'qa') {
+          return NextResponse.json(
+            { error: "role: 'qa' on a section is no longer supported. QA work is modeled as a versioned slice with version.owner instead. See #1126." },
+            { status: 400 }
+          );
+        }
         // Validate owner if being set to non-empty
         const updOwner = (payload.updates || {}).owner;
         if (updOwner !== undefined && updOwner !== '') {
