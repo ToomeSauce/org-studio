@@ -1,12 +1,14 @@
 /**
- * /projects/[id] — Studio Ledger project page.
+ * /projects/[id] — operations dashboard (default view).
  *
- * The legacy dashboard project page was retired during the Studio Ledger
- * cutover. This file is now a thin re-export of the ledger page so that
- * Next.js still finds a route component here.
+ * The default project page is now the operations console. It answers the
+ * everyday questions: which version is current, what's left to ship it,
+ * who owns each component, what's next. See:
+ *   src/components/dashboard/ProjectDashboardPage.tsx
  *
- * If you're hunting for project-page rendering, see:
- *   src/components/ledger/LedgerProjectPage.tsx
+ * The editorial Studio Ledger view is one click away at
+ *   /projects/[id]/ledger
+ * (route file: src/app/(dashboard)/projects/[id]/ledger/page.tsx).
  */
 
-export { default } from '@/components/ledger/LedgerProjectPage';
+export { default } from '@/components/dashboard/ProjectDashboardPage';
