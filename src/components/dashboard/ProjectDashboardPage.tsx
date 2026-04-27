@@ -337,11 +337,11 @@ function ProjectDashboardPageInner() {
   /* ---------------- Render ---------------- */
 
   return (
-    <div className="flex-1 overflow-auto" style={{ background: 'var(--bg-primary)' }}>
-      <div className="max-w-[1400px] mx-auto px-6 lg:px-10 pb-24">
+    <div className="flex-1 overflow-auto overflow-x-clip" style={{ background: 'var(--bg-primary)' }}>
+      <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-10 pb-24">
         {/* HEADER STRIP — sticky */}
         <header
-          className="sticky top-0 z-30 flex items-center justify-between gap-4 py-3 -mx-6 lg:-mx-10 px-6 lg:px-10"
+          className="sticky top-0 z-30 flex items-center justify-between gap-4 py-3 -mx-4 sm:-mx-6 lg:-mx-10 px-4 sm:px-6 lg:px-10"
           style={{
             background: 'rgba(19, 21, 28, 0.92)',
             backdropFilter: 'blur(8px)',
@@ -397,7 +397,7 @@ function ProjectDashboardPageInner() {
         {/* SUB-HEADER — currently viewing component:version */}
         {activeComp && currentVersion && (
           <div
-            className="sticky z-20 flex items-center gap-3 py-2 -mx-6 lg:-mx-10 px-6 lg:px-10 text-[12px]"
+            className="sticky z-20 flex items-center gap-3 py-2 -mx-4 sm:-mx-6 lg:-mx-10 px-4 sm:px-6 lg:px-10 text-[12px] overflow-x-auto whitespace-nowrap"
             style={{
               top: 56,
               background: 'rgba(19, 21, 28, 0.85)',
@@ -529,7 +529,7 @@ function ProjectDashboardPageInner() {
 
         {/* ROADMAP STRIP */}
         {activeComp && compVersions.length > 0 && (
-          <section className="mt-10">
+          <section className="mt-10 min-w-0">
             <SectionHeader
               title="Roadmap"
               subtitle={activeComp.name + ' · ' + compVersions.length + ' versions'}
