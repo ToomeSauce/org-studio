@@ -5,7 +5,8 @@ import { AgentLoop } from '@/lib/store';
 import type { PromptSection } from '@/lib/store';
 import { getStoreProvider } from './store-provider';
 import { agentOwnedSections, agentHasTaskAccess, isDefaultMainSection } from './section-access';
-import { isVersionInHorizon } from './version-utils';
+import { isVersionInHorizon, isVersionLessOrEqual } from './version-utils';
+import { getComponentApprovedThrough } from './component-helpers';
 
 // Re-export for convenience
 export type { PromptSection };
@@ -628,9 +629,21 @@ export async function buildDispatchMessage(
     }
     if (!t.projectId || !t.version) return true; // no version → not version-gated
     const proj = (store.projects || []).find((p: any) => p.id === t.projectId);
-    const approvedThrough = proj?.autonomy?.approvedThrough;
-    if (!approvedThrough) return false; // no horizon set → hold off on all backlog
-    return isVersionInHorizon(t.version, approvedThrough);
+    if (!proj) return false;
+    // #1112 PR 6 alignment: approval lives on the component (section), not the
+    // legacy project-level autonomy.approvedThrough. Without this, every
+    // versioned backlog task on post-migration projects (where the legacy
+    // field is null) was silently filtered out, and fireOneShot returned null
+    // even though dispatch-gate considered the task eligible.
+    if (!t.sectionId) {
+      // Fallback to legacy field for any task missing sectionId (pre-#1112 data).
+      const legacy = proj?.autonomy?.approvedThrough;
+      if (!legacy) return false;
+      return isVersionInHorizon(t.version, legacy);
+    }
+    const approvedThrough = getComponentApprovedThrough(proj as any, t.sectionId);
+    if (!approvedThrough) return false; // no horizon set on this component
+    return isVersionLessOrEqual(t.version, approvedThrough);
   });
   const inQA = agentTasks.filter((t: any) => t.status === 'qa');
 

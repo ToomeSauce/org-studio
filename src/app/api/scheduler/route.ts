@@ -723,9 +723,22 @@ export async function POST(request: NextRequest) {
 
         lastTriggerByAgent[agentId] = now;
 
-        // Dispatch task to agent's main persistent session
-        await fireOneShot(store, loop);
-        return NextResponse.json({ ok: true, triggered: true, method: 'dispatch' });
+        // Dispatch task to agent's main persistent session.
+        // fireOneShot returns the sessionKey iff it actually enqueued to the
+        // outbox; returns undefined when buildDispatchMessage produced no
+        // actionable prompt (e.g. nothing passed the dispatch filter) or when
+        // enqueue itself failed. Propagate that distinction so callers (and
+        // the heartbeat watchdog) can tell a real dispatch from a fizzle.
+        const sessionKey = await fireOneShot(store, loop);
+        if (!sessionKey) {
+          return NextResponse.json({
+            ok: true,
+            triggered: false,
+            skipped: true,
+            reason: 'No dispatch produced (no actionable prompt or enqueue deferred)',
+          });
+        }
+        return NextResponse.json({ ok: true, triggered: true, method: 'dispatch', sessionKey });
       }
 
       case 'sweep': {
