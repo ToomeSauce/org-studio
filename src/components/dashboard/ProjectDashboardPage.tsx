@@ -35,7 +35,7 @@ import {
   getComponentIcon,
   type ComponentLike,
 } from '@/lib/component-helpers';
-import { isVersionInHorizon } from '@/lib/version-utils';
+import { isVersionInHorizon, compareVersions } from '@/lib/version-utils';
 import { TaskDetailPanel } from '@/components/TaskDetailPanel';
 import { ActivityTimeline } from '@/components/ActivityTimeline';
 import { updateTask, addComment as addTaskComment, deleteTask } from '@/lib/store';
@@ -231,49 +231,58 @@ function ProjectDashboardPageInner() {
     () => (activeComp ? (getComponentVersions(project as any, activeComp.id) as any[]) : []),
     [project, activeComp]
   );
+  // Semver-aware ascending copy. Used everywhere we need to pick "first/next/last"
+  // by semantic version order rather than by raw store order. Keeps store-order
+  // separate so UI list rendering stays untouched.
+  const sortedCompVersions = useMemo<any[]>(
+    () => [...compVersions].sort((a, b) => compareVersions(a.version, b.version)),
+    [compVersions]
+  );
   const compHorizon = useMemo<string | null>(
     () => (activeComp ? (getComponentApprovedThrough(project as any, activeComp.id) ?? null) : null),
     [project, activeComp]
   );
 
   // The "current" version: prefer status==='current', else first non-shipped
-  // in-horizon version, else last shipped.
+  // in-horizon version (semver-asc), else last shipped (semver-asc).
   const currentVersion = useMemo<any | null>(() => {
     const explicit = compVersions.find((v) => v.status === 'current');
     if (explicit) return explicit;
     if (compHorizon) {
-      const next = compVersions.find(
+      const next = sortedCompVersions.find(
         (v) => v.status !== 'shipped' && isVersionInHorizon(v.version, compHorizon)
       );
       if (next) return next;
     }
-    const shipped = [...compVersions].filter((v) => v.status === 'shipped');
+    const shipped = sortedCompVersions.filter((v) => v.status === 'shipped');
     return shipped[shipped.length - 1] ?? compVersions[0] ?? null;
-  }, [compVersions, compHorizon]);
+  }, [compVersions, sortedCompVersions, compHorizon]);
 
-  // The "begin work" target — first unshipped, in-horizon (same as ledger).
+  // The "begin work" target — first unshipped, in-horizon (same as ledger),
+  // semver-ascending.
   const beginTarget = useMemo<any | null>(() => {
     if (!compHorizon) return null;
     return (
-      compVersions.find(
+      sortedCompVersions.find(
         (v) => v.status !== 'shipped' && isVersionInHorizon(v.version, compHorizon)
       ) || null
     );
-  }, [compVersions, compHorizon]);
+  }, [sortedCompVersions, compHorizon]);
 
   // Previous shipped + next planned for the roadmap stepper context.
   const previousShipped = useMemo<any | null>(() => {
-    const shipped = compVersions.filter((v) => v.status === 'shipped');
+    const shipped = sortedCompVersions.filter((v) => v.status === 'shipped');
     return shipped[shipped.length - 1] ?? null;
-  }, [compVersions]);
+  }, [sortedCompVersions]);
   const nextPlanned = useMemo<any | null>(() => {
     if (!currentVersion) return null;
-    const idx = compVersions.findIndex((v) => v.version === currentVersion.version);
-    for (let i = idx + 1; i < compVersions.length; i++) {
-      if (compVersions[i].status !== 'shipped') return compVersions[i];
+    const idx = sortedCompVersions.findIndex((v) => v.version === currentVersion.version);
+    if (idx < 0) return null;
+    for (let i = idx + 1; i < sortedCompVersions.length; i++) {
+      if (sortedCompVersions[i].status !== 'shipped') return sortedCompVersions[i];
     }
     return null;
-  }, [compVersions, currentVersion]);
+  }, [sortedCompVersions, currentVersion]);
 
   // Task panel
   const [selectedTask, setSelectedTask] = useState<any | null>(null);
@@ -347,8 +356,11 @@ function ProjectDashboardPageInner() {
       const horizon = getComponentApprovedThrough(project as any, primaryComponent.id);
       if (!horizon) return null;
       const compVers = (getComponentVersions(project as any, primaryComponent.id) as any[]) || [];
+      const sortedCompVers = [...compVers].sort((a, b) =>
+        compareVersions(a.version, b.version)
+      );
       return (
-        compVers.find(
+        sortedCompVers.find(
           (v) => v.status !== 'shipped' && isVersionInHorizon(v.version, horizon)
         ) || null
       );
@@ -357,11 +369,11 @@ function ProjectDashboardPageInner() {
     const legacyHorizon = (project as any)?.autonomy?.approvedThrough;
     if (!legacyHorizon) return null;
     return (
-      compVersions.find(
+      sortedCompVersions.find(
         (v) => v.status !== 'shipped' && isVersionInHorizon(v.version, legacyHorizon)
       ) || null
     );
-  }, [project, primaryComponent, compVersions]);
+  }, [project, primaryComponent, sortedCompVersions]);
 
   const projectStopped = (project as any)?.state === 'stopped';
   const projectCurrentVersion = (project as any)?.currentVersion as string | undefined;
@@ -423,13 +435,19 @@ function ProjectDashboardPageInner() {
   );
 
   const onStartProject = useCallback(async () => {
-    // Mirrors legacy: flip state → started, and if no currentVersion, also
-    // promote the next approved version.
+    // Mirrors legacy: flip state → started, and if no currentVersion (or the
+    // stored currentVersion is a stale string that doesn't match any real
+    // version on the active component), also promote the next approved
+    // version. Without this guard, a junk `project.currentVersion` (e.g.
+    // "1.19.1" when only v1.19.0 shipped + v1.20.0 planned exist) silently
+    // skips handleLaunch and agents stay paused.
     await setProjectState('started');
-    if (!projectCurrentVersion) {
+    const versionExistsOnActiveComponent = (v: string) =>
+      compVersions.some((x) => x.version === v);
+    if (!projectCurrentVersion || !versionExistsOnActiveComponent(projectCurrentVersion)) {
       await handleLaunch();
     }
-  }, [setProjectState, projectCurrentVersion, handleLaunch]);
+  }, [setProjectState, projectCurrentVersion, handleLaunch, compVersions]);
 
   const onStopProject = useCallback(
     () => setProjectState('stopped'),
@@ -644,21 +662,28 @@ function ProjectDashboardPageInner() {
             <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
               {components.map((c) => {
                 const versions = (getComponentVersions(project as any, c.id) as any[]) || [];
+                // Semver-aware ascending copy for any "first/next/last" picks.
+                // Keep `versions` (store order) untouched for any UI listing.
+                const sortedVersions = [...versions].sort((a, b) =>
+                  compareVersions(a.version, b.version)
+                );
                 const explicitCurrent = versions.find((v) => v.status === 'current');
                 const horizon = getComponentApprovedThrough(project as any, c.id) ?? null;
                 const fallbackCurrent =
                   explicitCurrent ??
                   (horizon
-                    ? versions.find(
+                    ? sortedVersions.find(
                         (v) => v.status !== 'shipped' && isVersionInHorizon(v.version, horizon)
                       )
                     : null) ??
-                  versions.filter((v) => v.status === 'shipped').slice(-1)[0] ??
+                  sortedVersions.filter((v) => v.status === 'shipped').slice(-1)[0] ??
                   versions[0] ??
                   null;
                 const stats = doneWhenStats(fallbackCurrent?.items || [], taskById);
-                const idx = versions.findIndex((v) => v.version === fallbackCurrent?.version);
-                const upNext = versions
+                const idx = sortedVersions.findIndex(
+                  (v) => v.version === fallbackCurrent?.version
+                );
+                const upNext = sortedVersions
                   .slice(Math.max(idx, 0) + 1)
                   .find((v) => v.status !== 'shipped');
                 const isActive = c.id === activeId;
