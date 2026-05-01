@@ -16,9 +16,17 @@
  */
 
 import { useMemo, useState, Suspense, useCallback } from 'react';
+import dynamic from 'next/dynamic';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowUpRight, CheckCircle2, Circle, Clock, Play, AlertTriangle } from 'lucide-react';
+import { ArrowUpRight, CheckCircle2, Circle, Clock, Play, AlertTriangle, Loader2, Square } from 'lucide-react';
+
+// Lazy-loaded — heavy editor with optimistic write logic. Keeps the dashboard
+// shell snappy and matches the dynamic() pattern used by the legacy page.
+const RoadmapWithApprovalHorizon = dynamic(
+  () => import('@/components/RoadmapWithApprovalHorizon').then(mod => mod.RoadmapWithApprovalHorizon),
+  { ssr: false }
+);
 import { useWSData } from '@/lib/ws';
 import {
   getEffectiveComponents,
@@ -270,7 +278,8 @@ function ProjectDashboardPageInner() {
   // Task panel
   const [selectedTask, setSelectedTask] = useState<any | null>(null);
   const [showDetailPanel, setShowDetailPanel] = useState(false);
-  const [expandedVersion, setExpandedVersion] = useState<string | null>(null);
+  const [launching, setLaunching] = useState(false);
+  const [stateBusy, setStateBusy] = useState(false);
 
   const onPickTask = useCallback(
     (taskId?: string) => {
@@ -314,6 +323,117 @@ function ProjectDashboardPageInner() {
       router.replace('/projects/' + projectId + '?component=' + id, { scroll: false });
     },
     [router, projectId]
+  );
+
+  /* ---------------- Launch / Start / Stop (restored from pre-cutover page) ---
+   * Mirrors the legacy `handleLaunch` exactly: pick the primary component
+   * (no role, or role !== 'qa'/'support'), find the first unshipped version
+   * within that component's `approvedThrough` horizon, gate on planning
+   * tickets, then POST `promoteVersion` to /api/store. Component-scoped —
+   * the approval-horizon write path matches RoadmapWithApprovalHorizon's
+   * own writes.
+   */
+  const primaryComponent = useMemo<ComponentLike | null>(() => {
+    if (components.length === 0) return null;
+    return (
+      components.find((c: any) => !c.role || (c.role !== 'qa' && c.role !== 'support')) ??
+      components[0]
+    );
+  }, [components]);
+
+  const launchTarget = useMemo<any | null>(() => {
+    if (!project) return null;
+    if (primaryComponent) {
+      const horizon = getComponentApprovedThrough(project as any, primaryComponent.id);
+      if (!horizon) return null;
+      const compVers = (getComponentVersions(project as any, primaryComponent.id) as any[]) || [];
+      return (
+        compVers.find(
+          (v) => v.status !== 'shipped' && isVersionInHorizon(v.version, horizon)
+        ) || null
+      );
+    }
+    // Pre-component fallback: project-level horizon over the active stream.
+    const legacyHorizon = (project as any)?.autonomy?.approvedThrough;
+    if (!legacyHorizon) return null;
+    return (
+      compVersions.find(
+        (v) => v.status !== 'shipped' && isVersionInHorizon(v.version, legacyHorizon)
+      ) || null
+    );
+  }, [project, primaryComponent, compVersions]);
+
+  const projectStopped = (project as any)?.state === 'stopped';
+  const projectCurrentVersion = (project as any)?.currentVersion as string | undefined;
+
+  const handleLaunch = useCallback(async () => {
+    if (!projectId || !launchTarget) return;
+    const draftItems = (launchTarget.items || []).filter((it: any) => !it.taskId);
+    if (draftItems.length > 0) {
+      alert(
+        'Cannot start v' +
+          launchTarget.version +
+          ': ' +
+          draftItems.length +
+          ' item(s) need planning tickets before launch.'
+      );
+      return;
+    }
+    setLaunching(true);
+    try {
+      const resp = await fetch('/api/store', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'promoteVersion',
+          projectId,
+          targetVersion: launchTarget.version,
+        }),
+      });
+      const result = await resp.json().catch(() => ({}));
+      if (!result.ok && result.reason) alert('Cannot start: ' + result.reason);
+    } catch (e) {
+      console.error('Launch failed:', e);
+    } finally {
+      setLaunching(false);
+    }
+  }, [projectId, launchTarget]);
+
+  const setProjectState = useCallback(
+    async (state: 'started' | 'stopped') => {
+      if (!projectId) return;
+      setStateBusy(true);
+      try {
+        await fetch('/api/store', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'updateProject',
+            id: projectId,
+            updates: { state },
+          }),
+        });
+      } catch (e) {
+        console.error('Failed to update project state:', e);
+      } finally {
+        setStateBusy(false);
+      }
+    },
+    [projectId]
+  );
+
+  const onStartProject = useCallback(async () => {
+    // Mirrors legacy: flip state → started, and if no currentVersion, also
+    // promote the next approved version.
+    await setProjectState('started');
+    if (!projectCurrentVersion) {
+      await handleLaunch();
+    }
+  }, [setProjectState, projectCurrentVersion, handleLaunch]);
+
+  const onStopProject = useCallback(
+    () => setProjectState('stopped'),
+    [setProjectState]
   );
 
   if (!storeData) {
@@ -384,14 +504,91 @@ function ProjectDashboardPageInner() {
               </span>
             )}
           </div>
-          <Link
-            href={'/projects/' + projectId + '/ledger'}
-            className="inline-flex items-center gap-1.5 text-[12px] uppercase tracking-[0.1em] text-[var(--text-tertiary)] hover:text-[var(--accent)] transition-colors whitespace-nowrap"
-            style={{ fontFamily: monoFont }}
-          >
-            Read as Ledger
-            <ArrowUpRight size={14} />
-          </Link>
+          <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
+            {/* LAUNCH / START / STOP — restored from pre-cutover page (commit 838e05c).
+             * Same server interaction as legacy handleLaunch (promoteVersion +
+             * updateProject state). Visible whenever the project is in a
+             * stoppable state. */}
+            {projectStopped ? (
+              (() => {
+                const noWork = !projectCurrentVersion && !launchTarget;
+                return (
+                  <button
+                    type="button"
+                    onClick={onStartProject}
+                    disabled={noWork || launching || stateBusy}
+                    title={
+                      noWork
+                        ? 'Approve a version on a component roadmap below to enable start'
+                        : 'Start project'
+                    }
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-[12px] uppercase tracking-[0.1em] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    style={{
+                      fontFamily: monoFont,
+                      background: noWork ? 'var(--card-highlight)' : 'rgba(52, 211, 153, 0.14)',
+                      color: noWork ? 'var(--text-muted)' : '#34d399',
+                      border: '1px solid ' + (noWork ? 'var(--border-default)' : 'rgba(52, 211, 153, 0.45)'),
+                    }}
+                  >
+                    {launching || stateBusy ? (
+                      <Loader2 size={13} className="animate-spin" />
+                    ) : (
+                      <Play size={13} />
+                    )}
+                    {launching ? 'Starting…' : 'Start'}
+                  </button>
+                );
+              })()
+            ) : !projectCurrentVersion ? (
+              // Running but no currentVersion — legacy flow ran handleLaunch directly.
+              <button
+                type="button"
+                onClick={handleLaunch}
+                disabled={!launchTarget || launching}
+                title={
+                  !launchTarget
+                    ? 'Approve a version on a component roadmap below to enable launch'
+                    : 'Launch v' + launchTarget.version
+                }
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-[12px] uppercase tracking-[0.1em] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{
+                  fontFamily: monoFont,
+                  background: launchTarget ? 'rgba(52, 211, 153, 0.14)' : 'var(--card-highlight)',
+                  color: launchTarget ? '#34d399' : 'var(--text-muted)',
+                  border: '1px solid ' + (launchTarget ? 'rgba(52, 211, 153, 0.45)' : 'var(--border-default)'),
+                }}
+              >
+                {launching ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
+                {launching ? 'Launching…' : launchTarget ? 'Launch v' + launchTarget.version : 'Launch'}
+              </button>
+            ) : (
+              // Running with currentVersion — show Stop.
+              <button
+                type="button"
+                onClick={onStopProject}
+                disabled={stateBusy}
+                title="Stop project"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-[12px] uppercase tracking-[0.1em] font-medium transition-colors disabled:opacity-50"
+                style={{
+                  fontFamily: monoFont,
+                  background: 'rgba(255, 92, 92, 0.10)',
+                  color: '#ff5c5c',
+                  border: '1px solid rgba(255, 92, 92, 0.40)',
+                }}
+              >
+                {stateBusy ? <Loader2 size={13} className="animate-spin" /> : <Square size={13} />}
+                Stop
+              </button>
+            )}
+            <Link
+              href={'/projects/' + projectId + '/ledger'}
+              className="inline-flex items-center gap-1.5 text-[12px] uppercase tracking-[0.1em] text-[var(--text-tertiary)] hover:text-[var(--accent)] transition-colors whitespace-nowrap"
+              style={{ fontFamily: monoFont }}
+            >
+              Read as Ledger
+              <ArrowUpRight size={14} />
+            </Link>
+          </div>
         </header>
 
         {/* SUB-HEADER — currently viewing component:version */}
@@ -527,7 +724,20 @@ function ProjectDashboardPageInner() {
           </section>
         )}
 
-        {/* ROADMAP STRIP */}
+        {/* ROADMAP + APPROVAL HORIZON
+         * Restored from pre-cutover page (commit 838e05c). The dashboard
+         * was display-only after the Studio Ledger cutover — you could
+         * see the horizon but couldn't change it. RoadmapWithApprovalHorizon
+         * brings back click-to-set-horizon UX and per-component scoped
+         * writes (componentId + component props → components[i].approvedThrough
+         * instead of project-wide autonomy.approvedThrough).
+         *
+         * This replaces the static stepper that lived here. The component
+         * renders versions, items, status badges, AND the editable approval
+         * banner — strict superset of the stepper view, so we drop the
+         * stepper. A compact prev/current/next context line still lives
+         * below for at-a-glance reading.
+         */}
         {activeComp && compVersions.length > 0 && (
           <section className="mt-10 min-w-0">
             <SectionHeader
@@ -535,127 +745,27 @@ function ProjectDashboardPageInner() {
               subtitle={activeComp.name + ' · ' + compVersions.length + ' versions'}
               mono={monoFont}
             />
-            <div className="mt-3 rounded-md overflow-hidden" style={{ border: '1px solid var(--border-default)' }}>
-              <div
-                className="flex items-stretch overflow-x-auto"
-                style={{ background: 'var(--card)' }}
-              >
-                {compVersions.map((v, i) => {
-                  const kind = classifyVersion(v);
-                  const c = statusColor(kind);
-                  const isCurrent = v.version === currentVersion?.version;
-                  const isLast = i === compVersions.length - 1;
-                  const stats = doneWhenStats(v.items || [], taskById);
-                  const isExpanded = expandedVersion === v.version;
-                  return (
-                    <div
-                      key={v.version}
-                      className="flex-shrink-0 min-w-[200px] flex flex-col"
-                      style={{
-                        borderRight: isLast ? 'none' : '1px solid var(--border-default)',
-                        background: isCurrent ? c.bg : 'transparent',
-                      }}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => setExpandedVersion(isExpanded ? null : v.version)}
-                        className="text-left px-4 py-3 hover:bg-[var(--card-highlight)] transition-colors"
-                      >
-                        <div className="flex items-center justify-between gap-2 mb-1">
-                          <span
-                            className="text-[14px] tabular-nums font-medium"
-                            style={{
-                              color: isCurrent ? c.fg : kind === 'shipped' ? c.fg : 'var(--text-secondary)',
-                              fontFamily: monoFont,
-                              opacity: kind === 'planned' && !isCurrent ? 0.7 : 1,
-                            }}
-                          >
-                            v{v.version}
-                          </span>
-                          <span
-                            className="text-[10px] uppercase tracking-[0.12em]"
-                            style={{ color: c.fg, fontFamily: monoFont, opacity: kind === 'planned' && !isCurrent ? 0.6 : 1 }}
-                          >
-                            {kind === 'shipped' ? '✓' : kind === 'current' ? '●' : '○'} {v.status}
-                          </span>
-                        </div>
-                        {v.owner && (
-                          <div
-                            className="text-[11px] text-[var(--text-muted)] mb-1.5"
-                            style={{ fontFamily: monoFont }}
-                          >
-                            {v.owner}
-                          </div>
-                        )}
-                        <div
-                          className="text-[11px] text-[var(--text-tertiary)] tabular-nums mb-1.5"
-                          style={{ fontFamily: monoFont }}
-                        >
-                          {stats.done}/{stats.total} doneWhen
-                        </div>
-                        <ProgressBar
-                          done={stats.done}
-                          total={stats.total}
-                          height={3}
-                          tone={kind === 'shipped' ? 'shipped' : kind === 'current' ? 'current' : 'accent'}
-                        />
-                      </button>
-                      {isExpanded && (v.items || []).length > 0 && (
-                        <div
-                          className="px-4 py-2 border-t"
-                          style={{ borderColor: 'var(--border-default)', background: 'var(--bg-primary)' }}
-                        >
-                          <ul className="space-y-1">
-                            {(v.items || []).map((it: any, idx: number) => {
-                              const t = it.taskId ? taskById.get(it.taskId) : null;
-                              const title = t?.title ?? it.title ?? '(untitled)';
-                              const done = t?.status === 'done' || it.done === true;
-                              return (
-                                <li
-                                  key={it.id ?? v.version + '-' + idx}
-                                  className="flex items-start gap-2 text-[12px] leading-snug"
-                                >
-                                  {done ? (
-                                    <CheckCircle2
-                                      size={12}
-                                      className="mt-[3px] flex-shrink-0"
-                                      style={{ color: '#34d399' }}
-                                    />
-                                  ) : (
-                                    <Circle
-                                      size={12}
-                                      className="mt-[3px] flex-shrink-0"
-                                      style={{ color: 'var(--text-muted)' }}
-                                    />
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={() => onPickTask(it.taskId)}
-                                    disabled={!it.taskId}
-                                    className="text-left flex-1 hover:text-[var(--accent)] transition-colors disabled:cursor-default"
-                                    style={{
-                                      color: done
-                                        ? 'var(--text-muted)'
-                                        : 'var(--text-secondary)',
-                                      textDecoration: done ? 'line-through' : 'none',
-                                    }}
-                                  >
-                                    {title}
-                                  </button>
-                                </li>
-                              );
-                            })}
-                          </ul>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-            {/* Stepper context line */}
             <div
-              className="mt-2 flex items-center gap-2 text-[12px] text-[var(--text-muted)]"
+              className="mt-3 rounded-md p-3 sm:p-4 min-w-0"
+              style={{ background: 'var(--card)', border: '1px solid var(--border-default)' }}
+            >
+              <RoadmapWithApprovalHorizon
+                projectId={projectId}
+                project={project as any}
+                versions={compVersions as any}
+                tasks={allTasks}
+                selectedTask={selectedTask}
+                onTaskSelect={(task: any) => {
+                  setSelectedTask(task);
+                  setShowDetailPanel(true);
+                }}
+                componentId={activeComp.id}
+                component={activeComp as any}
+              />
+            </div>
+            {/* Stepper context line — at-a-glance prev/current/next. */}
+            <div
+              className="mt-2 flex items-center gap-2 text-[12px] text-[var(--text-muted)] flex-wrap"
               style={{ fontFamily: monoFont }}
             >
               {previousShipped && (
