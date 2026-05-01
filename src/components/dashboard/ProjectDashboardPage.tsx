@@ -655,8 +655,15 @@ function ProjectDashboardPageInner() {
           </div>
         )}
 
-        {/* COMPONENT GRID */}
-        {components.length > 0 && (
+        {/* COMPONENT GRID
+         *
+         * Hidden for single-component projects: the grid is a tab-picker for
+         * the Roadmap section below, so with one component it's a 1-tab
+         * tab-bar that just duplicates the version pill + progress shown
+         * inside the Roadmap header. Show it only when there's something
+         * to switch between (>= 2 components).
+         */}
+        {components.length > 1 && (
           <section className="mt-10">
             <SectionHeader title="Components" subtitle={components.length + ' active'} mono={monoFont} />
             <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
