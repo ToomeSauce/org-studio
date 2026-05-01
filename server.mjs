@@ -2407,8 +2407,19 @@ server.listen(port, async () => {
     }
   }, 60 * 60 * 1000).unref?.();
 
-  // Start outbox worker (drains outbox → /api/outbox/drain)
-  startOutboxWorker();
+  // Start outbox worker (drains outbox → /api/outbox/drain).
+  //
+  // Disabled in environments that have no agent runtimes (e.g. cloud Org
+  // Studio, which is UI+storage only — runtimes live on the on-prem host).
+  // Without this guard, the cloud would race the on-prem worker for the
+  // advisory lock, win occasionally, and dead-letter every dispatch with
+  // "No runtime found for agent <id>" since its local registry is empty.
+  // Set OUTBOX_WORKER_DISABLED=1 on environments without local runtimes.
+  if (process.env.OUTBOX_WORKER_DISABLED === '1' || process.env.OUTBOX_WORKER_DISABLED === 'true') {
+    console.log('[Outbox] Worker disabled via OUTBOX_WORKER_DISABLED env');
+  } else {
+    startOutboxWorker();
+  }
 
   // Initialize health alerts (startup log)
   initHealthAlerts();
