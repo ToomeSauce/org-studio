@@ -24,6 +24,7 @@ import {
 import {
   recordDispatchAttempt,
   diagnoseAgentBacklog,
+  findStaleBacklogAgents,
   type TriggerSource,
   type SkipReason,
 } from '@/lib/dispatch-attempts';
@@ -32,6 +33,8 @@ const DEFAULT_MODEL = 'foundry-openai-chat/gpt-5.4';
 // Minimum seconds between event-driven triggers for the same agent (debounce)
 const TRIGGER_COOLDOWN_MS = 60_000; // 1 minute
 const lastTriggerByAgent: Record<string, number> = {};
+// #1184 phase 3 — 24h cooldown for stale-backlog Telegram escalations.
+const lastEscalateByAgent: Record<string, number> = {};
 
 // Loop detection: max loops on same task+status before escalation
 // (constants moved into the v2 section below — see #1138)
@@ -930,6 +933,63 @@ export async function POST(request: NextRequest) {
         }
 
         return NextResponse.json({ ok: true, swept, autoStopped });
+      }
+
+      case 'escalate-stale-backlog': {
+        // #1184 phase 3 — Telegram nudge for agents whose backlog has been
+        // idle ≥ 24h. Throttled to 1/agent/24h via lastEscalateByAgent.
+        // Designed to be called by an external cron (or piggy-backed on the
+        // existing sweep cron). Best-effort: never throws to caller.
+        const thresholdMinutes = Number(body?.thresholdMinutes) || 24 * 60;
+        const stale = await findStaleBacklogAgents(thresholdMinutes);
+        const sent: any[] = [];
+        const skipped: any[] = [];
+
+        const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+        const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+
+        for (const agent of stale) {
+          const last = lastEscalateByAgent[agent.agentId] || 0;
+          if (Date.now() - last < 24 * 60 * 60 * 1000) {
+            skipped.push({ agentId: agent.agentId, reason: 'cooldown-24h' });
+            continue;
+          }
+          lastEscalateByAgent[agent.agentId] = Date.now();
+
+          if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+            skipped.push({ agentId: agent.agentId, reason: 'no-telegram-config' });
+            continue;
+          }
+
+          // Build a short message linking to dispatch-health.
+          const lastDispatch = agent.lastDispatchAt
+            ? `last dispatch: ${new Date(agent.lastDispatchAt).toLocaleString()}`
+            : 'never dispatched';
+          const message =
+            `⏸ **Stale backlog — ${agent.agentId}**\n` +
+            `${agent.backlogCount} backlog ticket(s) idle ≥ 24h. ${lastDispatch}.\n` +
+            `\nGET /api/dispatch-health/${agent.agentId} for the breakdown.`;
+
+          try {
+            await fetch(
+              `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  chat_id: TELEGRAM_CHAT_ID,
+                  text: message,
+                  parse_mode: 'Markdown',
+                }),
+              },
+            );
+            sent.push({ agentId: agent.agentId, backlogCount: agent.backlogCount });
+          } catch (e: any) {
+            skipped.push({ agentId: agent.agentId, reason: `send-failed: ${e?.message || e}` });
+          }
+        }
+
+        return NextResponse.json({ ok: true, sent, skipped, examined: stale.length });
       }
 
       case 'resume': {

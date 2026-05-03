@@ -11,6 +11,86 @@ import type { Task, Project, TaskComment } from '@/lib/store';
 import { extractMentions } from '@/lib/store';
 import { toast } from 'react-toastify';
 
+// #1184 — per-ticket dispatch-fizzle badge. Pure helper over task+project
+// data; mirrors classifyBlocker in src/lib/dispatch-attempts.ts (kept inline
+// to avoid pulling a server-only module into a client component).
+const ADHOC_TASK_TYPES = new Set(['bug', 'chore', 'spike', 'followup']);
+
+function classifyTaskBlocker(
+  task: Task,
+  project: Project | undefined,
+): { reason: string; label: string; fixHref: string | null; fixLabel: string | null } | null {
+  if (task.status !== 'backlog' || (task as any).isArchived) return null;
+  // Only show after the ticket has had a real chance to dispatch (≥1h).
+  const created = (task as any).createdAt;
+  if (created && Date.now() - new Date(created).getTime() < 60 * 60 * 1000) {
+    return null;
+  }
+  if (!task.assignee) {
+    return {
+      reason: 'unassigned',
+      label: 'No assignee',
+      fixHref: null,
+      fixLabel: 'Assign owner',
+    };
+  }
+  if (!project) return null;
+  if ((project as any).state !== 'started') {
+    return {
+      reason: 'project-stopped',
+      label: 'Project stopped',
+      fixHref: `/projects/${project.id}`,
+      fixLabel: 'Start project',
+    };
+  }
+
+  const tt = (task as any).taskType;
+  if (tt && ADHOC_TASK_TYPES.has(tt)) return null; // adhoc is dispatchable on started
+
+  if (!task.sectionId || !task.version) {
+    return {
+      reason: 'no-section-version',
+      label: 'Missing section or version',
+      fixHref: null,
+      fixLabel: null,
+    };
+  }
+
+  const components = (project as any).components || (project as any).sections || [];
+  const cmp = components.find((c: any) => c.id === task.sectionId);
+  const approvedThrough = cmp?.approvedThrough || cmp?.approved_through;
+
+  const cmpVer = (a: string, b: string): number => {
+    const pa = String(a).replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
+    const pb = String(b).replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
+    const len = Math.max(pa.length, pb.length);
+    for (let i = 0; i < len; i++) {
+      const da = pa[i] ?? 0;
+      const db = pb[i] ?? 0;
+      if (da !== db) return da - db;
+    }
+    return 0;
+  };
+
+  if (!approvedThrough || cmpVer(task.version, approvedThrough) > 0) {
+    return {
+      reason: 'above-horizon',
+      label: `Above approval horizon (v${task.version}${
+        approvedThrough ? ' > v' + approvedThrough : ''
+      })`,
+      fixHref: `/projects/${project.id}?component=${task.sectionId}`,
+      fixLabel: 'Advance horizon',
+    };
+  }
+
+  return {
+    reason: 'prior-version-unshipped',
+    label: 'Waiting on prior version to ship',
+    fixHref: `/projects/${project.id}?component=${task.sectionId}`,
+    fixLabel: 'View component',
+  };
+}
+
 // --- Status config ---
 // #862: 5-column board (QA is a component, not a column). Keeping both constants for backward compat;
 // both now resolve to the same order.
@@ -329,6 +409,34 @@ export function TaskDetailPanel({
                   <option key={s} value={s}>{STATUS_LABELS[s]}</option>
                 ))}
               </select>
+              {/* #1184 — per-ticket dispatch-fizzle badge */}
+              {(() => {
+                const proj = projects.find(p => p.id === projectId);
+                const blocker = classifyTaskBlocker(task, proj);
+                if (!blocker) return null;
+                return (
+                  <div
+                    className="mt-1.5 flex items-start gap-1.5 text-[11px]"
+                    style={{ color: 'rgb(214, 154, 74)' }}
+                  >
+                    <span aria-hidden>⏸</span>
+                    <span className="flex-1">
+                      Not yet dispatched — {blocker.label}
+                      {blocker.fixHref && blocker.fixLabel && (
+                        <>
+                          {' '}
+                          [<a
+                            href={blocker.fixHref}
+                            className="underline hover:no-underline"
+                          >
+                            {blocker.fixLabel}
+                          </a>]
+                        </>
+                      )}
+                    </span>
+                  </div>
+                );
+              })()}
             </div>
             {/* Section dropdown — only show if project has >1 section */}
             {(() => {

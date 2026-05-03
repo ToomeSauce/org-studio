@@ -38,6 +38,7 @@ import {
 import { isVersionInHorizon, compareVersions } from '@/lib/version-utils';
 import { TaskDetailPanel } from '@/components/TaskDetailPanel';
 import { ActivityTimeline } from '@/components/ActivityTimeline';
+import DispatchHealthBanner from '@/components/dashboard/DispatchHealthBanner';
 import { updateTask, addComment as addTaskComment, deleteTask } from '@/lib/store';
 
 /* -------------------------------------------------------------------------- */
@@ -608,6 +609,13 @@ function ProjectDashboardPageInner() {
             </Link>
           </div>
         </header>
+
+        {/* #1184 — dispatch-fizzle visibility banner. Renders only when at
+         * least one assigned-to-this-project agent has staleBacklog === true.
+         */}
+        {storeData && (
+          <DispatchHealthBanner store={storeData} projectId={projectId} />
+        )}
 
         {/* SUB-HEADER — currently viewing component:version */}
         {activeComp && currentVersion && (
