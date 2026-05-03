@@ -29,7 +29,19 @@ interface TaskLike {
   status?: string;
   assignee?: string;
   isArchived?: boolean;
+  taskType?: string;
+  loopPausedAt?: number | string | null;
 }
+
+// #1183 — adhoc tickets (taskType bug/chore/spike/followup) are filed without
+// a version. They take the parallel adhoc dispatch lane: project must be
+// started, but no sectionId/version/horizon/waitsFor checks.
+const ADHOC_TASK_TYPES: ReadonlySet<string> = new Set([
+  'bug',
+  'chore',
+  'spike',
+  'followup',
+]);
 
 interface StoreLike {
   projects?: ProjectLike[];
@@ -143,6 +155,9 @@ export function priorVersionsComplete(
  * when deciding auto-stop: see `isTaskWaiting`.
  */
 export function isTaskDispatchEligible(store: StoreLike, task: TaskLike): boolean {
+  // Skip paused/archived defensively (callers also filter, but keep the
+  // predicate self-consistent so unit tests are sound in isolation).
+  if (task?.isArchived || task?.loopPausedAt) return false;
   if (!task?.projectId || !task?.sectionId || !task?.version) return false;
   const proj = (store.projects || []).find((p) => p.id === task.projectId);
   if (!proj) return false;
@@ -170,6 +185,63 @@ export function isTaskDispatchEligible(store: StoreLike, task: TaskLike): boolea
   }
 
   return true;
+}
+
+/**
+ * #1183 — adhoc dispatch lane.
+ *
+ * Adhoc tickets (taskType ∈ {bug, chore, spike, followup}) are filed without
+ * a version by design (the addTask validator rejects adhoc + version combos).
+ * Before #1183 they were invisible to event-driven dispatch because
+ * isTaskDispatchEligible() returned false at the very first guard
+ * (`!task.sectionId || !task.version`). Result: bug/chore tickets sat in
+ * backlog forever unless a human @mentioned the assignee.
+ *
+ * The adhoc lane runs in parallel to the roadmap lane. Both predicates are
+ * ORed in the scheduler's getActionableWork() and in buildDispatchMessage()'s
+ * backlog filter (see src/app/api/scheduler/route.ts and src/lib/scheduler.ts).
+ *
+ * Eligibility rules (all must hold):
+ *   1. taskType is one of the adhoc types
+ *   2. status === 'backlog' AND assignee set (caller checks)
+ *   3. project exists and project.state === 'started' (mirrors Rule 1 of
+ *      the roadmap lane: stopped projects don't dispatch new work)
+ *   4. not archived, not paused
+ *
+ * Notes:
+ *   - sectionId/version are NOT required (and not checked).
+ *   - approvedThrough/waitsFor/priorVersionsComplete are NOT consulted.
+ *   - Roadmap work still wins ranking-wise: buildDispatchMessage emits the
+ *     top backlog candidate; the caller orders versioned tickets ahead of
+ *     adhoc when both qualify.
+ */
+export function isTaskAdhocDispatchEligible(
+  store: StoreLike,
+  task: TaskLike,
+): boolean {
+  if (!task?.projectId || !task?.assignee) return false;
+  if (task.isArchived || task.loopPausedAt) return false;
+  if (task.status !== 'backlog') return false;
+  if (!task.taskType || !ADHOC_TASK_TYPES.has(task.taskType)) return false;
+  const proj = (store.projects || []).find((p) => p.id === task.projectId);
+  if (!proj) return false;
+  if ((proj as any).state !== 'started') return false;
+  return true;
+}
+
+/**
+ * Umbrella: true iff a task is dispatch-eligible via EITHER lane.
+ * Use this from scheduler call sites instead of calling the two predicates
+ * separately — keeps the OR canonical and avoids drift.
+ */
+export function isTaskAnyDispatchEligible(
+  store: StoreLike,
+  task: TaskLike,
+): boolean {
+  return (
+    isTaskDispatchEligible(store, task) ||
+    isTaskAdhocDispatchEligible(store, task)
+  );
 }
 
 /**

@@ -275,3 +275,126 @@ describe('isTaskWaiting', () => {
     expect(isTaskWaiting(store, mkTask({ status: 'done' }))).toBe(false);
   });
 });
+
+// ----------------------------------------------------------------------
+// #1183 — adhoc dispatch lane
+// ----------------------------------------------------------------------
+
+import {
+  isTaskAdhocDispatchEligible,
+  isTaskAnyDispatchEligible,
+} from '@/lib/dispatch-gate';
+
+// Adhoc tickets are filed without sectionId/version. The roadmap predicate
+// rejects them at its first guard. The adhoc lane checks only project state
+// + assignee + adhoc taskType.
+
+function mkAdhoc(overrides: any = {}) {
+  return {
+    id: 'ad1',
+    projectId: 'p1',
+    status: 'backlog',
+    assignee: 'mikey',
+    taskType: 'bug',
+    ...overrides,
+  };
+}
+
+describe('#1183 adhoc dispatch lane', () => {
+  it('bug ticket on a started project IS adhoc-eligible', () => {
+    const store = { projects: [mkProject()], tasks: [] };
+    expect(isTaskAdhocDispatchEligible(store, mkAdhoc())).toBe(true);
+  });
+
+  it('chore/spike/followup are also adhoc-eligible', () => {
+    const store = { projects: [mkProject()], tasks: [] };
+    for (const taskType of ['chore', 'spike', 'followup']) {
+      expect(isTaskAdhocDispatchEligible(store, mkAdhoc({ taskType }))).toBe(
+        true,
+      );
+    }
+  });
+
+  it('non-adhoc taskType (or missing) is NOT adhoc-eligible', () => {
+    const store = { projects: [mkProject()], tasks: [] };
+    expect(
+      isTaskAdhocDispatchEligible(store, mkAdhoc({ taskType: 'feature' })),
+    ).toBe(false);
+    expect(
+      isTaskAdhocDispatchEligible(store, mkAdhoc({ taskType: undefined })),
+    ).toBe(false);
+  });
+
+  it('stopped project blocks adhoc dispatch (intentional)', () => {
+    const store = { projects: [mkProject({ state: 'stopped' })], tasks: [] };
+    expect(isTaskAdhocDispatchEligible(store, mkAdhoc())).toBe(false);
+  });
+
+  it('non-backlog status is NOT adhoc-eligible', () => {
+    const store = { projects: [mkProject()], tasks: [] };
+    expect(
+      isTaskAdhocDispatchEligible(store, mkAdhoc({ status: 'in-progress' })),
+    ).toBe(false);
+    expect(
+      isTaskAdhocDispatchEligible(store, mkAdhoc({ status: 'done' })),
+    ).toBe(false);
+  });
+
+  it('archived/paused adhoc tickets are NOT eligible', () => {
+    const store = { projects: [mkProject()], tasks: [] };
+    expect(
+      isTaskAdhocDispatchEligible(store, mkAdhoc({ isArchived: true })),
+    ).toBe(false);
+    expect(
+      isTaskAdhocDispatchEligible(
+        store,
+        mkAdhoc({ loopPausedAt: Date.now() }),
+      ),
+    ).toBe(false);
+  });
+
+  it('missing assignee is NOT adhoc-eligible', () => {
+    const store = { projects: [mkProject()], tasks: [] };
+    expect(
+      isTaskAdhocDispatchEligible(store, mkAdhoc({ assignee: undefined })),
+    ).toBe(false);
+  });
+
+  it('adhoc lane does NOT require sectionId/version', () => {
+    const store = { projects: [mkProject()], tasks: [] };
+    // Explicitly no sectionId/version on adhoc — still eligible.
+    const t = mkAdhoc();
+    expect((t as any).sectionId).toBeUndefined();
+    expect((t as any).version).toBeUndefined();
+    expect(isTaskAdhocDispatchEligible(store, t)).toBe(true);
+  });
+
+  it('umbrella accepts EITHER lane', () => {
+    const store = { projects: [mkProject()], tasks: [] };
+    // Roadmap-eligible task (versioned, in-horizon)
+    expect(isTaskAnyDispatchEligible(store, mkTask())).toBe(true);
+    // Adhoc-eligible task (no version, taskType=bug)
+    expect(isTaskAnyDispatchEligible(store, mkAdhoc())).toBe(true);
+  });
+
+  it('umbrella rejects when neither lane qualifies', () => {
+    const store = { projects: [mkProject({ state: 'stopped' })], tasks: [] };
+    // Versioned but stopped (rule 1 fail) AND no adhoc taskType
+    expect(isTaskAnyDispatchEligible(store, mkTask())).toBe(false);
+    // Adhoc but stopped
+    expect(isTaskAnyDispatchEligible(store, mkAdhoc())).toBe(false);
+  });
+
+  it('roadmap-eligible behavior is unchanged for versioned tickets', () => {
+    const store = { projects: [mkProject()], tasks: [] };
+    // Sanity: no sectionId on a versioned task still fails roadmap lane.
+    expect(
+      isTaskDispatchEligible(
+        store,
+        mkTask({ sectionId: undefined } as any),
+      ),
+    ).toBe(false);
+    // Versioned + within horizon + started — still eligible.
+    expect(isTaskDispatchEligible(store, mkTask())).toBe(true);
+  });
+});

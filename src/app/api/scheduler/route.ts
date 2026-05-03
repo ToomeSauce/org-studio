@@ -18,7 +18,7 @@ import { authenticateRequest } from '@/lib/auth';
 import { writeHeartbeat } from '@/lib/heartbeats';
 import { getStoreProvider, type StoreData } from '@/lib/store-provider';
 import {
-  isTaskDispatchEligible,
+  isTaskAnyDispatchEligible,
   isTaskWaiting,
 } from '@/lib/dispatch-gate';
 const DEFAULT_MODEL = 'foundry-openai-chat/gpt-5.4';
@@ -312,8 +312,10 @@ function getActionableWork(store: StoreData, agentId: string): { hasWork: boolea
 
     // #1112 PR 4 — per-component dispatch gating. Rules 1-4 encoded in
     // isTaskDispatchEligible(); rule 5 (backlog + assignee) checked here.
+    // #1183 — adhoc tickets (bug/chore/spike/followup) take the parallel
+    // lane via isTaskAdhocDispatchEligible. Umbrella ORs both.
     if (isAssigned && status === 'backlog') {
-      if (isTaskDispatchEligible(store, t as any)) hasNewWork = true;
+      if (isTaskAnyDispatchEligible(store, t as any)) hasNewWork = true;
     }
 
     // #862: QA-column routing removed — QA tickets are ordinary tickets owned by the QA component owner (assignee).
@@ -755,12 +757,12 @@ export async function POST(request: NextRequest) {
           const agentId = loop.agentId;
 
           // 1. Backlog orphans — tasks in backlog dispatch-eligible for this
-          //    agent (#1112 PR 4 per-component gating).
+          //    agent (#1112 PR 4 per-component gating + #1183 adhoc lane).
           const backlogTasks = store.tasks.filter(t => {
             const a = (t.assignee || '').toLowerCase();
             if (!(a === nameLower || a === agentId)) return false;
             if (t.status !== 'backlog') return false;
-            return isTaskDispatchEligible(store, t as any);
+            return isTaskAnyDispatchEligible(store, t as any);
           });
 
           if (backlogTasks.length > 0) {
@@ -843,7 +845,7 @@ export async function POST(request: NextRequest) {
             if (t.projectId !== proj.id) continue;
 
             if (t.status === 'in-progress' || t.status === 'review') { keep = true; break; }
-            if (isTaskDispatchEligible(store, t as any)) { keep = true; break; }
+            if (isTaskAnyDispatchEligible(store, t as any)) { keep = true; break; }
             if (isTaskWaiting(store, t as any)) { keep = true; break; }
           }
 
