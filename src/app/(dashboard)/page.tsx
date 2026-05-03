@@ -14,33 +14,6 @@ const OnboardingWizard = dynamic(
   { ssr: false, loading: () => <div className="p-8 text-center text-[var(--text-muted)]">Loading…</div> }
 );
 
-// ─── SECTION 1: Mission Statement ──────────────────────────────────────────
-
-function MissionSection({ missionStatement }: { missionStatement?: string }) {
-  const DEFAULT_MISSION = 'Define your mission — what does your team exist to do?';
-  const mission = missionStatement || DEFAULT_MISSION;
-  const isDefault = mission === DEFAULT_MISSION;
-
-  return (
-    <div className={clsx(
-      'p-6 rounded-[var(--radius-lg)] border',
-      isDefault
-        ? 'border-[var(--border-default)] bg-[var(--bg-secondary)]'
-        : 'border-l-4 border-l-[var(--accent-primary)] bg-gradient-to-r from-[rgba(var(--accent-primary-rgb),0.03)] to-transparent'
-    )}>
-      <div className="text-center">
-        <p className="text-sm text-[var(--text-muted)] mb-1">Our Mission:</p>
-        <p className={clsx(
-          'text-lg font-bold leading-relaxed',
-          isDefault ? 'text-[var(--text-muted)] italic' : 'text-[var(--text-primary)]'
-        )}>
-          {mission}
-        </p>
-      </div>
-    </div>
-  );
-}
-
 // ─── SECTION 2: Team Activity ─────────────────────────────────────────────
 
 function TeamActivitySection({ teammates, activityStatuses, tasks, projects, selectedAgent, onAgentClick }: { teammates: Teammate[]; activityStatuses: Record<string, any>; tasks: any[]; projects: any[]; selectedAgent?: string | null; onAgentClick?: (name: string | null) => void; }) {
@@ -306,8 +279,14 @@ function SprintsSection({ projects, tasks, agentMap }: { projects: any[]; tasks:
     const activeWorkStatuses = ['backlog', 'in-progress', 'qa', 'review', 'done'];
     const results: any[] = [];
 
-    // Filter out archived projects
-    const activeProjects = projects.filter((p: any) => !p.isArchived);
+    // #1190 follow-up — home page "Active Projects" mirrors the projects
+    // page Active bucket: only projects with state === 'active' (or legacy
+    // 'started' during the #1185 transition). Drops archived and inactive.
+    const activeProjects = projects.filter((p: any) => {
+      if (p.isArchived) return false;
+      const state = p.state;
+      return state === 'active' || state === 'started';
+    });
 
     for (const project of activeProjects) {
       const projectTasks = enrichedTasks.filter(
@@ -356,7 +335,7 @@ function SprintsSection({ projects, tasks, agentMap }: { projects: any[]; tasks:
 
   return (
     <div>
-      <h2 className="text-[var(--text-md)] font-semibold text-[var(--text-primary)] mb-3">Project Sprints</h2>
+      <h2 className="text-[var(--text-md)] font-semibold text-[var(--text-primary)] mb-3">Active Projects</h2>
       <div className="space-y-2">
         {sprints.map((sprint) => (
           <a
@@ -454,7 +433,7 @@ function AttentionSection({ tasks, projects }: { tasks: any[]; projects: any[] }
 
   return (
     <div>
-      <h2 className="text-[var(--text-md)] font-semibold text-[var(--text-primary)] mb-3">Needs Your Attention</h2>
+      <h2 className="text-[var(--text-md)] font-semibold text-[var(--text-primary)] mb-3">Blockers</h2>
       <div className="space-y-2">
         {items.map((item) => (
           <a
@@ -612,29 +591,26 @@ export default function HomePage() {
 
   return (
     <div className="space-y-8">
-      {/* Section 1: Mission Statement */}
-      <MissionSection missionStatement={missionStatement} />
-
-      {/* Section 2: Needs Your Attention */}
+      {/* Section 1: Blockers */}
       <AttentionSection tasks={tasks} projects={projects} />
 
-      {/* Section 3: Team Activity */}
+      {/* Section 2: Team Activity */}
       {teammates.length > 0 && (
         <TeamActivitySection teammates={teammates} activityStatuses={activityStatuses} tasks={tasks} projects={projects} selectedAgent={selectedAgent} onAgentClick={setSelectedAgent} />
       )}
 
-      {/* Section 4: Activity Feed */}
+      {/* Section 3: Activity Feed */}
       <ActivityFeedSection selectedAgent={selectedAgent || undefined} tasks={tasks} projects={projects} />
 
-      {/* Section 5: Project Sprints */}
+      {/* Section 4: Active Projects */}
       {projects.length > 0 && (
         <SprintsSection projects={projects} tasks={tasks} agentMap={agentMap} />
       )}
 
-      {/* Section 6: Suggested Feedback */}
+      {/* Section 5: Suggested Feedback */}
       <SuggestedFeedbackSection />
 
-      {/* Section 7: Recent Decisions */}
+      {/* Section 6: Recent Decisions */}
       {projects.length > 0 && (
         <RecentDecisionsSection projects={projects} />
       )}
