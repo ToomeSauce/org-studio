@@ -398,3 +398,88 @@ describe('#1183 adhoc dispatch lane', () => {
     expect(isTaskDispatchEligible(store, mkTask())).toBe(true);
   });
 });
+
+// ----------------------------------------------------------------------
+// #1189 — single FIFO dispatch queue
+// ----------------------------------------------------------------------
+
+import { getEligibleBacklogFifo } from '@/lib/dispatch-gate';
+
+describe('#1189 getEligibleBacklogFifo — single FIFO queue', () => {
+  it('returns versioned + adhoc tickets in createdAt ASC order', () => {
+    const store = {
+      projects: [mkProject()],
+      tasks: [
+        // landed second
+        { ...mkTask({ id: 't-versioned' }), createdAt: 200 },
+        // landed first
+        { ...mkAdhoc({ id: 't-bug' }), createdAt: 100 },
+        // landed third
+        { ...mkAdhoc({ id: 't-chore', taskType: 'chore' }), createdAt: 300 },
+      ],
+    };
+    const out = getEligibleBacklogFifo(store, ['mikey']);
+    expect(out.map((t) => t.id)).toEqual(['t-bug', 't-versioned', 't-chore']);
+  });
+
+  it('versioned tickets do NOT cut in front of older adhoc tickets', () => {
+    // Critical regression test for #1189. Pre-refactor, the scheduler
+    // happened to mix lanes via insertion order (often FIFO-ish), but
+    // any ranking step above the filter could silently change priority.
+    // This test pins the contract.
+    const store = {
+      projects: [mkProject()],
+      tasks: [
+        { ...mkAdhoc({ id: 't-old-bug' }), createdAt: 1000 },
+        { ...mkTask({ id: 't-new-feature' }), createdAt: 2000 },
+      ],
+    };
+    const out = getEligibleBacklogFifo(store, ['mikey']);
+    expect(out[0].id).toBe('t-old-bug');
+    expect(out[1].id).toBe('t-new-feature');
+  });
+
+  it('skips ineligible tasks (other agents, in-progress, archived, paused, inactive project)', () => {
+    const store = {
+      projects: [
+        mkProject({ id: 'p1' }),
+        mkProject({ id: 'p2', state: 'inactive' }),
+      ],
+      tasks: [
+        { ...mkTask({ id: 't-mine', createdAt: 100 }) },
+        { ...mkTask({ id: 't-theirs', assignee: 'henry', createdAt: 100 }) },
+        { ...mkTask({ id: 't-progress', status: 'in-progress', createdAt: 100 }) },
+        { ...mkTask({ id: 't-archived', isArchived: true, createdAt: 100 }) },
+        { ...mkTask({ id: 't-paused', loopPausedAt: 1, createdAt: 100 }) },
+        { ...mkTask({ id: 't-inactive-proj', projectId: 'p2', createdAt: 100 }) },
+      ],
+    };
+    const out = getEligibleBacklogFifo(store, ['mikey']);
+    expect(out.map((t) => t.id)).toEqual(['t-mine']);
+  });
+
+  it('matches by either agent name OR agent id (case-insensitive)', () => {
+    const store = {
+      projects: [mkProject()],
+      tasks: [
+        { ...mkTask({ id: 't-by-name', assignee: 'Mikey' }), createdAt: 100 },
+        { ...mkTask({ id: 't-by-id', assignee: 'agent-mikey-id' }), createdAt: 200 },
+      ],
+    };
+    const out = getEligibleBacklogFifo(store, ['mikey', 'agent-mikey-id']);
+    expect(out.map((t) => t.id)).toEqual(['t-by-name', 't-by-id']);
+  });
+
+  it('treats missing createdAt as 0 (oldest) — predictable, not a crash', () => {
+    const store = {
+      projects: [mkProject()],
+      tasks: [
+        { ...mkTask({ id: 't-with' }), createdAt: 100 },
+        { ...mkTask({ id: 't-without' }) }, // no createdAt
+      ],
+    };
+    const out = getEligibleBacklogFifo(store, ['mikey']);
+    // t-without (createdAt undefined → 0) sorts first, then t-with (100).
+    expect(out.map((t) => t.id)).toEqual(['t-without', 't-with']);
+  });
+});

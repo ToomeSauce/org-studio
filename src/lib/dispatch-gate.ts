@@ -31,6 +31,7 @@ interface TaskLike {
   isArchived?: boolean;
   taskType?: string;
   loopPausedAt?: number | string | null;
+  createdAt?: number;
 }
 
 // #1183 — adhoc tickets (taskType bug/chore/spike/followup) are filed without
@@ -237,6 +238,11 @@ export function isTaskAdhocDispatchEligible(
  * Umbrella: true iff a task is dispatch-eligible via EITHER lane.
  * Use this from scheduler call sites instead of calling the two predicates
  * separately — keeps the OR canonical and avoids drift.
+ *
+ * #1189 — this is the canonical eligibility entry point. Versioned and adhoc
+ * lanes still have different RULES (versioned tickets need horizon/waitsFor/
+ * priorVersionsComplete; adhoc tickets don't), but the dispatch QUEUE that
+ * the scheduler picks from is unified — see `getEligibleBacklogFifo` below.
  */
 export function isTaskAnyDispatchEligible(
   store: StoreLike,
@@ -246,6 +252,47 @@ export function isTaskAnyDispatchEligible(
     isTaskDispatchEligible(store, task) ||
     isTaskAdhocDispatchEligible(store, task)
   );
+}
+
+/**
+ * #1189 — single FIFO dispatch queue per (assignee, project).
+ *
+ * Returns this agent's eligible backlog tickets across ALL active projects,
+ * ordered by `createdAt` ASC (oldest landing first). Versioned roadmap
+ * tickets and adhoc bug/chore tickets sit in the same queue in landing
+ * order — there is no separate "versioned-first then adhoc" priority.
+ *
+ * Rationale: the old behavior was that the scheduler picked `backlog[0]`,
+ * where `backlog` was a filter result — order was insertion order in
+ * `store.tasks`, which usually matches createdAt but not always (e.g.
+ * after Postgres reorders, after migrations). Pinning the order to
+ * `createdAt` makes it explicit and predictable. New versions added on
+ * the fly land at the bottom by virtue of having the largest createdAt;
+ * vision owners can drag-reorder via ticket F (#1190).
+ *
+ * Args:
+ *   - agentMatchers: lowercased strings the task.assignee field can match.
+ *     Pass [agentName.toLowerCase(), agentId] from the caller — this lets
+ *     the predicate be agnostic about agent-name resolution.
+ *
+ * Returns: tasks newest-last. Caller usually takes [0].
+ */
+export function getEligibleBacklogFifo(
+  store: StoreLike,
+  agentMatchers: string[],
+): TaskLike[] {
+  const matchers = new Set(agentMatchers.map((m) => (m || '').toLowerCase()).filter(Boolean));
+  const eligible: TaskLike[] = [];
+  for (const t of store.tasks || []) {
+    if (t.status !== 'backlog') continue;
+    const a = (t.assignee || '').toLowerCase();
+    if (!matchers.has(a)) continue;
+    if (!isTaskAnyDispatchEligible(store, t)) continue;
+    eligible.push(t);
+  }
+  // Stable ASC by createdAt; ties keep array order (insertion).
+  eligible.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+  return eligible;
 }
 
 /**
