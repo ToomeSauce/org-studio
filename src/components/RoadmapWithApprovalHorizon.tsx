@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { ChevronRight, Plus, Pencil, Trash2, X, Check, GripVertical } from 'lucide-react';
+import { ChevronRight, Plus, Pencil, Trash2, X, Check } from 'lucide-react';
 import { clsx } from 'clsx';
 import { compareVersions } from '@/lib/version-utils';
 
@@ -84,11 +84,18 @@ interface RoadmapWithApprovalHorizonProps {
    */
   componentId?: string;
   /**
-   * The component object itself — used to read its own `approvedThrough`
-   * without re-traversing `project.components[]` on every render. Required
-   * when `componentId` is set; ignored otherwise.
+   * The component object itself — used to read its own `approvedThrough` /
+   * `approvedVersions` without re-traversing `project.components[]` on every
+   * render. Required when `componentId` is set; ignored otherwise.
+   *
+   * #1188: now also carries `approvedVersions[]` (explicit list).
    */
-  component?: { id: string; approvedThrough?: string | null; [key: string]: any };
+  component?: {
+    id: string;
+    approvedThrough?: string | null;
+    approvedVersions?: string[];
+    [key: string]: any;
+  };
 }
 
 export function RoadmapWithApprovalHorizon({
@@ -111,8 +118,6 @@ export function RoadmapWithApprovalHorizon({
   const [addingNew, setAddingNew] = useState(false);
   const [loading, setLoading] = useState(false);
   const [editingVersionId, setEditingVersionId] = useState<string | null>(null);
-  const [dragActive, setDragActive] = useState(false);
-  const [dragOverSlot, setDragOverSlot] = useState<number | null>(null);
 
   const [editForm, setEditForm] = useState<{
     version: string;
@@ -134,8 +139,10 @@ export function RoadmapWithApprovalHorizon({
     status: 'planned' as const,
   });
 
-  // Optimistic local state for approval — overrides prop for instant UI response
-  const [optimisticApproval, setOptimisticApproval] = useState<string | null | undefined>(undefined);
+  // #1188: optimistic local state for approvedVersions list — overrides prop
+  // for instant UI response after a checkbox toggle.
+  const [optimisticApprovedVersions, setOptimisticApprovedVersions] =
+    useState<string[] | undefined>(undefined);
 
   // #1112 PR 6 follow-up: source of truth depends on scope. When this
   // instance is bound to a component, read its own `approvedThrough`. Else
@@ -144,28 +151,55 @@ export function RoadmapWithApprovalHorizon({
   const scopedApproval = componentId
     ? (component?.approvedThrough ?? null)
     : (project.autonomy?.approvedThrough ?? null);
-  const approvedThrough = optimisticApproval !== undefined ? optimisticApproval : scopedApproval;
 
-  // Sync optimistic state back to prop when it catches up (via useEffect, not during render)
-  const propApproval = scopedApproval;
-  useEffect(() => {
-    if (optimisticApproval !== undefined && optimisticApproval === propApproval) {
-      setOptimisticApproval(undefined);
+  // #1188: explicit approved-versions list. When present, drives per-version
+  // checkbox state. When absent (no list yet — brand new project, or legacy
+  // project pre-migration), falls back to building a list from the legacy
+  // `approvedThrough` prefix string.
+  const propApprovedVersions: string[] = (() => {
+    if (componentId && Array.isArray(component?.approvedVersions)) {
+      return component!.approvedVersions!;
     }
-  }, [propApproval, optimisticApproval]);
-  
-  const currentVersion = project.currentVersion;
+    return [];
+  })();
 
-  // Drag-and-drop safety net: reset drag state on drag end
+  const approvedVersionsList: string[] =
+    optimisticApprovedVersions !== undefined
+      ? optimisticApprovedVersions
+      : propApprovedVersions;
+
+  // Keep `approvedThrough` available for legacy display (e.g. the "approved
+  // through vX.Y.Z" caption shown elsewhere). Derived from the list when set;
+  // falls back to the scoped string for legacy projects.
+  const approvedThrough: string | null =
+    approvedVersionsList.length > 0
+      ? approvedVersionsList.reduce((best, v) =>
+          compareVersions(v, best) > 0 ? v : best,
+        )
+      : scopedApproval;
+
+  const isVersionApproved = (versionStr: string): boolean => {
+    // List takes precedence when present.
+    if (approvedVersionsList.length > 0) {
+      return approvedVersionsList.includes(versionStr);
+    }
+    // Legacy fallback: contiguous prefix up to the string banner.
+    if (!scopedApproval) return false;
+    return compareVersions(versionStr, scopedApproval) <= 0;
+  };
+
+  // Sync optimistic state back to prop when it catches up
   useEffect(() => {
-    const cleanup = () => {
-      console.log('[ApprovalCard] window dragend cleanup fired');
-      setDragActive(false);
-      setDragOverSlot(null);
-    };
-    window.addEventListener('dragend', cleanup);
-    return () => window.removeEventListener('dragend', cleanup);
-  }, []);
+    if (
+      optimisticApprovedVersions !== undefined &&
+      JSON.stringify([...optimisticApprovedVersions].sort()) ===
+        JSON.stringify([...propApprovedVersions].sort())
+    ) {
+      setOptimisticApprovedVersions(undefined);
+    }
+  }, [propApprovedVersions, optimisticApprovedVersions]);
+
+  const currentVersion = project.currentVersion;
 
   const sortVersions = (versionList: RoadmapVersion[]) => {
     return [...versionList].sort((a, b) => {
@@ -262,34 +296,46 @@ export function RoadmapWithApprovalHorizon({
     await saveVersion(versionData.version, versionData.title, versionData.status, updatedItems, versionData.version_type || 'outcome');
   };
 
-  const updateApproval = (versionNum: string | null) => {
-    // Optimistic — update UI instantly
-    setOptimisticApproval(versionNum);
+  /**
+   * #1188: persist a new approvedVersions[] list to the component.
+   *
+   * Optimistic-first: updates UI state immediately, fires the API write in
+   * the background, reverts on failure. Empty array clears approval entirely
+   * (both `approvedVersions` and legacy `approvedThrough` are dropped).
+   *
+   * Falls back to legacy `approvedThrough` write when this instance isn't
+   * bound to a component (brand-new project with no Main component yet).
+   */
+  const persistApprovedVersions = (next: string[]) => {
+    setOptimisticApprovedVersions(next);
 
     // Pick write path based on scope.
-    // When bound to a component: hit the targeted updateComponent action so
-    // the server can re-trigger promote/scheduler against the right
-    // component identity. When unscoped (legacy fallback): write the old
-    // project-wide field for brand-new projects with no components yet.
     const body = componentId
       ? {
           action: 'updateComponent',
           projectId,
           componentId,
-          updates: { approvedThrough: versionNum },
+          updates: { approvedVersions: next },
         }
       : {
+          // Pre-component fallback: keep using legacy project-wide string.
+          // We collapse the list to its max() so the server still sees a
+          // single approvedThrough value.
           action: 'updateProject',
           id: projectId,
           updates: {
             autonomy: {
               ...project.autonomy,
-              approvedThrough: versionNum,
+              approvedThrough:
+                next.length === 0
+                  ? null
+                  : next.reduce((best, v) =>
+                      compareVersions(v, best) > 0 ? v : best,
+                    ),
             },
           },
         };
 
-    // Fire API in background (no await)
     fetch('/api/store', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -297,83 +343,39 @@ export function RoadmapWithApprovalHorizon({
     }).catch((e) => {
       console.error('Failed to update approval:', e);
       // Revert on failure
-      setOptimisticApproval(undefined);
+      setOptimisticApprovedVersions(undefined);
     });
   };
 
-  const moveApprovalUp = async () => {
-    // Move card up = approve one fewer version
-    const plannedVersions = sortedVersions.filter(v => v.status !== 'shipped' && v.version !== currentVersion);
-    const approvalIndex = getApprovalIndex(plannedVersions);
-    
-    if (approvalIndex <= 0) {
-      updateApproval(null); // Nothing approved
+  /**
+   * #1188: toggle a single version's approval. If the list is currently
+   * empty AND this is a legacy project (only `approvedThrough` set), we
+   * first materialize the legacy prefix as an explicit list, then toggle.
+   * This makes the first checkbox click "upgrade" the project to the new
+   * model losslessly.
+   */
+  const toggleVersionApproval = (versionStr: string) => {
+    let baseList: string[];
+    if (approvedVersionsList.length > 0) {
+      baseList = [...approvedVersionsList];
+    } else if (scopedApproval) {
+      // Legacy: materialize prefix from sorted planned+current+shipped versions.
+      // We use sortedVersions (already in sort order) and pick everything
+      // <= scopedApproval that the user already had implicit approval for.
+      baseList = sortedVersions
+        .filter((v) => compareVersions(v.version, scopedApproval) <= 0)
+        .map((v) => v.version);
     } else {
-      updateApproval(plannedVersions[approvalIndex - 1].version);
+      baseList = [];
     }
-  };
 
-  const moveApprovalDown = async () => {
-    // Move card down = approve one more version
-    const plannedVersions = sortedVersions.filter(v => v.status !== 'shipped' && v.version !== currentVersion);
-    const approvalIndex = getApprovalIndex(plannedVersions);
-    
-    if (approvalIndex < plannedVersions.length - 1) {
-      const nextVersion = plannedVersions[approvalIndex + 1];
-      // Block if any items are missing taskId (not ready for launch)
-      const hasIncompleteItems = nextVersion.items?.some((item: any) => !item.taskId);
-      if (hasIncompleteItems) {
-        return; // Can't approve past incomplete version
-      }
-      updateApproval(plannedVersions[approvalIndex + 1].version);
-    }
-  };
-
-  const getApprovalIndex = (plannedVersions: RoadmapVersion[]): number => {
-    // Returns the index AFTER which the approval card sits
-    // -1 means before all (nothing approved)
-    // 0 means after first version (first version approved)
-    // n-1 means after last (all approved)
-    if (!approvedThrough) return -1;
-
-    let lastApprovedIdx = -1;
-    for (let i = 0; i < plannedVersions.length; i++) {
-      // <= via semver: returns -1 if v < approvedThrough, 0 if equal, 1 if greater
-      if (compareVersions(plannedVersions[i].version, approvedThrough) <= 0) {
-        lastApprovedIdx = i;
-      }
-    }
-    return lastApprovedIdx;
-  };
-
-  const handleDragStart = (e: React.DragEvent) => {
-    console.log('[ApprovalCard] dragStart fired');
-    e.dataTransfer!.effectAllowed = 'move';
-    e.dataTransfer!.setData('text/plain', 'approval-card');
-    if (e.currentTarget instanceof HTMLElement) {
-      e.dataTransfer!.setDragImage(e.currentTarget, e.currentTarget.offsetWidth / 2, 20);
-    }
-    setDragActive(true);
-  };
-
-  const handleDragEnd = () => {
-    console.log('[ApprovalCard] dragEnd fired, dragActive was:', dragActive);
-    setDragActive(false);
-    setDragOverSlot(null);
-  };
-
-  const handleDrop = (slotIndex: number) => {
-    console.log('[ApprovalCard] drop at slot:', slotIndex);
-    setDragActive(false);
-    setDragOverSlot(null);
-    
-    if (slotIndex < 0) {
-      updateApproval(null);
+    const idx = baseList.indexOf(versionStr);
+    if (idx >= 0) {
+      baseList.splice(idx, 1);
     } else {
-      const plannedVersions = sortedVersions.filter(v => v.status !== 'shipped' && v.version !== currentVersion);
-      const version = plannedVersions[slotIndex]?.version;
-      if (version) updateApproval(version);
+      baseList.push(versionStr);
     }
+    persistApprovedVersions(baseList);
   };
 
   const startEdit = (v: RoadmapVersion) => {
@@ -398,7 +400,12 @@ export function RoadmapWithApprovalHorizon({
     setEditForm({ version: '', title: '', status: 'planned', items: [], version_type: 'outcome' });
   };
 
-  const renderVersionRow = (version: RoadmapVersion, isApproved: boolean = false, bgColor?: string) => {
+  const renderVersionRow = (
+    version: RoadmapVersion,
+    isApproved: boolean = false,
+    bgColor?: string,
+    showApprovalCheckbox: boolean = false,
+  ) => {
     const isEditing = editingVersionId === version.id;
     const isExpanded = expandedVersionIds.has(version.id);
     const progress = version.progress || { done: (version.items || []).filter((i) => i.done).length, total: (version.items || []).length };
@@ -442,6 +449,53 @@ export function RoadmapWithApprovalHorizon({
                 className={clsx('text-[var(--text-muted)] flex-shrink-0', isExpanded && 'rotate-90 transition-transform')}
               />
             )}
+            {showApprovalCheckbox && !isEditing && (() => {
+              // #1188: per-version approval checkbox. Click toggles inclusion in
+              // approvedVersions[]. Disabled when the version still has items
+              // missing taskIds ("not ready for launch") to mirror the old
+              // moveApprovalDown gate.
+              const checked = isVersionApproved(version.version);
+              const missingCount = (version.items || []).filter(
+                (item: any) => !item.taskId,
+              ).length;
+              const disabledReason =
+                !checked && missingCount > 0
+                  ? `${missingCount} item(s) need planning tickets before approval`
+                  : '';
+              return (
+                <button
+                  type="button"
+                  role="checkbox"
+                  aria-checked={checked}
+                  aria-label={
+                    checked
+                      ? `Unapprove version ${version.version}`
+                      : `Approve version ${version.version}`
+                  }
+                  disabled={!!disabledReason}
+                  title={
+                    disabledReason ||
+                    (checked
+                      ? 'Approved — click to unapprove'
+                      : 'Click to approve this version')
+                  }
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (disabledReason) return;
+                    toggleVersionApproval(version.version);
+                  }}
+                  className={clsx(
+                    'w-4 h-4 rounded border-2 flex-shrink-0 flex items-center justify-center transition-colors',
+                    'disabled:cursor-not-allowed disabled:opacity-40',
+                    checked
+                      ? 'bg-green-500 border-green-500 text-white hover:bg-green-600 hover:border-green-600'
+                      : 'bg-transparent border-[var(--border-color)] hover:border-green-500',
+                  )}
+                >
+                  {checked && <Check size={10} strokeWidth={3} />}
+                </button>
+              );
+            })()}
             <span title={`Version type: ${versionType}`}>{typeBadge}</span>
             <span className="font-medium">{version.version}</span>
             <span className="text-sm text-[var(--text-secondary)]">— {version.title}</span>
@@ -647,60 +701,6 @@ export function RoadmapWithApprovalHorizon({
     }
   };
 
-  const renderApprovalCard = () => (
-    <div
-      draggable
-      onDragStart={handleDragStart}
-      onDragEnd={handleDragEnd}
-      className="flex items-center justify-between px-4 py-3 border rounded-lg cursor-grab active:cursor-grabbing select-none bg-green-100 dark:bg-green-900/40 border-green-300 dark:border-green-700"
-    >
-      <div className="flex-1 text-center">
-        <span className="text-sm font-semibold text-green-700 dark:text-green-300 tracking-wide flex items-center justify-center gap-2">
-          <GripVertical size={16} className="opacity-60" />
-          Above versions are approved for delivery
-        </span>
-      </div>
-      <div className="flex items-center gap-1 ml-3">
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            moveApprovalUp();
-          }}
-          className="p-1 hover:bg-green-200 dark:hover:bg-green-800/50 rounded transition-colors text-green-600 dark:text-green-400 text-sm font-bold"
-          title="Move up (approve less)"
-        >
-          ▲
-        </button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            moveApprovalDown();
-          }}
-          className="p-1 hover:bg-green-200 dark:hover:bg-green-800/50 rounded transition-colors text-green-600 dark:text-green-400 text-sm font-bold"
-          title="Move down (approve more)"
-        >
-          ▼
-        </button>
-      </div>
-      {(() => {
-        const plannedVersions = sortedVersions.filter(v => v.status !== 'shipped' && v.version !== currentVersion);
-        const approvalIndex = getApprovalIndex(plannedVersions);
-        if (approvalIndex < plannedVersions.length - 1) {
-          const nextVersion = plannedVersions[approvalIndex + 1];
-          const missingCount = nextVersion.items?.filter((item: any) => !item.taskId).length || 0;
-          if (missingCount > 0) {
-            return (
-              <span className="text-xs text-amber-400 ml-2">
-                ⚠️ v{nextVersion.version}: {missingCount} item(s) need planning tickets
-              </span>
-            );
-          }
-        }
-        return null;
-      })()}
-    </div>
-  );
-
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2">
@@ -892,109 +892,32 @@ export function RoadmapWithApprovalHorizon({
           );
         })()}
 
-        {/* Planned versions with draggable approval card */}
+        {/* #1188: Planned versions with per-version approval checkboxes.
+            Replaces the legacy single draggable approval banner. Each row
+            renders its own checkbox via renderVersionRow(showApprovalCheckbox=true). */}
         {(() => {
-          const plannedVersions = sortedVersions.filter(v => v.status !== 'shipped' && v.version !== currentVersion);
+          const plannedVersions = sortedVersions.filter(
+            (v) => v.status !== 'shipped' && v.version !== currentVersion,
+          );
           if (plannedVersions.length === 0 && !addingNew) {
             return null;
           }
 
-          const approvalIndex = getApprovalIndex(plannedVersions);
-          const elements: React.ReactNode[] = [];
-
-          for (let i = 0; i < plannedVersions.length; i++) {
-            const v = plannedVersions[i];
-            const isAboveApproval = i <= approvalIndex;
-            const bgColor = isAboveApproval
-              ? 'bg-green-50 dark:bg-green-950/30 border-green-200 dark:border-green-800/50'
-              : 'bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800/50';
-
-            // Drop zone before this version (only visible during drag)
-            if (dragActive) {
-              const slotIdx = i - 1; // dropping here means approval goes before version i
-              elements.push(
-                <div
-                  key={`drop-${i}`}
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    setDragOverSlot(slotIdx);
-                  }}
-                  onDragLeave={() => {
-                    if (dragOverSlot === slotIdx) setDragOverSlot(null);
-                  }}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    handleDrop(slotIdx);
-                  }}
-                  className={clsx(
-                    'rounded transition-all',
-                    dragOverSlot === slotIdx
-                      ? 'h-12 bg-[var(--accent-primary)]/20 border-2 border-dashed border-[var(--accent-primary)]'
-                      : 'h-6'
-                  )}
-                />
-              );
-            }
-
-            // Insert approval card if it goes before this version (only when approvalIndex is -1 and i is 0)
-            if (i === 0 && approvalIndex === -1) {
-              elements.push(
-                <div key="approval-card" className={clsx(dragActive && 'opacity-30')}>
-                  {renderApprovalCard()}
-                </div>
-              );
-            }
-
-            // Version card with colored background
-            elements.push(
-              <div key={v.id} className="relative">
-                {renderVersionRow(v, isAboveApproval, bgColor)}
-              </div>
-            );
-
-            // Insert approval card after this version if it's the last approved one
-            if (i === approvalIndex && approvalIndex >= 0) {
-              elements.push(
-                <div key="approval-card" className={clsx(dragActive && 'opacity-30')}>
-                  {renderApprovalCard()}
-                </div>
-              );
-            }
-          }
-
-          // Drop zone after the last version (during drag)
-          if (dragActive) {
-            const slotIdx = plannedVersions.length - 1;
-            elements.push(
-              <div
-                key="drop-last"
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setDragOverSlot(slotIdx);
-                }}
-                onDragLeave={() => {
-                  if (dragOverSlot === slotIdx) setDragOverSlot(null);
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  handleDrop(slotIdx);
-                }}
-                className={clsx(
-                  'rounded transition-all',
-                  dragOverSlot === slotIdx
-                    ? 'h-12 bg-[var(--accent-primary)]/20 border-2 border-dashed border-[var(--accent-primary)]'
-                    : 'h-6'
-                )}
-              />
-            );
-          }
-
-          // If all are approved and card goes at the end
-          if (approvalIndex === plannedVersions.length - 1) {
-            // Already rendered above after the last approved version
-          }
-
-          return <div className="space-y-2">{elements}</div>;
+          return (
+            <div className="space-y-2">
+              {plannedVersions.map((v) => {
+                const approved = isVersionApproved(v.version);
+                const bgColor = approved
+                  ? 'bg-green-50 dark:bg-green-950/30 border-green-200 dark:border-green-800/50'
+                  : 'border-[var(--border-color)]';
+                return (
+                  <div key={v.id} className="relative">
+                    {renderVersionRow(v, approved, bgColor, true)}
+                  </div>
+                );
+              })}
+            </div>
+          );
         })()}
 
       </div>
