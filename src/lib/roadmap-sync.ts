@@ -125,6 +125,7 @@ export async function syncRoadmapItemForTask(
         [projectId, 'default-workspace'], // TODO(v0.17-multi-workspace): resolve from caller context
       );
 
+      const flippedVersions: string[] = [];
       for (const row of result.rows) {
         const items: any[] = row.items || [];
         let rowChanged = false;
@@ -142,9 +143,53 @@ export async function syncRoadmapItemForTask(
             [JSON.stringify(items), row.id],
           );
           changed = true;
+          flippedVersions.push(row.version);
           console.log(
             `[RoadmapSync] ${projectId} ${row.version}: item ${taskId} → done=${isDone}`,
           );
+        }
+      }
+
+      // #1181 — keep the project document's embedded sections[].versions[].items[]
+      // copy in lock-step with org_studio_roadmap_versions. Components like
+      // RoadmapWithApprovalHorizon receive `versions={compVersions}` as a prop
+      // sourced from the project doc, so without this patch the roadmap card
+      // renders stale `item.done` flags even though /api/roadmap returns fresh
+      // data. Same transaction → atomic.
+      if (changed) {
+        const projRes = await client.query(
+          `SELECT data FROM org_studio_projects
+           WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
+          [projectId, 'default-workspace'],
+        );
+        const projRow = projRes.rows[0];
+        if (projRow?.data) {
+          const projData =
+            typeof projRow.data === 'string' ? JSON.parse(projRow.data) : projRow.data;
+          let docChanged = false;
+          const sections: any[] = projData.sections || [];
+          for (const section of sections) {
+            const versions: any[] = section.versions || [];
+            for (const v of versions) {
+              if (!flippedVersions.includes(v.version)) continue;
+              const vItems: any[] = v.items || [];
+              for (const item of vItems) {
+                if (item.taskId === taskId && item.done !== isDone) {
+                  item.done = isDone;
+                  docChanged = true;
+                }
+              }
+            }
+          }
+          if (docChanged) {
+            await client.query(
+              `UPDATE org_studio_projects SET data = $1 WHERE id = $2 AND workspace_id = $3`,
+              [JSON.stringify(projData), projectId, 'default-workspace'],
+            );
+            console.log(
+              `[RoadmapSync] ${projectId}: project doc embedded items synced for task ${taskId} → done=${isDone}`,
+            );
+          }
         }
       }
 
