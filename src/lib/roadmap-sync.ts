@@ -283,14 +283,15 @@ export async function checkAndAutoAdvance(
 
     const approvedThrough: string | undefined = projData.autonomy?.approvedThrough;
 
-    // 3b. Project state gate: if project is explicitly stopped, the human has
+    // 3b. Project state gate: if project is explicitly inactive, the human has
     // paused auto-advance. Reconcile still ships the completed version (done flags
     // + status='shipped' are factual), but we do NOT promote a next version.
-    if (projData.state === 'stopped') {
+    // (#1185 rename: 'stopped' → 'inactive'. Accept both during transition.)
+    if (projData.state === 'inactive' || projData.state === 'stopped') {
       console.log(
-        `[AutoAdvance] ${projectId}: project stopped (state=stopped) — shipped ${current.version} but skipping auto-advance`,
+        `[AutoAdvance] ${projectId}: project inactive — shipped ${current.version} but skipping auto-advance`,
       );
-      (checkAndAutoAdvance as any)._lastSkipReason = 'stopped';
+      (checkAndAutoAdvance as any)._lastSkipReason = 'inactive';
       return;
     }
 
@@ -303,23 +304,14 @@ export async function checkAndAutoAdvance(
       return;
     }
 
-    // 4. No horizon = nothing is approved. Auto-stop.
+    // 4. No horizon = nothing is approved.
+    // #1187: auto-deactivate REMOVED. Project state is user-controlled only.
+    // We log and return; the project stays active until the user explicitly
+    // deactivates from the UI.
     if (!approvedThrough) {
-      if (projData.state !== 'stopped') {
-        projData.state = 'stopped';
-        projData.currentVersion = null;
-        await client.query(
-          `UPDATE org_studio_projects SET data = $1 WHERE id = $2 AND workspace_id = $3`,
-          [JSON.stringify(projData), projectId, 'default-workspace'],
-        );
-        console.log(
-          `[AutoAdvance] ${projectId}: auto-stopped — no approvedThrough set, shipped ${current.version}`,
-        );
-      } else {
-        console.log(
-          `[AutoAdvance] ${projectId}: no approvedThrough set — stopping after ${current.version}`,
-        );
-      }
+      console.log(
+        `[AutoAdvance] ${projectId}: no approvedThrough set — shipped ${current.version}, awaiting user approval to continue`,
+      );
       return;
     }
 
@@ -342,19 +334,13 @@ export async function checkAndAutoAdvance(
         `[AutoAdvance] ${projectId}: ${current.version} shipped — promote skipped: ${result.reason}`,
       );
 
-      // All approved work is done and no next version to promote — auto-stop the project.
-      // This prevents the project from staying in "started" state with nothing to do.
-      if (projData.state !== 'stopped') {
-        projData.state = 'stopped';
-        projData.currentVersion = null;
-        await client.query(
-          `UPDATE org_studio_projects SET data = $1 WHERE id = $2 AND workspace_id = $3`,
-          [JSON.stringify(projData), projectId, 'default-workspace'],
-        );
-        console.log(
-          `[AutoAdvance] ${projectId}: auto-stopped — all approved versions shipped, nothing to promote`,
-        );
-      }
+      // #1187: auto-deactivate REMOVED. Promote skipped means there's no
+      // next approved version to advance to — the project simply stays put
+      // with currentVersion at the just-shipped version. The user can
+      // approve another version to continue, or explicitly deactivate.
+      console.log(
+        `[AutoAdvance] ${projectId}: ${current.version} shipped, no next approved version to promote — awaiting user approval`,
+      );
     }
   } catch (err: any) {
     console.error('[AutoAdvance] checkAndAutoAdvance error (non-fatal):', err?.message || err);
@@ -496,7 +482,7 @@ export async function reconcileRoadmapItemDone(
               : typeof projRes.rows[0].data === 'string'
                 ? JSON.parse(projRes.rows[0].data)
                 : projRes.rows[0].data || {};
-          const wasStopped = projData.state === 'stopped' || projData.currentVersion === null || projData.currentVersion === undefined;
+          const wasStopped = projData.state === 'inactive' || projData.state === 'stopped' || projData.currentVersion === null || projData.currentVersion === undefined;
 
           if (wasStopped) {
             console.log(
@@ -522,34 +508,11 @@ export async function reconcileRoadmapItemDone(
           if (afterData.currentVersion && afterData.currentVersion !== projData.currentVersion) {
             summary.advanced++;
           } else if (!afterData.currentVersion || afterData.currentVersion === projData.currentVersion) {
-            // checkAndAutoAdvance didn't advance — check if we should auto-stop.
-            // This catches the case where the shipped version was the last current one
-            // and there's nothing to promote (all approved work done).
-            const hasPlannedInHorizon = await (async () => {
-              const horizon = afterData.autonomy?.approvedThrough;
-              if (!horizon) return false;
-              const { isVersionGreater } = await import('./version-utils');
-              const nextRes = await client.query(
-                `SELECT version FROM org_studio_roadmap_versions
-                 WHERE project_id = $1 AND status = 'planned' AND workspace_id = $2
-                 ORDER BY sort_order ASC LIMIT 1`,
-                [pid, 'default-workspace'],
-              );
-              if (nextRes.rows.length === 0) return false;
-              return !isVersionGreater(nextRes.rows[0].version, horizon);
-            })();
-
-            if (!hasPlannedInHorizon && afterData.state !== 'stopped') {
-              afterData.state = 'stopped';
-              afterData.currentVersion = null;
-              await client.query(
-                `UPDATE org_studio_projects SET data = $1 WHERE id = $2 AND workspace_id = $3`,
-                [JSON.stringify(afterData), pid, 'default-workspace'],
-              );
-              console.log(
-                `[RoadmapReconcile] ${pid}: auto-stopped — all approved versions shipped, nothing to promote`,
-              );
-            }
+            // #1187: auto-stop check REMOVED. checkAndAutoAdvance didn't advance,
+            // which means either no approved next version exists or the user has
+            // not approved past the current shipped version. Either way, the
+            // project stays as-is until the user explicitly approves more work
+            // or deactivates the project.
           }
         } catch (advErr: any) {
           console.error(

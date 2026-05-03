@@ -279,7 +279,7 @@ function hasActionableWork(store: StoreData, agentId: string): boolean {
 
 // #1112 PR 4 — pure dispatch gating lives in src/lib/dispatch-gate.ts.
 // Semantics (recap; details in that module):
-//   Rule 1: project.state === 'started'
+//   Rule 1: project.state === 'active' (#1185)
 //   Rule 2: task has sectionId + version
 //   Rule 3: task.version <= component.approvedThrough
 //   Rule 4: component-version waitsFor satisfied
@@ -892,47 +892,13 @@ export async function POST(request: NextRequest) {
           // No actionable work found for this agent
         }
 
-        // #1112 PR 4 — auto-stop pass.
-        //
-        // For each STARTED project, check whether any component has a
-        // dispatch-eligible task or active work. If nothing is dispatchable
-        // AND nothing is "waiting" (blocked or within-horizon-but-gated),
-        // flip the project to stopped and emit a notification comment.
-        //
-        // Active work (in-progress / review) keeps the project started.
-        // Blocked + waitsFor-gated work keeps the project started (waiting).
-        // Above-horizon work does NOT keep the project started — that's the
-        // user's signal to extend approval.
-        const autoStopped: string[] = [];
-        for (const proj of (store.projects || [])) {
-          if ((proj as any).state !== 'started') continue;
+        // #1187: auto-stop pass DELETED. Project state is now
+        // user-controlled only — the system never flips active→inactive.
+        // Spec: spec-project-model-simplification.md §Auto-stop removal.
+        // The vision owner explicitly deactivates from the project page when
+        // they want to pause dispatch.
 
-          let keep = false;
-          for (const t of (store.tasks || [])) {
-            if ((t as any).isArchived) continue;
-            if (t.projectId !== proj.id) continue;
-
-            if (t.status === 'in-progress' || t.status === 'review') { keep = true; break; }
-            if (isTaskAnyDispatchEligible(store, t as any)) { keep = true; break; }
-            if (isTaskWaiting(store, t as any)) { keep = true; break; }
-          }
-
-          if (!keep) {
-            try {
-              const provider = await getStoreProvider();
-              await provider.updateProject(proj.id, { state: 'stopped' });
-              await provider.addComment(
-                { kind: 'project', boardProjectId: proj.id },
-                { author: 'system', text: '✅ All approved work shipped. Extend approval on a component to continue.' },
-              );
-              autoStopped.push(proj.id);
-            } catch (err) {
-              console.error(`[AutoStop] ${proj.id} — failed:`, err);
-            }
-          }
-        }
-
-        return NextResponse.json({ ok: true, swept, autoStopped });
+        return NextResponse.json({ ok: true, swept });
       }
 
       case 'escalate-stale-backlog': {

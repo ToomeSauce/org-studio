@@ -376,7 +376,9 @@ function ProjectDashboardPageInner() {
     );
   }, [project, primaryComponent, sortedCompVersions]);
 
-  const projectStopped = (project as any)?.state === 'stopped';
+  // #1185 rename: 'stopped' → 'inactive'. Accept both during transition.
+  const projectStopped =
+    (project as any)?.state === 'inactive' || (project as any)?.state === 'stopped';
   const projectCurrentVersion = (project as any)?.currentVersion as string | undefined;
 
   const handleLaunch = useCallback(async () => {
@@ -413,7 +415,7 @@ function ProjectDashboardPageInner() {
   }, [projectId, launchTarget]);
 
   const setProjectState = useCallback(
-    async (state: 'started' | 'stopped') => {
+    async (state: 'active' | 'inactive') => {
       if (!projectId) return;
       setStateBusy(true);
       try {
@@ -436,13 +438,9 @@ function ProjectDashboardPageInner() {
   );
 
   const onStartProject = useCallback(async () => {
-    // Mirrors legacy: flip state → started, and if no currentVersion (or the
-    // stored currentVersion is a stale string that doesn't match any real
-    // version on the active component), also promote the next approved
-    // version. Without this guard, a junk `project.currentVersion` (e.g.
-    // "1.19.1" when only v1.19.0 shipped + v1.20.0 planned exist) silently
-    // skips handleLaunch and agents stay paused.
-    await setProjectState('started');
+    // #1185 rename: 'started' → 'active'. Activate the project; if no
+    // currentVersion (or stale junk), also promote the next approved version.
+    await setProjectState('active');
     const versionExistsOnActiveComponent = (v: string) =>
       compVersions.some((x) => x.version === v);
     if (!projectCurrentVersion || !versionExistsOnActiveComponent(projectCurrentVersion)) {
@@ -451,7 +449,7 @@ function ProjectDashboardPageInner() {
   }, [setProjectState, projectCurrentVersion, handleLaunch, compVersions]);
 
   const onStopProject = useCallback(
-    () => setProjectState('stopped'),
+    () => setProjectState('inactive'),
     [setProjectState]
   );
 
@@ -538,8 +536,8 @@ function ProjectDashboardPageInner() {
                     disabled={noWork || launching || stateBusy}
                     title={
                       noWork
-                        ? 'Approve a version on a component roadmap below to enable start'
-                        : 'Start project'
+                        ? 'Approve a version on a component roadmap below to enable activation'
+                        : 'Activate project'
                     }
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-[12px] uppercase tracking-[0.1em] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     style={{
@@ -554,7 +552,7 @@ function ProjectDashboardPageInner() {
                     ) : (
                       <Play size={13} />
                     )}
-                    {launching ? 'Starting…' : 'Start'}
+                    {launching ? 'Activating…' : 'Activate'}
                   </button>
                 );
               })()
@@ -586,7 +584,7 @@ function ProjectDashboardPageInner() {
                 type="button"
                 onClick={onStopProject}
                 disabled={stateBusy}
-                title="Stop project"
+                title="Deactivate project"
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-[12px] uppercase tracking-[0.1em] font-medium transition-colors disabled:opacity-50"
                 style={{
                   fontFamily: monoFont,
@@ -596,7 +594,7 @@ function ProjectDashboardPageInner() {
                 }}
               >
                 {stateBusy ? <Loader2 size={13} className="animate-spin" /> : <Square size={13} />}
-                Stop
+                Deactivate
               </button>
             )}
             <Link

@@ -5,7 +5,7 @@
  * dispatch-eligible under the per-component roadmap model.
  *
  * Rule summary (all must hold for an eligible backlog task):
- *   1. project.state === 'started'                                  — master switch
+ *   1. project.state === 'active'                                   — master switch (#1185)
  *   2. task has a component (sectionId) AND a version               — scoped work only
  *   3. task.version <= component.approvedThrough                    — within approval banner
  *   4. component-version waitsFor (if present) is satisfied         — dependency met
@@ -162,8 +162,10 @@ export function isTaskDispatchEligible(store: StoreLike, task: TaskLike): boolea
   const proj = (store.projects || []).find((p) => p.id === task.projectId);
   if (!proj) return false;
 
-  // Rule 1: project must be started.
-  if ((proj as any).state !== 'started') return false;
+  // Rule 1: project must be active. (#1185 rename: 'started' → 'active'.
+  // Both literals accepted during transition.)
+  const projState = (proj as any).state;
+  if (projState !== 'active' && projState !== 'started') return false;
 
   // Rule 3: task.version must be within the component's approval banner.
   const approvedThrough = getComponentApprovedThrough(proj, task.sectionId);
@@ -204,8 +206,8 @@ export function isTaskDispatchEligible(store: StoreLike, task: TaskLike): boolea
  * Eligibility rules (all must hold):
  *   1. taskType is one of the adhoc types
  *   2. status === 'backlog' AND assignee set (caller checks)
- *   3. project exists and project.state === 'started' (mirrors Rule 1 of
- *      the roadmap lane: stopped projects don't dispatch new work)
+ *   3. project exists and project.state === 'active' (mirrors Rule 1 of
+ *      the roadmap lane: inactive projects don't dispatch new work) (#1185)
  *   4. not archived, not paused
  *
  * Notes:
@@ -225,7 +227,9 @@ export function isTaskAdhocDispatchEligible(
   if (!task.taskType || !ADHOC_TASK_TYPES.has(task.taskType)) return false;
   const proj = (store.projects || []).find((p) => p.id === task.projectId);
   if (!proj) return false;
-  if ((proj as any).state !== 'started') return false;
+  // #1185 rename: 'started' → 'active'. Both literals accepted during transition.
+  const projState = (proj as any).state;
+  if (projState !== 'active' && projState !== 'started') return false;
   return true;
 }
 

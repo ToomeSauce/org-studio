@@ -6,7 +6,7 @@
 export interface Project {
   id: string;
   name: string;
-  state?: 'stopped' | 'started';
+  state?: 'active' | 'inactive' | 'started' | 'stopped';
   currentVersion?: string;
   autonomy?: {
     pendingVersion?: string | null;
@@ -31,12 +31,13 @@ export interface StatusLabel {
  * @returns StatusLabel with label, color (tailwind), and emoji
  */
 export function getProjectStatusLabel(project: Project, tasks: any[] = []): StatusLabel {
-  // Stopped projects get a clear indicator regardless of other state
-  if (project.state === 'stopped') {
+  // Inactive projects get a clear indicator regardless of other state.
+  // (#1185 rename: 'stopped' → 'inactive'. Accept both during transition.)
+  if (project.state === 'inactive' || project.state === 'stopped') {
     return {
-      label: 'Stopped',
+      label: 'Inactive',
       color: 'slate',
-      emoji: '⏹',
+      emoji: '⏸',
     };
   }
 

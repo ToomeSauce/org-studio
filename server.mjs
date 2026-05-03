@@ -2461,85 +2461,11 @@ server.listen(port, async () => {
     safeRoadmapReconcile();
     console.log('[RoadmapReconcile] Startup reconcile fired (no recurring poll)');
 
-    // Post-reconcile: auto-stop any "started" projects whose currentVersion
-    // is already shipped with no next version to promote.
-    try {
-      const pg = await import('pg');
-      const Pool = pg.default?.Pool || pg.Pool;
-      if (!process.env.DATABASE_URL) throw new Error('no DATABASE_URL');
-      const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 3 });
-      const client = await pool.connect();
-      try {
-        const projRes = await client.query(
-          `SELECT id, data FROM org_studio_projects WHERE workspace_id = 'default-workspace'`
-        );
-        for (const row of projRes.rows) {
-          const projData = typeof row.data === 'string' ? JSON.parse(row.data) : row.data || {};
-          if (projData.state === 'stopped' || !projData.currentVersion) continue;
-
-          // Check if currentVersion's roadmap row is already shipped
-          const vRes = await client.query(
-            `SELECT status FROM org_studio_roadmap_versions
-             WHERE project_id = $1 AND version = $2 AND workspace_id = 'default-workspace' LIMIT 1`,
-            [row.id, projData.currentVersion]
-          );
-          if (vRes.rows.length === 0 || vRes.rows[0].status !== 'shipped') continue;
-
-          // currentVersion is shipped — try to promote via API.
-          // If promote succeeds, project continues. If it fails, auto-stop.
-          const apiKey = process.env.ORG_STUDIO_API_KEY || '';
-          const triggerRes = await fetch(`http://127.0.0.1:${port}/api/store`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-            },
-            // Bump approvedThrough to itself — this triggers the promote check we added.
-            // If the value hasn't changed, force a tiny re-save by toggling a harmless field.
-            body: JSON.stringify({
-              action: 'updateProject',
-              id: row.id,
-              updates: {
-                state: 'started',
-                autonomy: { ...projData.autonomy },
-              },
-            }),
-          });
-          if (!triggerRes.ok) {
-            console.warn(`[StartupIntegrity] ${row.id}: promote trigger returned ${triggerRes.status}`);
-            continue;
-          }
-
-          // Re-read and check if promote worked
-          await new Promise(r => setTimeout(r, 3000));
-          const afterRes = await client.query(
-            `SELECT data FROM org_studio_projects WHERE id = $1 AND workspace_id = 'default-workspace'`,
-            [row.id]
-          );
-          const afterData = afterRes.rows.length > 0
-            ? (typeof afterRes.rows[0].data === 'string' ? JSON.parse(afterRes.rows[0].data) : afterRes.rows[0].data)
-            : {};
-
-          if (afterData.currentVersion === projData.currentVersion) {
-            // Promote didn't advance — auto-stop
-            afterData.state = 'stopped';
-            afterData.currentVersion = null;
-            await client.query(
-              `UPDATE org_studio_projects SET data = $1 WHERE id = $2 AND workspace_id = 'default-workspace'`,
-              [JSON.stringify(afterData), row.id]
-            );
-            console.log(`[StartupIntegrity] ${row.id}: auto-stopped — currentVersion ${projData.currentVersion} shipped, no promote possible`);
-          } else {
-            console.log(`[StartupIntegrity] ${row.id}: promoted to ${afterData.currentVersion}`);
-          }
-        }
-      } finally {
-        client.release();
-        await pool.end();
-      }
-    } catch (e) {
-      console.warn('[StartupIntegrity] stale-project check failed (non-fatal):', e.message);
-    }
+    // #1187: post-reconcile auto-deactivate REMOVED. Project state is
+    // user-controlled only — the system never flips active→inactive.
+    // If a project's currentVersion is shipped and there's no next approved
+    // version, the project simply stays put until the user approves more
+    // work or explicitly deactivates from the UI.
   }, 30_000);
 
   // Daily metrics computation — runs at startup (15s delay) + daily at midnight

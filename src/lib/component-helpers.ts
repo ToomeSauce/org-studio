@@ -71,11 +71,28 @@ export interface ComponentLike {
   /**
    * #1112 PR 3 (additive): per-component approval banner. Tasks whose
    * `version` is beyond this value are NOT dispatch-eligible even when the
-   * project is started. Replaces the project-wide
+   * project is active. Replaces the project-wide
    * `project.autonomy.approvedThrough` field (which is still consulted as a
    * fallback for the primary component until PR 6 completes migration).
+   *
+   * #1186: superseded by `approvedVersions[]` (explicit list). The shim
+   * `getComponentApprovedThrough()` now derives the max from
+   * `approvedVersions` when present, falling back to this field. Both fields
+   * are read during the transition; ticket E refactors callers and drops
+   * this field once writes go through `approvedVersions` only.
    */
   approvedThrough?: string;
+  /**
+   * #1186: explicit list of approved versions for this component. Replaces
+   * `approvedThrough` (which described a contiguous prefix range). With
+   * an explicit list, the vision owner can approve any subset of versions
+   * — including non-contiguous picks — by ticking checkboxes on the
+   * roadmap admin surface (ticket D).
+   *
+   * Migration backfills this from `approvedThrough`: every roadmap version
+   * `v` with `v <= approvedThrough` is added.
+   */
+  approvedVersions?: string[];
   /**
    * #1112 PR 3 (additive): per-component roadmap. Each version may declare a
    * `waitsFor` dependency on another component's shipped version. Replaces
@@ -271,10 +288,10 @@ export function getComponentVersions(
  * Return the effective approval banner ("approvedThrough" version string)
  * for a given component.
  *
- * Post-#1112 PR 6: just reads `component.approvedThrough`. The primary-
- * component fallback to `project.autonomy.approvedThrough` was removed
- * after the data migration moved every project's horizon onto its primary
- * component.
+ * #1186 transitional: derives from `approvedVersions[]` (max) when present,
+ * falling back to legacy `approvedThrough` field. Existing callers see
+ * unchanged semantics. Ticket E refactors callers to use
+ * `getComponentApprovedVersions()` directly and includes/contains-checks.
  *
  * Returns `undefined` when the component has no banner — nothing is
  * dispatch-eligible for that component until one is set.
@@ -285,7 +302,84 @@ export function getComponentApprovedThrough(
 ): string | undefined {
   const comps = getEffectiveComponents(project);
   const component = comps.find((c) => c.id === componentId);
-  return component?.approvedThrough;
+  if (!component) return undefined;
+  // #1186: prefer explicit list when present; max() yields the same string
+  // semantics legacy callers expect.
+  if (Array.isArray(component.approvedVersions) && component.approvedVersions.length > 0) {
+    return maxVersion(component.approvedVersions);
+  }
+  return component.approvedThrough;
+}
+
+/**
+ * #1186: return the explicit set of approved versions for a component.
+ * If only the legacy `approvedThrough` field is set, returns an empty array
+ * (callers either fall back to `getComponentApprovedThrough` for legacy
+ * range semantics, or trigger the migration to backfill).
+ *
+ * Use this in ticket E for per-version eligibility checks:
+ * `getComponentApprovedVersions(project, componentId).includes(taskVersion)`.
+ */
+export function getComponentApprovedVersions(
+  project: ProjectLike,
+  componentId: string,
+): string[] {
+  const comps = getEffectiveComponents(project);
+  const component = comps.find((c) => c.id === componentId);
+  if (!component) return [];
+  return Array.isArray(component.approvedVersions) ? [...component.approvedVersions] : [];
+}
+
+/**
+ * #1186: is `version` approved for this component? Checks the explicit list
+ * first; falls back to legacy contiguous-prefix semantics via
+ * `approvedThrough` when no list is set.
+ */
+export function isVersionApproved(
+  project: ProjectLike,
+  componentId: string,
+  version: string,
+): boolean {
+  const comps = getEffectiveComponents(project);
+  const component = comps.find((c) => c.id === componentId);
+  if (!component) return false;
+  if (Array.isArray(component.approvedVersions) && component.approvedVersions.length > 0) {
+    return component.approvedVersions.includes(version);
+  }
+  // Legacy fallback: contiguous prefix up to approvedThrough.
+  if (!component.approvedThrough) return false;
+  return isVersionLessOrEqualLocal(version, component.approvedThrough);
+}
+
+/**
+ * #1186: max of a non-empty version list (semver-ordered with string
+ * fallback). Local helper so component-helpers.ts stays self-contained.
+ */
+function maxVersion(versions: string[]): string {
+  let best = versions[0];
+  for (let i = 1; i < versions.length; i++) {
+    if (isVersionLessOrEqualLocal(best, versions[i])) best = versions[i];
+  }
+  return best;
+}
+
+/**
+ * Local lightweight version compare. Mirrors version-utils.isVersionLessOrEqual
+ * without pulling in the import cycle. Treats numeric segments numerically;
+ * falls back to lexicographic for non-numeric segments.
+ */
+function isVersionLessOrEqualLocal(a: string, b: string): boolean {
+  if (a === b) return true;
+  const ap = a.split('.').map((s) => parseInt(s, 10));
+  const bp = b.split('.').map((s) => parseInt(s, 10));
+  const len = Math.max(ap.length, bp.length);
+  for (let i = 0; i < len; i++) {
+    const av = Number.isFinite(ap[i]) ? ap[i] : 0;
+    const bv = Number.isFinite(bp[i]) ? bp[i] : 0;
+    if (av < bv) return true;
+    if (av > bv) return false;
+  }
+  return true;
 }
 
 /**
