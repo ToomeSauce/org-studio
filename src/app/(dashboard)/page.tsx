@@ -2,6 +2,7 @@
 
 import { useWSData, useWSConnected } from '@/lib/ws';
 import { Teammate, buildAgentMap } from '@/lib/teammates';
+import { isAwaitingHumanResponse } from '@/lib/blocker-filters';
 import { getProjectStatusLabel } from '@/lib/vision-status';
 import { SuggestedFeedbackSection } from '@/components/SuggestedFeedbackSection';
 import { clsx } from 'clsx';
@@ -402,9 +403,15 @@ function AttentionSection({ tasks, projects }: { tasks: any[]; projects: any[] }
       }
     }
 
-    // Blocked tasks (only on active projects)
+    // Blocked tasks (only on active projects, only those waiting on the
+    // human owner — #1192). Agent-on-agent blockers stay on the project
+    // board where they belong.
     for (const task of tasks) {
-      if (task.status === 'blocked' && activeProjectIds.has(task.projectId)) {
+      if (
+        task.status === 'blocked' &&
+        activeProjectIds.has(task.projectId) &&
+        isAwaitingHumanResponse(task)
+      ) {
         result.push({
           type: 'blocked',
           emoji: '🟡',
