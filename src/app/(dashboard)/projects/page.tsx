@@ -226,38 +226,74 @@ function ProjectsContent() {
     }
   };
 
-  // Categorize projects by sprint status
-  const needsAttention: Project[] = [];
-  const activeSprints: Project[] = [];
-  const completedSprints: Project[] = [];
-  const otherProjects: Project[] = [];
+  // #1190 — Projects page regroup per spec-project-model-simplification.md.
+  // Four buckets keyed off project.state (active/inactive) plus a "needs
+  // attention" surface that pulls projects out of Active when something
+  // is wrong. Replaces the old sprint-status bucketing that read
+  // currentVersion + per-version task statuses.
+  //
+  // Signals (no extra fetch — derived from the store we already have):
+  //   - blocked tickets        → needs attention
+  //   - active w/ zero approved versions AND zero adhoc backlog → idle
+  //   - loopPausedAt on any ticket → needs attention
+  //
+  // staleBacklog (#1184) is per-agent and lives in dispatch-health; we
+  // don't fetch it here to keep the projects list snappy. The dispatch-
+  // health banner on the dashboard surfaces those signals separately.
+  type Bucket = 'needsAttention' | 'active' | 'inactive' | 'archived';
+  const bucketed: Record<Bucket, Project[]> = {
+    needsAttention: [],
+    active: [],
+    inactive: [],
+    archived: [],
+  };
+  // Per-project metadata for badges (backlog count, blocked count, etc.)
+  const meta: Record<string, { blocked: number; backlog: number; paused: number }> = {};
 
-  for (const p of projects.filter(p => !p.isArchived)) {
-    const cv = (p as any).currentVersion;
-    const projectTasks = allTasks.filter(t => t.projectId === p.id && !t.isArchived);
-    const versionTasks = cv ? projectTasks.filter(t => (t as any).version === cv) : [];
-    const reviewOrBlocked = versionTasks.filter(t => t.status === 'review' || t.status === 'blocked');
-    const activeTasks = versionTasks.filter(t => ['in-progress', 'qa', 'backlog'].includes(t.status as string));
-    const allDone = versionTasks.length > 0 && versionTasks.every(t => t.status === 'done');
+  for (const p of projects) {
+    const tasks = allTasks.filter((t) => t.projectId === p.id && !t.isArchived);
+    const blocked = tasks.filter((t) => t.status === 'blocked').length;
+    const backlog = tasks.filter((t) => t.status === 'backlog').length;
+    const paused = tasks.filter((t) => (t as any).loopPausedAt).length;
+    meta[p.id] = { blocked, backlog, paused };
 
-    if (cv && reviewOrBlocked.length > 0) {
-      needsAttention.push(p);
-    } else if (cv && activeTasks.length > 0) {
-      activeSprints.push(p);
-    } else if (cv && allDone) {
-      completedSprints.push(p);
+    if (p.isArchived) {
+      bucketed.archived.push(p);
+      continue;
+    }
+    // Active state literal supports the legacy 'started' too (#1185 transitional).
+    const state = (p as any).state;
+    const isActive = state === 'active' || state === 'started';
+    if (!isActive) {
+      bucketed.inactive.push(p);
+      continue;
+    }
+    // Active project: needs attention if blocked, paused, or idle.
+    const components = ((p as any).components || (p as any).sections || []) as any[];
+    const hasApprovedVersion = components.some((c) => {
+      const av = c.approvedVersions;
+      if (Array.isArray(av) && av.length > 0) return true;
+      return !!c.approvedThrough;
+    });
+    const idle = !hasApprovedVersion && backlog === 0;
+    if (blocked > 0 || paused > 0 || idle) {
+      bucketed.needsAttention.push(p);
     } else {
-      otherProjects.push(p);
+      bucketed.active.push(p);
     }
   }
 
-  const archivedProjects = projects.filter(p => p.isArchived);
+  const needsAttention = bucketed.needsAttention;
+  const activeProjects = bucketed.active;
+  const inactiveProjects = bucketed.inactive;
+  const archivedProjects = bucketed.archived;
 
-  const ProjectCard = ({ project }: { project: Project }) => {
+  const ProjectCard = ({ project, showInactiveBadge }: { project: Project; showInactiveBadge?: boolean }) => {
     const statusLabel = getProjectStatusLabel(project, allTasks);
     const stats = getProjectStats(project.id);
     const progressPercent =
       stats.total > 0 ? Math.round((stats.done / stats.total) * 100) : 0;
+    const m = meta[project.id] || { blocked: 0, backlog: 0, paused: 0 };
 
     return (
       <Link
@@ -269,7 +305,7 @@ function ProjectsContent() {
             <h3 className="font-semibold text-[var(--text-primary)]">
               {project.name}
             </h3>
-            <div className="flex items-center gap-2 mt-2">
+            <div className="flex items-center gap-2 mt-2 flex-wrap">
               <span
                 className={clsx(
                   'text-sm px-2 py-1 rounded-full font-medium',
@@ -287,6 +323,25 @@ function ProjectsContent() {
               >
                 {statusLabel.emoji} {statusLabel.label}
               </span>
+              {/* #1190 — inactive cards show backlog count so vision owner
+                  knows there's queued work waiting on activation. */}
+              {showInactiveBadge && m.backlog > 0 && (
+                <span className="text-xs px-2 py-1 rounded-full font-medium bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">
+                  {m.backlog} ticket{m.backlog === 1 ? '' : 's'} queued
+                </span>
+              )}
+              {/* Needs-attention reason badges. Only render the strongest one
+                  to keep the card tidy. */}
+              {!showInactiveBadge && m.blocked > 0 && (
+                <span className="text-xs px-2 py-1 rounded-full font-medium bg-red-50 text-red-700 dark:bg-red-950/20 dark:text-red-400">
+                  🚫 {m.blocked} blocked
+                </span>
+              )}
+              {!showInactiveBadge && m.blocked === 0 && m.paused > 0 && (
+                <span className="text-xs px-2 py-1 rounded-full font-medium bg-amber-50 text-amber-700 dark:bg-amber-950/20 dark:text-amber-400">
+                  ⏸ {m.paused} paused
+                </span>
+              )}
             </div>
           </div>
 
@@ -328,7 +383,8 @@ function ProjectsContent() {
           </button>
         </div>
 
-        {/* Needs Attention */}
+        {/* #1190 — Needs Attention. Active projects with blocked tickets,
+            paused tickets, or zero approved versions + zero backlog (idle). */}
         {needsAttention.length > 0 && (
           <div className="space-y-3">
             <h2 className="text-sm font-semibold text-amber-600 dark:text-amber-400 flex items-center gap-2">
@@ -346,50 +402,41 @@ function ProjectsContent() {
           </div>
         )}
 
-        {/* Active Sprints */}
-        {activeSprints.length > 0 && (
+        {/* Active — running fine. */}
+        {activeProjects.length > 0 && (
           <div className="space-y-3">
             <h2 className="text-sm font-semibold text-[var(--text-secondary)] flex items-center gap-2">
               <span className="relative flex h-2 w-2">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
               </span>
-              Active Sprints
+              Active
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {activeSprints.map((project) => (
+              {activeProjects.map((project) => (
                 <ProjectCard key={project.id} project={project} />
               ))}
             </div>
           </div>
         )}
 
-        {/* Sprint Complete */}
-        {completedSprints.length > 0 && (
+        {/* Inactive — explicitly paused projects. Card shows queued backlog
+            count so vision owner can see what's waiting on activation. */}
+        {inactiveProjects.length > 0 && (
           <div className="space-y-3">
-            <h2 className="text-sm font-semibold text-[var(--text-secondary)]">✅ Sprint Complete</h2>
+            <h2 className="text-sm font-semibold text-[var(--text-muted)] flex items-center gap-2">
+              ⏸ Inactive
+            </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {completedSprints.map((project) => (
-                <ProjectCard key={project.id} project={project} />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Other Projects */}
-        {otherProjects.length > 0 && (
-          <div className="space-y-3">
-            <h2 className="text-sm font-semibold text-[var(--text-muted)]">Other Projects</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {otherProjects.map((project) => (
-                <ProjectCard key={project.id} project={project} />
+              {inactiveProjects.map((project) => (
+                <ProjectCard key={project.id} project={project} showInactiveBadge />
               ))}
             </div>
           </div>
         )}
 
         {/* No Projects Message */}
-        {activeSprints.length === 0 && completedSprints.length === 0 && otherProjects.length === 0 && (
+        {needsAttention.length === 0 && activeProjects.length === 0 && inactiveProjects.length === 0 && archivedProjects.length === 0 && (
           <div className="flex flex-col items-center justify-center py-12">
             <p className="text-[var(--text-muted)] text-lg">No projects yet</p>
           </div>
