@@ -23,6 +23,7 @@
 
 import { isVersionGreater } from './version-utils';
 import { promoteProjectToNextVersion } from './project-state';
+import { sendVersionShippedNudge } from './vision-notify';
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -84,6 +85,47 @@ function getPool(): any | null {
     _pool = new Pool({ connectionString: dbUrl, max: 5 });
   }
   return _pool;
+}
+
+/**
+ * Fire-and-forget version-shipped Telegram nudge (#1191).
+ *
+ * Resolves vision owner via teammates from /api/store, then delegates
+ * to sendVersionShippedNudge for the actual rpc call. Wrapped in IIFE
+ * so the caller never awaits or sees a rejection.
+ */
+function fireVersionShippedNudge(
+  projectId: string,
+  projData: any,
+  version: string,
+): void {
+  (async () => {
+    try {
+      // We need: project name, visionOwner, teammates list.
+      const name = projData?.name || projectId;
+      const visionOwner = projData?.visionOwner || projData?.owner;
+      // Read teammates from store API (same pattern as triggerSchedulerForAgent above).
+      let teammates: any[] = [];
+      try {
+        const storeRes = await fetch('http://localhost:4501/api/store');
+        if (storeRes.ok) {
+          const store = await storeRes.json();
+          teammates = store?.settings?.teammates || [];
+        }
+      } catch { /* fall through with empty teammates — helper will skip */ }
+
+      await sendVersionShippedNudge(
+        { id: projectId, name, visionOwner },
+        version,
+        teammates,
+      );
+    } catch (err: any) {
+      console.warn(
+        `[VersionNudge] ${projectId}: nudge for ${version} failed:`,
+        err?.message || err,
+      );
+    }
+  })();
 }
 
 /* ------------------------------------------------------------------ */
@@ -283,6 +325,13 @@ export async function checkAndAutoAdvance(
 
     const approvedThrough: string | undefined = projData.autonomy?.approvedThrough;
 
+    // 3a. #1191 — Telegram nudge to vision owner: "✅ vX shipped on <project>. Approve next?"
+    // Fire-and-forget; idempotency key keyed off project+version so duplicate
+    // ships (e.g. reconcile race with live sync) don't double-ping. Reads the
+    // teammates list from the project doc's settings or from /api/store —
+    // we don't already have it in scope here, so do a tiny side-channel read.
+    fireVersionShippedNudge(projectId, projData, current.version);
+
     // 3b. Project state gate: if project is explicitly inactive, the human has
     // paused auto-advance. Reconcile still ships the completed version (done flags
     // + status='shipped' are factual), but we do NOT promote a next version.
@@ -455,6 +504,21 @@ export async function reconcileRoadmapItemDone(
             console.log(`[VersionShip] ${row.project_id}: ${row.version} shipped (reconcile)`);
             summary.shipped++;
             didShip = true;
+            // #1191 — fire nudge from reconcile path too. Read project doc
+            // (already locked above for the version row, but project doc is
+            // a separate row — a fresh read is fine).
+            try {
+              const pdRes = await client.query(
+                `SELECT data FROM org_studio_projects WHERE id = $1 AND workspace_id = $2`,
+                [row.project_id, 'default-workspace'],
+              );
+              if (pdRes.rows.length > 0) {
+                const pd = typeof pdRes.rows[0].data === 'string'
+                  ? JSON.parse(pdRes.rows[0].data)
+                  : pdRes.rows[0].data || {};
+                fireVersionShippedNudge(row.project_id, pd, row.version);
+              }
+            } catch { /* non-fatal */ }
           }
 
           await client.query('COMMIT');
