@@ -75,7 +75,10 @@ export interface Project {
   qaOwner?: string;             // Agent/human who runs QA
   currentVersion?: string;      // e.g. "0.3"
   dependsOn?: string[];         // Project IDs this vision depends on
-  state?: 'stopped' | 'started';  // Single source of truth for run-gating (default: 'started')
+  state?: 'active' | 'inactive' | 'started' | 'stopped';
+  // ^ #1185: rename 'started'→'active', 'stopped'→'inactive'. Old literals kept
+  //   in the type during transition; migration script normalizes data; reads
+  //   go through isProjectRunning() / normalizeProjectState() helpers.
 
   autonomy?: {
     // enabled: boolean — REMOVED (dead field, replaced by project.state)

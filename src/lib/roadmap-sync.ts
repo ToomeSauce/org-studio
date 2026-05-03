@@ -283,14 +283,15 @@ export async function checkAndAutoAdvance(
 
     const approvedThrough: string | undefined = projData.autonomy?.approvedThrough;
 
-    // 3b. Project state gate: if project is explicitly stopped, the human has
+    // 3b. Project state gate: if project is explicitly inactive, the human has
     // paused auto-advance. Reconcile still ships the completed version (done flags
     // + status='shipped' are factual), but we do NOT promote a next version.
-    if (projData.state === 'stopped') {
+    // (#1185 rename: 'stopped' → 'inactive'. Accept both during transition.)
+    if (projData.state === 'inactive' || projData.state === 'stopped') {
       console.log(
-        `[AutoAdvance] ${projectId}: project stopped (state=stopped) — shipped ${current.version} but skipping auto-advance`,
+        `[AutoAdvance] ${projectId}: project inactive — shipped ${current.version} but skipping auto-advance`,
       );
-      (checkAndAutoAdvance as any)._lastSkipReason = 'stopped';
+      (checkAndAutoAdvance as any)._lastSkipReason = 'inactive';
       return;
     }
 
@@ -303,10 +304,10 @@ export async function checkAndAutoAdvance(
       return;
     }
 
-    // 4. No horizon = nothing is approved. Auto-stop.
+    // 4. No horizon = nothing is approved. Auto-deactivate.
     if (!approvedThrough) {
-      if (projData.state !== 'stopped') {
-        projData.state = 'stopped';
+      if (projData.state !== 'inactive' && projData.state !== 'stopped') {
+        projData.state = 'inactive';
         projData.currentVersion = null;
         await client.query(
           `UPDATE org_studio_projects SET data = $1 WHERE id = $2 AND workspace_id = $3`,
@@ -342,10 +343,10 @@ export async function checkAndAutoAdvance(
         `[AutoAdvance] ${projectId}: ${current.version} shipped — promote skipped: ${result.reason}`,
       );
 
-      // All approved work is done and no next version to promote — auto-stop the project.
-      // This prevents the project from staying in "started" state with nothing to do.
-      if (projData.state !== 'stopped') {
-        projData.state = 'stopped';
+      // All approved work is done and no next version to promote — auto-deactivate the project.
+      // This prevents the project from staying in "active" state with nothing to do.
+      if (projData.state !== 'inactive' && projData.state !== 'stopped') {
+        projData.state = 'inactive';
         projData.currentVersion = null;
         await client.query(
           `UPDATE org_studio_projects SET data = $1 WHERE id = $2 AND workspace_id = $3`,
@@ -496,7 +497,7 @@ export async function reconcileRoadmapItemDone(
               : typeof projRes.rows[0].data === 'string'
                 ? JSON.parse(projRes.rows[0].data)
                 : projRes.rows[0].data || {};
-          const wasStopped = projData.state === 'stopped' || projData.currentVersion === null || projData.currentVersion === undefined;
+          const wasStopped = projData.state === 'inactive' || projData.state === 'stopped' || projData.currentVersion === null || projData.currentVersion === undefined;
 
           if (wasStopped) {
             console.log(
@@ -539,8 +540,8 @@ export async function reconcileRoadmapItemDone(
               return !isVersionGreater(nextRes.rows[0].version, horizon);
             })();
 
-            if (!hasPlannedInHorizon && afterData.state !== 'stopped') {
-              afterData.state = 'stopped';
+            if (!hasPlannedInHorizon && afterData.state !== 'inactive' && afterData.state !== 'stopped') {
+              afterData.state = 'inactive';
               afterData.currentVersion = null;
               await client.query(
                 `UPDATE org_studio_projects SET data = $1 WHERE id = $2 AND workspace_id = $3`,

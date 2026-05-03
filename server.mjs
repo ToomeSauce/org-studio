@@ -2461,8 +2461,9 @@ server.listen(port, async () => {
     safeRoadmapReconcile();
     console.log('[RoadmapReconcile] Startup reconcile fired (no recurring poll)');
 
-    // Post-reconcile: auto-stop any "started" projects whose currentVersion
+    // Post-reconcile: auto-deactivate any "active" projects whose currentVersion
     // is already shipped with no next version to promote.
+    // (#1185 rename: 'started/stopped' → 'active/inactive'. Accept both during transition.)
     try {
       const pg = await import('pg');
       const Pool = pg.default?.Pool || pg.Pool;
@@ -2475,7 +2476,7 @@ server.listen(port, async () => {
         );
         for (const row of projRes.rows) {
           const projData = typeof row.data === 'string' ? JSON.parse(row.data) : row.data || {};
-          if (projData.state === 'stopped' || !projData.currentVersion) continue;
+          if (projData.state === 'inactive' || projData.state === 'stopped' || !projData.currentVersion) continue;
 
           // Check if currentVersion's roadmap row is already shipped
           const vRes = await client.query(
@@ -2500,7 +2501,7 @@ server.listen(port, async () => {
               action: 'updateProject',
               id: row.id,
               updates: {
-                state: 'started',
+                state: 'active',
                 autonomy: { ...projData.autonomy },
               },
             }),
@@ -2521,8 +2522,8 @@ server.listen(port, async () => {
             : {};
 
           if (afterData.currentVersion === projData.currentVersion) {
-            // Promote didn't advance — auto-stop
-            afterData.state = 'stopped';
+            // Promote didn't advance — auto-deactivate
+            afterData.state = 'inactive';
             afterData.currentVersion = null;
             await client.query(
               `UPDATE org_studio_projects SET data = $1 WHERE id = $2 AND workspace_id = 'default-workspace'`,

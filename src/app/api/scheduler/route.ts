@@ -16,6 +16,7 @@ import { buildLoopPrompt, buildDispatchMessage, clearConsumedHandoffs } from '@/
 import type { AgentLoop } from '@/lib/store';
 import { authenticateRequest } from '@/lib/auth';
 import { writeHeartbeat } from '@/lib/heartbeats';
+import { isProjectRunning } from '@/lib/project-state';
 import { getStoreProvider, type StoreData } from '@/lib/store-provider';
 import {
   isTaskAnyDispatchEligible,
@@ -279,7 +280,7 @@ function hasActionableWork(store: StoreData, agentId: string): boolean {
 
 // #1112 PR 4 — pure dispatch gating lives in src/lib/dispatch-gate.ts.
 // Semantics (recap; details in that module):
-//   Rule 1: project.state === 'started'
+//   Rule 1: project.state === 'active' (#1185)
 //   Rule 2: task has sectionId + version
 //   Rule 3: task.version <= component.approvedThrough
 //   Rule 4: component-version waitsFor satisfied
@@ -905,7 +906,7 @@ export async function POST(request: NextRequest) {
         // user's signal to extend approval.
         const autoStopped: string[] = [];
         for (const proj of (store.projects || [])) {
-          if ((proj as any).state !== 'started') continue;
+          if (!isProjectRunning(proj)) continue;
 
           let keep = false;
           for (const t of (store.tasks || [])) {
@@ -920,7 +921,7 @@ export async function POST(request: NextRequest) {
           if (!keep) {
             try {
               const provider = await getStoreProvider();
-              await provider.updateProject(proj.id, { state: 'stopped' });
+              await provider.updateProject(proj.id, { state: 'inactive' });
               await provider.addComment(
                 { kind: 'project', boardProjectId: proj.id },
                 { author: 'system', text: '✅ All approved work shipped. Extend approval on a component to continue.' },

@@ -10,8 +10,10 @@
  *     the old `currentVersion === null` pause pattern to `project.state`.
  *
  * Design notes:
- *   - `project.state: "stopped" | "started"` is the **only** field that
+ *   - `project.state: "active" | "inactive"` is the **only** field that
  *     gates whether the scheduler dispatches work for a project.
+ *     (#1185: renamed from 'started'/'stopped'. Both literals accepted in the
+ *     type during transition; helpers normalize.)
  *   - `currentVersion` is purely "which version is in flight right now".
  *     It's never used as a pause flag anymore.
  *   - `autonomy.enabled` is removed. `autonomy.approvedThrough` stays.
@@ -27,11 +29,33 @@ import { isVersionInHorizon, isVersionGreater } from './version-utils';
  * Is the project running? This is the single check the scheduler uses
  * to decide whether to dispatch tasks for a project.
  *
- * Default (missing field) = started, for backward compat.
+ * Default (missing field) = active, for backward compat.
+ *
+ * #1185: accepts both legacy ('started'/'stopped') and new ('active'/'inactive')
+ * literals during the rename transition. After ticket A's migration runs, all
+ * stored values are 'active'/'inactive'; legacy literals only appear in
+ * unmigrated test fixtures.
  */
-export function isProjectRunning(project: { state?: 'stopped' | 'started' } | null | undefined): boolean {
+export function isProjectRunning(
+  project: { state?: 'active' | 'inactive' | 'started' | 'stopped' } | null | undefined,
+): boolean {
   if (!project) return false;
-  return project.state !== 'stopped'; // undefined / 'started' → running
+  const s = project.state;
+  // 'inactive' or 'stopped' → not running. Anything else (including
+  // undefined or 'active' or 'started') → running.
+  return s !== 'inactive' && s !== 'stopped';
+}
+
+/**
+ * #1185 — normalize legacy state literal to new naming. Pure function;
+ * returns the new literal. Use anywhere a state value flows from old data
+ * into UI/log strings to avoid mixing terminologies.
+ */
+export function normalizeProjectState(
+  state: 'active' | 'inactive' | 'started' | 'stopped' | undefined,
+): 'active' | 'inactive' {
+  if (state === 'inactive' || state === 'stopped') return 'inactive';
+  return 'active'; // undefined, 'active', 'started' all map to active
 }
 
 /* ------------------------------------------------------------------ */
@@ -86,10 +110,10 @@ export async function promoteProjectToNextVersion(
       ? JSON.parse(projRes.rows[0].data)
       : projRes.rows[0].data || {};
 
-  // 2. Gate: project must be started
-  if (projData.state === 'stopped') {
-    console.log(`[Promote] ${projectId}: project is stopped — skipping`);
-    return noop('project stopped');
+  // 2. Gate: project must be active (#1185 rename: was 'started')
+  if (!isProjectRunning(projData)) {
+    console.log(`[Promote] ${projectId}: project is inactive — skipping`);
+    return noop('project inactive');
   }
 
   const fromVersion = projData.currentVersion || null;
@@ -194,9 +218,9 @@ export async function promoteProjectToNextVersion(
     }
   }
 
-  // 8. Update project.currentVersion (and ensure state is 'started')
+  // 8. Update project.currentVersion (and ensure state is 'active')
   projData.currentVersion = targetVersion;
-  if (!projData.state) projData.state = 'started';
+  if (!projData.state) projData.state = 'active';
   await client.query(
     `UPDATE org_studio_projects SET data = $1 WHERE id = $2 AND workspace_id = $3`,
     [JSON.stringify(projData), projectId, wsId],
@@ -214,9 +238,11 @@ export async function promoteProjectToNextVersion(
 /**
  * Idempotent migration: backfill `state` field on all projects.
  *
- * Rules:
- *   - If `currentVersion === null` → `state = "stopped"`
- *   - Else → `state = "started"`
+ * Rules (#1185 — 'started'/'stopped' renamed to 'active'/'inactive'):
+ *   - Legacy 'started' → 'active'
+ *   - Legacy 'stopped' → 'inactive'
+ *   - Missing state + currentVersion === null → 'inactive'
+ *   - Missing state + currentVersion set → 'active'
  *   - Remove `autonomy.enabled` (dead field)
  *
  * Returns the number of projects migrated.
@@ -228,9 +254,18 @@ export function migrateProjectState(projects: any[]): { migrated: number; change
   for (const p of projects) {
     let changed = false;
 
-    // Backfill state
+    // #1185 rename: normalize legacy literals first
+    if (p.state === 'started') {
+      p.state = 'active';
+      changed = true;
+    } else if (p.state === 'stopped') {
+      p.state = 'inactive';
+      changed = true;
+    }
+
+    // Backfill state when missing
     if (!p.state) {
-      p.state = (p.currentVersion === null || p.currentVersion === undefined) ? 'stopped' : 'started';
+      p.state = (p.currentVersion === null || p.currentVersion === undefined) ? 'inactive' : 'active';
       changed = true;
     }
 

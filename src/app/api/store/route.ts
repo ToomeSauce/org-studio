@@ -1246,8 +1246,11 @@ export async function POST(req: NextRequest) {
         // Log project state changes
         if (payload.updates?.state && payload.updates.state !== oldProject?.state) {
           console.log(`[ProjectState] ${payload.id}: ${oldProject?.state || 'undefined'} → ${payload.updates.state}`);
-          // When restarting a stopped project, re-check promote in case horizon was bumped while stopped
-          if (payload.updates.state === 'started' && oldProject?.state === 'stopped') {
+          // When activating a previously inactive project, re-check promote
+          // in case horizon was bumped while inactive. (#1185 rename: was started/stopped)
+          const newActive = payload.updates.state === 'active' || payload.updates.state === 'started';
+          const oldInactive = oldProject?.state === 'inactive' || oldProject?.state === 'stopped';
+          if (newActive && oldInactive) {
             (async () => {
               try {
                 const { promoteProjectToNextVersion } = await import('@/lib/project-state');

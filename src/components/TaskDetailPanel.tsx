@@ -35,12 +35,12 @@ function classifyTaskBlocker(
     };
   }
   if (!project) return null;
-  if ((project as any).state !== 'started') {
+  if ((project as any).state === 'inactive' || (project as any).state === 'stopped') {
     return {
       reason: 'project-stopped',
-      label: 'Project stopped',
+      label: 'Project inactive',
       fixHref: `/projects/${project.id}`,
-      fixLabel: 'Start project',
+      fixLabel: 'Activate project',
     };
   }
 

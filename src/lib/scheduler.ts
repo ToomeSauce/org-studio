@@ -628,7 +628,8 @@ export async function buildDispatchMessage(
     // Project state gate: stopped projects don't dispatch new work
     if (t.projectId) {
       const proj = (store.projects || []).find((p: any) => p.id === t.projectId);
-      if (proj?.state === 'stopped') return false;
+      // #1185 rename: 'stopped' → 'inactive'. Accept both during transition.
+      if (proj?.state === 'inactive' || proj?.state === 'stopped') return false;
     }
     // Adhoc lane: bug/chore/spike/followup are admissible without a version.
     // (addTask validator forbids version on adhoc types, so this is the only

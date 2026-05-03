@@ -202,7 +202,13 @@ export function classifyBlocker(store: StoreLike, task: any): TopBlocker {
   const proj = (store.projects || []).find((p: any) => p.id === task.projectId);
   if (!proj) return 'unknown';
 
-  if ((proj as any).state !== 'started') return 'project-stopped';
+  // #1185 rename: 'stopped' → 'inactive'. The top_blocker enum value
+  // 'project-stopped' is intentionally preserved as a stable data identifier
+  // (already written to org_studio_dispatch_attempts rows). UI translates.
+  // Project is dispatchable when state is 'active' or legacy 'started'; any
+  // other value (including undefined) is treated as inactive for safety.
+  const projState = (proj as any).state;
+  if (projState !== 'active' && projState !== 'started') return 'project-stopped';
 
   // Adhoc lane: needs taskType ∈ ADHOC. If not adhoc and missing version
   // info, that's the gap.

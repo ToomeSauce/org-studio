@@ -2,13 +2,15 @@
 /**
  * migrate-project-state.mjs
  *
- * Idempotent migration: backfills `project.state` and removes dead
- * `autonomy.enabled` from all projects in Postgres.
+ * Idempotent migration:
+ *   1. Backfills `project.state` (default: inactive if no currentVersion, else active)
+ *   2. #1185 rename: 'started' → 'active', 'stopped' → 'inactive'
+ *   3. Removes dead `autonomy.enabled` from all projects in Postgres.
  *
  * Can be run standalone: `node scripts/migrate-project-state.mjs`
  * OR imported by server.mjs at startup.
  *
- * Safe to re-run — skips projects that already have `state` set.
+ * Safe to re-run — idempotent (rename + backfill checks both check for legacy/missing values).
  */
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
@@ -52,9 +54,18 @@ async function main() {
       const data = typeof row.data === 'string' ? JSON.parse(row.data) : row.data || {};
       let changed = false;
 
-      // Backfill state
+      // #1185 rename: legacy 'started' → 'active', 'stopped' → 'inactive'
+      if (data.state === 'started') {
+        data.state = 'active';
+        changed = true;
+      } else if (data.state === 'stopped') {
+        data.state = 'inactive';
+        changed = true;
+      }
+
+      // Backfill state when missing
       if (!data.state) {
-        data.state = (data.currentVersion === null || data.currentVersion === undefined) ? 'stopped' : 'started';
+        data.state = (data.currentVersion === null || data.currentVersion === undefined) ? 'inactive' : 'active';
         changed = true;
       }
 
