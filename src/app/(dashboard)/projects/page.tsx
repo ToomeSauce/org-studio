@@ -226,23 +226,14 @@ function ProjectsContent() {
     }
   };
 
-  // #1190 — Projects page regroup per spec-project-model-simplification.md.
-  // Four buckets keyed off project.state (active/inactive) plus a "needs
-  // attention" surface that pulls projects out of Active when something
-  // is wrong. Replaces the old sprint-status bucketing that read
-  // currentVersion + per-version task statuses.
-  //
-  // Signals (no extra fetch — derived from the store we already have):
-  //   - blocked tickets        → needs attention
-  //   - active w/ zero approved versions AND zero adhoc backlog → idle
-  //   - loopPausedAt on any ticket → needs attention
-  //
-  // staleBacklog (#1184) is per-agent and lives in dispatch-health; we
-  // don't fetch it here to keep the projects list snappy. The dispatch-
-  // health banner on the dashboard surfaces those signals separately.
-  type Bucket = 'needsAttention' | 'active' | 'inactive' | 'archived';
+  // #1190 follow-up — simplified to four buckets: Blocked / Active /
+  // Inactive / Archived. Blocked = active project with at least one ticket
+  // in status='blocked'. Everything else active goes to Active. Idle/paused
+  // signals don't pull a project out of Active anymore — they're soft hints
+  // best surfaced via the dispatch-health banner on the dashboard.
+  type Bucket = 'blocked' | 'active' | 'inactive' | 'archived';
   const bucketed: Record<Bucket, Project[]> = {
-    needsAttention: [],
+    blocked: [],
     active: [],
     inactive: [],
     archived: [],
@@ -268,22 +259,15 @@ function ProjectsContent() {
       bucketed.inactive.push(p);
       continue;
     }
-    // Active project: needs attention if blocked, paused, or idle.
-    const components = ((p as any).components || (p as any).sections || []) as any[];
-    const hasApprovedVersion = components.some((c) => {
-      const av = c.approvedVersions;
-      if (Array.isArray(av) && av.length > 0) return true;
-      return !!c.approvedThrough;
-    });
-    const idle = !hasApprovedVersion && backlog === 0;
-    if (blocked > 0 || paused > 0 || idle) {
-      bucketed.needsAttention.push(p);
+    // Active project with any blocked ticket lands in Blocked; otherwise Active.
+    if (blocked > 0) {
+      bucketed.blocked.push(p);
     } else {
       bucketed.active.push(p);
     }
   }
 
-  const needsAttention = bucketed.needsAttention;
+  const blockedProjects = bucketed.blocked;
   const activeProjects = bucketed.active;
   const inactiveProjects = bucketed.inactive;
   const archivedProjects = bucketed.archived;
@@ -383,19 +367,18 @@ function ProjectsContent() {
           </button>
         </div>
 
-        {/* #1190 — Needs Attention. Active projects with blocked tickets,
-            paused tickets, or zero approved versions + zero backlog (idle). */}
-        {needsAttention.length > 0 && (
+        {/* Blocked — active project with one or more blocked tickets. */}
+        {blockedProjects.length > 0 && (
           <div className="space-y-3">
-            <h2 className="text-sm font-semibold text-amber-600 dark:text-amber-400 flex items-center gap-2">
+            <h2 className="text-sm font-semibold text-red-600 dark:text-red-400 flex items-center gap-2">
               <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
               </span>
-              Needs Attention
+              🚫 Blocked
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {needsAttention.map((project) => (
+              {blockedProjects.map((project) => (
                 <ProjectCard key={project.id} project={project} />
               ))}
             </div>
@@ -436,7 +419,7 @@ function ProjectsContent() {
         )}
 
         {/* No Projects Message */}
-        {needsAttention.length === 0 && activeProjects.length === 0 && inactiveProjects.length === 0 && archivedProjects.length === 0 && (
+        {blockedProjects.length === 0 && activeProjects.length === 0 && inactiveProjects.length === 0 && archivedProjects.length === 0 && (
           <div className="flex flex-col items-center justify-center py-12">
             <p className="text-[var(--text-muted)] text-lg">No projects yet</p>
           </div>
