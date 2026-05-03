@@ -5,8 +5,7 @@ import { AgentLoop } from '@/lib/store';
 import type { PromptSection } from '@/lib/store';
 import { getStoreProvider } from './store-provider';
 import { agentOwnedSections, agentHasTaskAccess, isDefaultMainSection } from './section-access';
-import { isVersionInHorizon, isVersionLessOrEqual } from './version-utils';
-import { getComponentApprovedThrough } from './component-helpers';
+import { getEligibleBacklogFifo } from './dispatch-gate';
 
 // Re-export for convenience
 export type { PromptSection };
@@ -617,44 +616,15 @@ export async function buildDispatchMessage(
   const inProgress = agentTasks.filter((t: any) => t.status === 'in-progress');
   const blocked = agentTasks.filter((t: any) => t.status === 'blocked');
 
-  // Approval horizon + project-state filter for backlog only. In-progress and QA tasks keep going —
-  // they were already approved when the agent picked them up. Only NEW work pulls
-  // need to respect the current approval horizon and project run-state.
-  // #1183 — adhoc tickets (bug/chore/spike/followup) take the parallel adhoc
-  // lane: project must be started, but no version/horizon/waitsFor checks.
-  const ADHOC_TASK_TYPES = new Set(['bug', 'chore', 'spike', 'followup']);
-  const backlog = agentTasks.filter((t: any) => {
-    if (t.status !== 'backlog') return false;
-    // Project state gate: stopped projects don't dispatch new work
-    if (t.projectId) {
-      const proj = (store.projects || []).find((p: any) => p.id === t.projectId);
-      // #1185 rename: 'stopped' → 'inactive'. Accept both during transition.
-      if (proj?.state === 'inactive' || proj?.state === 'stopped') return false;
-    }
-    // Adhoc lane: bug/chore/spike/followup are admissible without a version.
-    // (addTask validator forbids version on adhoc types, so this is the only
-    //  way these tickets ever dispatch.)
-    if (t.taskType && ADHOC_TASK_TYPES.has(t.taskType)) {
-      return true;
-    }
-    if (!t.projectId || !t.version) return true; // no version → not version-gated
-    const proj = (store.projects || []).find((p: any) => p.id === t.projectId);
-    if (!proj) return false;
-    // #1112 PR 6 alignment: approval lives on the component (section), not the
-    // legacy project-level autonomy.approvedThrough. Without this, every
-    // versioned backlog task on post-migration projects (where the legacy
-    // field is null) was silently filtered out, and fireOneShot returned null
-    // even though dispatch-gate considered the task eligible.
-    if (!t.sectionId) {
-      // Fallback to legacy field for any task missing sectionId (pre-#1112 data).
-      const legacy = proj?.autonomy?.approvedThrough;
-      if (!legacy) return false;
-      return isVersionInHorizon(t.version, legacy);
-    }
-    const approvedThrough = getComponentApprovedThrough(proj as any, t.sectionId);
-    if (!approvedThrough) return false; // no horizon set on this component
-    return isVersionLessOrEqual(t.version, approvedThrough);
-  });
+  // #1189 — single FIFO dispatch queue. Versioned roadmap tickets and adhoc
+  // bug/chore/spike/followup tickets sit in the same queue, ordered by
+  // createdAt ASC. The eligibility rules per lane are unchanged (versioned
+  // tickets still need horizon/waitsFor/priorVersionsComplete; adhoc tickets
+  // need only an active project + assignee + backlog status); what changed
+  // is the ORDER — no more silent "versioned-first then adhoc" priority.
+  // The single source of truth lives in dispatch-gate.ts; do not re-implement
+  // the filter here.
+  const backlog = getEligibleBacklogFifo(store, [nameLower, agentId]) as any[];
   const inQA = agentTasks.filter((t: any) => t.status === 'qa');
 
   // Nothing ACTIONABLE to do — don't dispatch even if blocked tasks exist.
