@@ -21,6 +21,12 @@ import {
   isTaskAnyDispatchEligible,
   isTaskWaiting,
 } from '@/lib/dispatch-gate';
+import {
+  recordDispatchAttempt,
+  diagnoseAgentBacklog,
+  type TriggerSource,
+  type SkipReason,
+} from '@/lib/dispatch-attempts';
 const DEFAULT_MODEL = 'foundry-openai-chat/gpt-5.4';
 
 // Minimum seconds between event-driven triggers for the same agent (debounce)
@@ -677,26 +683,76 @@ export async function POST(request: NextRequest) {
 
       case 'trigger': {
         // Event-driven trigger — called when a task lands in an agent's backlog.
-        // Expects: { action: 'trigger', agentId: string }
+        // Expects: { action: 'trigger', agentId: string, triggerSource?: TriggerSource }
         const { agentId } = body;
         if (!agentId) return NextResponse.json({ error: 'Missing agentId' }, { status: 400 });
 
         const store = await readStore();
+        // #1184: classify the trigger source so the dispatch-health view can
+        // tell addTask hooks from sweeps from manual presses. Caller is
+        // responsible for tagging; default to 'manual' (safe assumption —
+        // unknown counts as user-initiated for SLA purposes).
+        const triggerSource: TriggerSource = (
+          ['addTask', 'listen', 'sweep', 'watchdog', 'manual'].includes(
+            body?.triggerSource,
+          )
+            ? body.triggerSource
+            : 'manual'
+        ) as TriggerSource;
+        const agentName = getAgentName(store, agentId);
+
+        // #1184: helper — record the attempt then return the response.
+        // Computes diagnosis lazily so successful paths skip the cost.
+        const recordAndReturn = async (
+          response: any,
+          opts: {
+            outcome: 'dispatched' | 'skipped';
+            reason?: SkipReason;
+          },
+        ) => {
+          try {
+            const diag = diagnoseAgentBacklog(store, agentId, agentName);
+            await recordDispatchAttempt({
+              agentId,
+              triggerSource,
+              outcome: opts.outcome,
+              reason: opts.reason,
+              taskCountBacklog: diag.taskCountBacklog,
+              taskCountBlockedByGate: diag.taskCountBlockedByGate,
+              topBlocker:
+                opts.outcome === 'dispatched' ? undefined : diag.topBlocker,
+            });
+          } catch (e: any) {
+            // Observability is best-effort — never break dispatch on log fail.
+            console.warn('[trigger] recordDispatchAttempt failed:', e?.message || e);
+          }
+          return NextResponse.json(response);
+        };
+
         const loop = getLoopByAgent(store, agentId);
         if (!loop) {
-          return NextResponse.json({ ok: true, skipped: true, reason: 'No enabled loop for agent' });
+          return recordAndReturn(
+            { ok: true, skipped: true, reason: 'No enabled loop for agent' },
+            { outcome: 'skipped', reason: 'loop-disabled' },
+          );
         }
 
         // Cooldown — don't fire more than once per minute per agent
         const now = Date.now();
         const lastTrigger = lastTriggerByAgent[agentId] || 0;
         if (now - lastTrigger < TRIGGER_COOLDOWN_MS) {
-          return NextResponse.json({ ok: true, skipped: true, reason: 'Cooldown — triggered recently' });
+          return recordAndReturn(
+            { ok: true, skipped: true, reason: 'Cooldown — triggered recently' },
+            { outcome: 'skipped', reason: 'cooldown' },
+          );
         }
 
         // Pre-flight: confirm there's actually work
         if (!hasActionableWork(store, agentId)) {
-          return NextResponse.json({ ok: true, skipped: true, reason: 'No actionable work' });
+          return recordAndReturn(
+            { ok: true, skipped: true, reason: 'No actionable work' },
+            { outcome: 'skipped', reason: 'no-actionable-work' },
+          );
         }
 
         // Loop detection (#1138 v2): time-based + stale-claim aware.
@@ -715,11 +771,14 @@ export async function POST(request: NextRequest) {
           // Check if there's still non-paused actionable work
           const postPauseStore = await readStore();
           if (!hasActionableWork(postPauseStore, agentId)) {
-            return NextResponse.json({ 
-              ok: true, skipped: true, 
-              reason: `Stall detected: ${stalled.length} task(s) paused after ${MAX_LOOPS_BEFORE_ESCALATION}+ loops`,
-              paused: stalled.map(t => ({ id: t.id, title: t.title, loopCount: t.loopCount })),
-            });
+            return recordAndReturn(
+              { 
+                ok: true, skipped: true, 
+                reason: `Stall detected: ${stalled.length} task(s) paused after ${MAX_LOOPS_BEFORE_ESCALATION}+ loops`,
+                paused: stalled.map(t => ({ id: t.id, title: t.title, loopCount: t.loopCount })),
+              },
+              { outcome: 'skipped', reason: 'stalled-paused' },
+            );
           }
         }
 
@@ -733,14 +792,20 @@ export async function POST(request: NextRequest) {
         // the heartbeat watchdog) can tell a real dispatch from a fizzle.
         const sessionKey = await fireOneShot(store, loop);
         if (!sessionKey) {
-          return NextResponse.json({
-            ok: true,
-            triggered: false,
-            skipped: true,
-            reason: 'No dispatch produced (no actionable prompt or enqueue deferred)',
-          });
+          return recordAndReturn(
+            {
+              ok: true,
+              triggered: false,
+              skipped: true,
+              reason: 'No dispatch produced (no actionable prompt or enqueue deferred)',
+            },
+            { outcome: 'skipped', reason: 'no-actionable-work' },
+          );
         }
-        return NextResponse.json({ ok: true, triggered: true, method: 'dispatch', sessionKey });
+        return recordAndReturn(
+          { ok: true, triggered: true, method: 'dispatch', sessionKey },
+          { outcome: 'dispatched' },
+        );
       }
 
       case 'sweep': {
