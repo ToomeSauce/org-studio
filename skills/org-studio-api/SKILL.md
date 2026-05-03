@@ -143,16 +143,17 @@ Tasks on a component with unsatisfied `waitsFor` entries are **invisible to the 
 This is the canonical work loop for every agent session. Follow it exactly.
 
 1. **Scan in-progress** for tasks assigned to you. Resume the highest priority one.
-2. **If nothing in-progress, scan backlog.** Pick the highest priority task.
+2. **SINGLE-WIP RULE — at most ONE task in-progress at a time.** If you already have one (or more) in-progress, do NOT pull from backlog. Resume the highest-priority in-progress task and finish it (or bounce it back to backlog with a clear comment) before claiming anything new. If you find yourself with multiple in-progress tickets, that is a drift state — pick the one you'll actually finish now, move the rest back to backlog with a one-line comment explaining you're focusing. Drift cause: the dispatcher fires one wake at a time, but if you claim a new ticket on each wake instead of resuming, you accumulate WIP. Don't do that.
+3. **If nothing in-progress, scan backlog.** Pick the highest priority task.
    - Read the full task description AND all comments FIRST.
    - Only move to in-progress AFTER actual work starts. Do NOT claim tasks speculatively.
-3. **Self-test before moving out of in-progress:**
+4. **Self-test before moving out of in-progress:**
    - Write a test plan, execute it yourself (curl, build check, DB verify), document results in a comment or `reviewNotes`.
    - If this is a QA-component ticket (your domain as QA owner), the testing IS the work — run it and move to done.
-4. **When complete:** move to done (default) or review (if `needsReview: true` per the opt-in rules above). Include `reviewNotes` when moving to review. Clear activity status.
-5. **If more backlog tasks remain**, continue with the next one.
-6. **If you run out of time mid-task**, leave it where it is. Status must reflect reality.
-7. **If you discover a follow-up task**, create it as adhoc (no `version`), do NOT expand scope of current task.
+5. **When complete:** move to done (default) or review (if `needsReview: true` per the opt-in rules above). Include `reviewNotes` when moving to review. Clear activity status.
+6. **If more backlog tasks remain**, continue with the next one (only after the current in-progress is closed out — see SINGLE-WIP RULE).
+7. **If you run out of time mid-task**, leave it where it is. Status must reflect reality.
+8. **If you discover a follow-up task**, create it as adhoc (no `version`), do NOT expand scope of current task.
 
 **Task lifecycle:** `planning → backlog → in-progress → done` (default) or `→ review → done` (opt-in for irreversible / security-sensitive)
 
@@ -166,11 +167,12 @@ Every task must be tested before leaving in-progress. Self-test, document result
 
 ## Short form summary
 
-1. **Pick from backlog** — highest priority first
+1. **Pick from backlog** — highest priority first (only if nothing is already in-progress for you)
 2. **Move to in-progress** when starting actual work (not to "claim")
-3. **Post comments** documenting decisions, progress, blockers
-4. **Move to done** (default) or review (if `needsReview: true`) with a final comment summarizing what was done
-5. System auto-triggers next task dispatch — do NOT pull multiple tasks
+3. **One in-progress at a time.** Finish it before pulling another. If you have multiple, bounce all but one back to backlog.
+4. **Post comments** documenting decisions, progress, blockers
+5. **Move to done** (default) or review (if `needsReview: true`) with a final comment summarizing what was done
+6. System auto-triggers next task dispatch — do NOT pull multiple tasks
 
 ### Status Update Example
 
