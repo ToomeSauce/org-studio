@@ -377,8 +377,16 @@ function AttentionSection({ tasks, projects }: { tasks: any[]; projects: any[] }
     const result: any[] = [];
     const projectMap = new Map(projects.map((p: any) => [p.id, p.name || p.title]));
 
-    // Filter out archived projects
-    const activeProjects = projects.filter((p: any) => !p.isArchived);
+    // Filter to only ACTIVE projects — mirrors home "Active Projects" and the
+    // projects-page Active bucket. Inactive/archived projects don't bleed
+    // blockers onto the home view; they're still visible inside the project
+    // itself. (Active = state==='active' or legacy 'started'.)
+    const activeProjects = projects.filter((p: any) => {
+      if (p.isArchived) return false;
+      const state = p.state;
+      return state === 'active' || state === 'started';
+    });
+    const activeProjectIds = new Set(activeProjects.map((p: any) => p.id));
 
     // Pending approvals (pendingVersion is a version string)
     for (const project of activeProjects) {
@@ -389,33 +397,43 @@ function AttentionSection({ tasks, projects }: { tasks: any[]; projects: any[] }
           title: `${project.name || project.title || 'Untitled'} ${project.autonomy.pendingVersion} proposed`,
           detail: 'Awaiting approval',
           id: `project-${project.id}`,
+          href: `/projects/${project.id}`,
         });
       }
     }
 
-    // Blocked tasks
+    // Blocked tasks (only on active projects)
     for (const task of tasks) {
-      if (task.status === 'blocked') {
+      if (task.status === 'blocked' && activeProjectIds.has(task.projectId)) {
         result.push({
           type: 'blocked',
           emoji: '🟡',
           title: task.title,
           detail: projectMap.get(task.projectId) || task.projectId,
           id: task.id,
+          href: `/context?task=${task.id}`,
         });
       }
     }
 
-    // Stuck tasks (in-progress > 4 hours with no activity)
+    // Stuck tasks (in-progress > 4 hours with no activity, only on active projects)
     const fourHoursAgo = Date.now() - 4 * 60 * 60 * 1000;
     for (const task of tasks) {
-      if (task.status === 'in-progress' && !task.isArchived && task.updatedAt && task.updatedAt > 0 && task.updatedAt < fourHoursAgo) {
+      if (
+        task.status === 'in-progress' &&
+        !task.isArchived &&
+        activeProjectIds.has(task.projectId) &&
+        task.updatedAt &&
+        task.updatedAt > 0 &&
+        task.updatedAt < fourHoursAgo
+      ) {
         result.push({
           type: 'stuck',
           emoji: '🟡',
           title: task.title,
           detail: `${projectMap.get(task.projectId) || task.projectId} • In progress > 4h`,
           id: task.id,
+          href: `/context?task=${task.id}`,
         });
       }
     }
@@ -438,7 +456,7 @@ function AttentionSection({ tasks, projects }: { tasks: any[]; projects: any[] }
         {items.map((item) => (
           <a
             key={item.id}
-            href="/context"
+            href={item.href || '/context'}
             className="flex items-center gap-3 p-4 bg-[var(--card)] border border-[var(--border-default)] rounded-[var(--radius-md)] hover:border-[var(--border-strong)] transition-all group"
           >
             <span className="text-lg flex-shrink-0">{item.emoji}</span>
