@@ -97,21 +97,22 @@ TESTING — every task must be tested before moving out of in-progress:
     label: 'Work Loop',
     content: `WORK LOOP — repeat until all your assigned work is done:
   1. Scan "in-progress" for tasks assigned to you. Pick the highest priority one and continue working on it.
-  2. If nothing is in-progress, scan "backlog" for assigned tasks. Pick the highest priority one.
+  2. SINGLE-WIP RULE — you may have AT MOST ONE task in-progress at a time. If you already have one or more in-progress, do NOT pull from backlog. Resume the highest-priority in-progress task and finish it (or bounce it back to backlog with a clear comment) before claiming anything new. If you find yourself with multiple in-progress tickets, that is a drift state — pick the one you'll actually finish now, move the rest back to backlog with a one-line comment explaining you're focusing.
+  3. If nothing is in-progress, scan "backlog" for assigned tasks. Pick the highest priority one.
      - Read the full task description and any comments FIRST.
      - Only move it to "in-progress" AFTER you have started actual work (opened a file, ran a command, made a change).
      - Do NOT move to "in-progress" just to claim it. The status must reflect reality — if you haven't started working, leave it in backlog.
-  3. Before moving any task out of in-progress: check testType.
+  4. Before moving any task out of in-progress: check testType.
      - If "self" (default): self-test (write test plan, execute it, document results in a comment or reviewNotes), then move to done (or review if needsReview=true).
      - If "qa": self-test first, write a test plan for end-user verification, then move to "qa" column (NOT review).
-  4. When a task is complete:
+  5. When a task is complete:
      - If testPlan is empty, write one first — no exceptions.
      - Default: move to "done" directly. Use "review" ONLY if needsReview=true.
      Then go back to step 1.
-  5. Repeat until there are NO remaining tasks assigned to you in "in-progress" or "backlog".
-  6. If you discover new work, improvements, or follow-up tasks in your domain while working, create them in "backlog" and continue working through the queue.
-  7. When all assigned work is done, report idle, clear your activity status, and end.
-  8. If you run out of time mid-task, leave it in whatever column it's actually in. Do NOT move to "in-progress" on the way out — the next loop will pick it up.
+  6. Repeat until there are NO remaining tasks assigned to you in "in-progress" or "backlog".
+  7. If you discover new work, improvements, or follow-up tasks in your domain while working, create them in "backlog" and continue working through the queue.
+  8. When all assigned work is done, report idle, clear your activity status, and end.
+  9. If you run out of time mid-task, leave it in whatever column it's actually in. Do NOT move to "in-progress" on the way out — the next loop will pick it up.
 
 STRUCTURED TASK EXECUTION — when a task has acceptance criteria (## Done When):
   - Check EACH criterion before marking the task complete. If any criterion is not met, keep working.
@@ -354,16 +355,17 @@ REVIEW NOTES — when moving a task to "review" or "done", ALWAYS write a review
     content: `QA WORK LOOP — repeat until all your QA work is done:
   1. Scan "qa" column for tasks where testAssignee matches your name (or you're the default QA agent).
      Pick the highest priority one.
-  2. If nothing in qa, scan "in-progress" for tasks assigned to you. Pick the highest priority one.
-  3. If nothing in in-progress, scan "backlog" for tasks assigned to you. Pick the highest priority one.
-  4. For each task:
+  2. SINGLE-WIP RULE — you may have AT MOST ONE task in-progress at a time. If you already have one or more in-progress, do NOT pull a new task from qa or backlog. Resume your existing in-progress work first, or bounce it back with a clear comment before claiming new work. If you find yourself with multiple in-progress tickets, pick the one you'll actually finish now and move the rest back to backlog with a one-line focus comment.
+  3. If nothing in qa, scan "in-progress" for tasks assigned to you. Pick the highest priority one.
+  4. If nothing in in-progress, scan "backlog" for tasks assigned to you. Pick the highest priority one.
+  5. For each task:
      a. Read the full task description, comments, and testPlan.
      b. Run the basic sanity check (bounce-back rule).
      c. If sanity check passes, execute the test plan step by step.
      d. Document results and move the task appropriately (done/review on pass, leave in qa on fail).
-  5. Go back to step 1.
-  6. When all work is done, clear your activity status and end.
-  7. If you run out of time mid-task, leave it in whatever column it's actually in.
+  6. Go back to step 1.
+  7. When all work is done, clear your activity status and end.
+  8. If you run out of time mid-task, leave it in whatever column it's actually in.
 
 PLANNING COLUMN — you can both add QA-related tasks to planning AND pull tasks from it. Scope out planning tasks with clear test acceptance criteria, then move them to backlog when ready for an agent to execute. If a planning task lacks enough context to scope, post a comment asking instead of guessing.`,
     enabled: true,
