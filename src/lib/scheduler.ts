@@ -188,6 +188,35 @@ PLANNING COLUMN — you can both add tasks to planning AND pull tasks from it. W
     builtIn: true,
   },
   {
+    id: 'blocker-protocol',
+    label: 'Blocker Protocol',
+    content: `BLOCKER PROTOCOL — when you move a task to "blocked", you MUST tag who's blocking it.
+
+Why: the home page only surfaces blockers that need the human owner's input. If you don't tag the blocker, your blocked ticket is invisible to the people who could unblock it.
+
+When moving to blocked, set ONE of these on the task:
+  - awaitingResponseFrom: "<name>"   → use lowercase agent or human name (e.g. "basil", "trevor", "ana")
+  - awaitingResponseFrom: ["<a>", "<b>"]   → array form when multiple parties
+  - needsUserResponse: true          → shorthand for "needs the human owner" (currently Basil)
+
+ALSO ALWAYS set blockedReason — a one-line description of what's blocking it.
+
+Example (curl):
+  curl -s http://localhost:4501/api/store -X POST -H "Content-Type: application/json" \\
+    -d '{"action":"updateTask","id":"<id>","updates":{"status":"blocked","blockedReason":"frontend bundle still buggy after deploy","awaitingResponseFrom":"trevor"}}'
+
+Rules of thumb for who to name:
+  - QA-failed something to a dev to fix          → awaitingResponseFrom: "<dev>"
+  - Need a product/scope decision from the owner → needsUserResponse: true
+  - Waiting on a deploy / external service       → leave both unset, set blockedReason explaining what's external
+  - Blocked on another ticket finishing          → use blockedBy: [<ticket numbers>] instead (auto-unblocks when those go done)
+
+Unblocking: when posting a comment that unblocks the task, also clear awaitingResponseFrom (or flip needsUserResponse to false) and either move the task back to backlog/in-progress yourself or use addHandoff so the assignee picks it up next loop.`,
+    enabled: true,
+    order: 62,
+    builtIn: true,
+  },
+  {
     id: 'sections-awareness',
     label: 'Sections Awareness',
     content: `SECTIONS — projects are split into sections you may own:
@@ -394,6 +423,29 @@ PLANNING COLUMN — you can both add QA-related tasks to planning AND pull tasks
 - You CAN pull tasks from "planning" — scope them out (acceptance criteria, constraints, context), then move them to backlog when ready for execution. Encouraged, not just allowed.`,
     enabled: true,
     order: 60,
+    builtIn: true,
+  },
+  {
+    id: 'blocker-protocol',
+    label: 'Blocker Protocol',
+    content: `BLOCKER PROTOCOL — when you move a task to "blocked" (e.g. QA-failed back to a dev), you MUST tag who's blocking it.
+
+Why: the home page only surfaces blockers that need the human owner's input. QA-failed tickets bouncing back to a dev should NOT spam the human's home view.
+
+When bouncing a QA-failed ticket back to a dev, set:
+  - awaitingResponseFrom: "<dev-name>"   → lowercase, e.g. "trevor", "ana", "mikey"
+  - blockedReason: "<one-line reason>"
+
+If you genuinely need the human owner's product/scope decision (rare in QA flow):
+  - needsUserResponse: true
+
+Example (bouncing QA failure back to Trevor):
+  curl -s http://localhost:4501/api/store -X POST -H "Content-Type: application/json" \\
+    -d '{"action":"updateTask","id":"<id>","updates":{"status":"blocked","blockedReason":"create-reward submit button fires no event","awaitingResponseFrom":"trevor"}}'
+
+Do NOT leave awaitingResponseFrom empty when QA-failing — a blocker with no named party is invisible to everyone and goes stale.`,
+    enabled: true,
+    order: 62,
     builtIn: true,
   },
   {
