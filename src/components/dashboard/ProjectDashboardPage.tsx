@@ -19,7 +19,7 @@ import { useMemo, useState, Suspense, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowUpRight, CheckCircle2, Circle, Clock, Play, AlertTriangle, Loader2, Square } from 'lucide-react';
+import { ArrowUpRight, Clock, Play, Loader2, Square } from 'lucide-react';
 
 // Lazy-loaded — heavy editor with optimistic write logic. Keeps the dashboard
 // shell snappy and matches the dynamic() pattern used by the legacy page.
@@ -163,6 +163,37 @@ function doneWhenStats(items: any[], taskById: Map<string, any>): { done: number
     if (isDone) done++;
   }
   return { done, total };
+}
+
+/**
+ * Per-status breakdown for the summary card. Mirrors the labelling logic used
+ * by the per-ticket list (done / blocked / planning / inProgress) so the
+ * summary numbers match what the roadmap shows item-by-item.
+ */
+function doneWhenBreakdown(
+  items: any[],
+  taskById: Map<string, any>,
+): { done: number; blocked: number; planning: number; inProgress: number; total: number } {
+  let done = 0;
+  let blocked = 0;
+  let planning = 0;
+  let inProgress = 0;
+  for (const it of items) {
+    const t = it.taskId ? taskById.get(it.taskId) : null;
+    const status = t?.status as string | undefined;
+    const isDone = status === 'done' || it.done === true;
+    if (isDone) {
+      done++;
+    } else if (status === 'blocked') {
+      blocked++;
+    } else if (!it.taskId) {
+      // No backing task yet → still in planning.
+      planning++;
+    } else {
+      inProgress++;
+    }
+  }
+  return { done, blocked, planning, inProgress, total: items.length };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -784,8 +815,13 @@ function ProjectDashboardPageInner() {
               mono={monoFont}
             />
             <div
+              id="roadmap-section"
               className="mt-3 rounded-md p-3 sm:p-4 min-w-0"
-              style={{ background: 'var(--card)', border: '1px solid var(--border-default)' }}
+              style={{
+                background: 'var(--card)',
+                border: '1px solid var(--border-default)',
+                scrollMarginTop: '96px',
+              }}
             >
               <RoadmapWithApprovalHorizon
                 projectId={projectId}
@@ -902,6 +938,83 @@ function SectionHeader({
 }
 
 /* -------------------------------------------------------------------------- */
+/* Summary progress (hero card)                                               */
+/* -------------------------------------------------------------------------- */
+
+function SummaryProgress({
+  breakdown,
+  tone,
+  monoFont,
+}: {
+  breakdown: { done: number; blocked: number; planning: number; inProgress: number; total: number };
+  tone: 'accent' | 'shipped' | 'current';
+  monoFont: string;
+}) {
+  const { done, blocked, planning, inProgress, total } = breakdown;
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  const fill =
+    tone === 'shipped' ? '#34d399' : tone === 'current' ? '#fbbf24' : 'var(--accent)';
+  const blockedPct = total > 0 ? Math.round((blocked / total) * 100) : 0;
+
+  return (
+    <div className="mb-2">
+      {/* Progress bar with optional blocked-risk segment on the right edge */}
+      <div
+        className="relative w-full rounded-full overflow-hidden"
+        style={{ height: 6, background: 'var(--surface-2, rgba(255,255,255,0.05))' }}
+        role="progressbar"
+        aria-valuenow={pct}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label={done + ' of ' + total + ' done'}
+      >
+        <div
+          className="h-full transition-all"
+          style={{
+            width: pct + '%',
+            background: fill,
+            minWidth: pct > 0 ? 2 : 0,
+          }}
+        />
+        {blocked > 0 && (
+          <div
+            className="absolute top-0 right-0 h-full"
+            style={{
+              width: Math.max(blockedPct, 2) + '%',
+              background: 'var(--danger, #ff5c5c)',
+              opacity: 0.85,
+            }}
+            title={blocked + ' blocked'}
+          />
+        )}
+      </div>
+
+      {/* Counts row */}
+      <div
+        className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] tabular-nums text-[var(--text-secondary)]"
+        style={{ fontFamily: monoFont }}
+      >
+        <span className="text-[var(--text-primary)] font-medium">{pct}%</span>
+        <span aria-hidden="true" style={{ color: 'var(--text-muted)' }}>
+          ·
+        </span>
+        <span><span style={{ color: '#34d399' }}>{done}</span> done</span>
+        {blocked > 0 && (
+          <span><span style={{ color: '#ff5c5c' }}>{blocked}</span> blocked</span>
+        )}
+        {inProgress > 0 && (
+          <span><span style={{ color: 'var(--text-primary)' }}>{inProgress}</span> in progress</span>
+        )}
+        {planning > 0 && (
+          <span><span style={{ color: '#fbbf24' }}>{planning}</span> planning</span>
+        )}
+        <span style={{ color: 'var(--text-muted)' }}>/ {total} total</span>
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /* Current version hero                                                       */
 /* -------------------------------------------------------------------------- */
 
@@ -925,7 +1038,7 @@ function CurrentVersionHero({
   monoFont: string;
 }) {
   const items: any[] = version.items || [];
-  const stats = doneWhenStats(items, taskById);
+  const breakdown = doneWhenBreakdown(items, taskById);
   const kind = classifyVersion(version);
   const c = statusColor(kind);
   const showBeginWork =
@@ -981,86 +1094,36 @@ function CurrentVersionHero({
               )}
             </div>
 
-            {/* Progress + label */}
-            <div className="flex items-center gap-3 mb-4">
-              <div className="flex-1">
-                <ProgressBar
-                  done={stats.done}
-                  total={stats.total}
-                  tone={kind === 'shipped' ? 'shipped' : kind === 'current' ? 'current' : 'accent'}
-                />
-              </div>
-              <span
-                className="text-[13px] tabular-nums text-[var(--text-secondary)] whitespace-nowrap"
+            {/* Summary: counts + progress bar (per-ticket detail lives in roadmap section below) */}
+            <SummaryProgress
+              breakdown={breakdown}
+              tone={kind === 'shipped' ? 'shipped' : kind === 'current' ? 'current' : 'accent'}
+              monoFont={monoFont}
+            />
+
+            <div className="mt-2 mb-4">
+              <a
+                href="#roadmap-section"
+                className="text-[12px] text-[var(--accent)] hover:underline"
                 style={{ fontFamily: monoFont }}
+                onClick={(e) => {
+                  // Prefer smooth scroll; fall back to default jump if not supported.
+                  const el = typeof document !== 'undefined'
+                    ? document.getElementById('roadmap-section')
+                    : null;
+                  if (el && typeof el.scrollIntoView === 'function') {
+                    e.preventDefault();
+                    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    // Update hash without jump for shareable URL.
+                    if (typeof history !== 'undefined' && history.replaceState) {
+                      history.replaceState(null, '', '#roadmap-section');
+                    }
+                  }
+                }}
               >
-                {stats.done}/{stats.total} doneWhen
-              </span>
+                View in roadmap →
+              </a>
             </div>
-
-            {/* doneWhen items */}
-            {items.length === 0 ? (
-              <p className="text-[13px] italic text-[var(--text-muted)] m-0">
-                No doneWhen items defined.
-              </p>
-            ) : (
-              <ul className="grid gap-1">
-                {items.map((it, idx) => {
-                  const t = it.taskId ? taskById.get(it.taskId) : null;
-                  const title = t?.title ?? it.title ?? '(untitled)';
-                  const taskStatus = t?.status as string | undefined;
-                  const done = taskStatus === 'done' || it.done === true;
-                  const isPlanning = !it.taskId && !done;
-                  const blocked = taskStatus === 'blocked';
-                  let label = '';
-                  if (done) label = '';
-                  else if (taskStatus) label = taskStatus;
-                  else if (isPlanning) label = 'planning';
-
-                  return (
-                    <li
-                      key={it.id ?? version.version + '-' + idx}
-                      className="grid grid-cols-[16px_1fr_auto] items-center gap-3 py-1.5 px-2 -mx-2 rounded hover:bg-[var(--card-highlight)] transition-colors"
-                    >
-                      {done ? (
-                        <CheckCircle2 size={14} style={{ color: '#34d399' }} />
-                      ) : blocked ? (
-                        <AlertTriangle size={14} style={{ color: '#ff5c5c' }} />
-                      ) : (
-                        <Circle size={14} style={{ color: 'var(--text-muted)' }} />
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => onPickTask(it.taskId)}
-                        disabled={!it.taskId}
-                        className="text-left text-[14px] leading-snug bg-transparent border-0 p-0 m-0 cursor-pointer disabled:cursor-default truncate"
-                        style={{
-                          color: done ? 'var(--text-muted)' : 'var(--text-primary)',
-                          textDecoration: done ? 'line-through' : 'none',
-                        }}
-                      >
-                        {title}
-                      </button>
-                      {label && (
-                        <span
-                          className="text-[10px] uppercase tracking-[0.14em] whitespace-nowrap"
-                          style={{
-                            color: isPlanning
-                              ? '#fbbf24'
-                              : blocked
-                              ? '#ff5c5c'
-                              : 'var(--text-muted)',
-                            fontFamily: monoFont,
-                          }}
-                        >
-                          {label}
-                        </span>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
 
             {/* Begin Work CTA */}
             {showBeginWork && (
