@@ -489,10 +489,17 @@ export function RoadmapWithApprovalHorizon({
 
   const startEdit = (v: RoadmapVersion) => {
     setEditForm({
-      version: v.version,
-      title: v.title,
+      version: v.version || '',
+      title: v.title || '',
       status: v.status,
-      items: v.items,
+      // Defensive copy: ensure every item has string title + boolean done
+      // so the edit modal's `<input value={item.title}>` and trim()/filter
+      // calls never crash on a sparse legacy item.
+      items: (v.items || []).map((it: any) => ({
+        ...it,
+        title: typeof it?.title === 'string' ? it.title : '',
+        done: !!it?.done,
+      })),
       version_type: v.version_type || 'outcome',
     });
     setEditingVersionId(v.id);
@@ -763,16 +770,16 @@ export function RoadmapWithApprovalHorizon({
                 <div className="flex gap-2 pt-3 border-t border-[var(--border-color)]">
                   <button
                     onClick={() => {
-                      const cleanVersion = editForm.version.replace(/^v/i, '').trim();
+                      const cleanVersion = (editForm.version || '').replace(/^v/i, '').trim();
                       saveVersion(
                         cleanVersion,
                         editForm.title,
                         editForm.status,
-                        editForm.items.filter((i) => i.title.trim()),
+                        editForm.items.filter((i) => typeof i.title === 'string' && i.title.trim()),
                         editForm.version_type
                       )
                     }}
-                    disabled={!editForm.title.trim() || loading}
+                    disabled={!(editForm.title || '').trim() || loading}
                     className="flex-1 px-4 py-2 bg-[var(--accent-primary)] text-white rounded-lg font-medium hover:opacity-90 transition-opacity disabled:opacity-50 flex items-center justify-center gap-2"
                   >
                     <Check className="w-4 h-4" />
@@ -878,10 +885,10 @@ export function RoadmapWithApprovalHorizon({
           <div className="flex gap-2">
             <button
               onClick={() => {
-                const cleanVersion = newForm.version.replace(/^v/i, '').trim();
+                const cleanVersion = (newForm.version || '').replace(/^v/i, '').trim();
                 saveVersion(cleanVersion, newForm.title, newForm.status, [])
               }}
-              disabled={!newForm.version.trim() || !newForm.title.trim() || loading}
+              disabled={!(newForm.version || '').trim() || !(newForm.title || '').trim() || loading}
               className="flex-1 px-4 py-2 bg-[var(--accent-primary)] text-white rounded-lg font-medium hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {loading ? 'Creating...' : 'Create'}
@@ -972,9 +979,13 @@ export function RoadmapWithApprovalHorizon({
               <div className="space-y-1">
                 {(currentVersionObj.items || []).map((item, idx) => {
                   // Find matching task for this roadmap item
-                  const matchedTask = versionTasks.find((t: any) => 
-                    (item.taskId && t.id === item.taskId) || t.title?.toLowerCase().trim() === item.title?.toLowerCase().trim()
-                  );
+                  const matchedTask = versionTasks.find((t: any) => {
+                    if (item.taskId && t.id === item.taskId) return true;
+                    // Fall back to fuzzy title match — guard both sides; either may be undefined.
+                    const tTitle = typeof t.title === 'string' ? t.title.toLowerCase().trim() : '';
+                    const itTitle = typeof item.title === 'string' ? item.title.toLowerCase().trim() : '';
+                    return !!tTitle && tTitle === itTitle;
+                  });
                   const taskStatus = matchedTask?.status;
                   const statusIndicator = taskStatus === 'blocked' ? '🔴'
                     : taskStatus === 'review' ? '🟡'
