@@ -496,3 +496,104 @@ describe('#1189 getEligibleBacklogFifo — single FIFO queue', () => {
     expect(out.map((t) => t.id)).toEqual(['t-without', 't-with']);
   });
 });
+
+// ---- #1212: explicit-list approval (no retroactive prior-version approval) ----
+
+describe('#1212 isTaskDispatchEligible — explicit approvedVersions[] set membership', () => {
+  function mkProjectExplicit(approvedVersions: string[], versions: any[]) {
+    return {
+      id: 'p1',
+      state: 'active',
+      components: [
+        {
+          id: 'cmp-main',
+          name: 'Main',
+          // No approvedThrough — explicit list is canonical.
+          approvedVersions,
+          versions,
+        },
+      ],
+    };
+  }
+
+  it('approvedVersions=[0.9.16] makes v0.9.16 dispatchable but NOT v0.9.9', () => {
+    const proj = mkProjectExplicit(
+      ['0.9.16'],
+      [
+        { version: '0.9.9', status: 'shipped' },
+        { version: '0.9.10', status: 'shipped' },
+        { version: '0.9.11', status: 'shipped' },
+        { version: '0.9.12', status: 'shipped' },
+        { version: '0.9.13', status: 'planned' },
+        { version: '0.9.14', status: 'planned' },
+        { version: '0.9.15', status: 'planned' },
+        { version: '0.9.16', status: 'planned' },
+      ],
+    );
+    const store = { projects: [proj], tasks: [] };
+    expect(isTaskDispatchEligible(store, mkTask({ version: '0.9.16' }))).toBe(true);
+    // v0.9.9 is not in approvedVersions[] — must NOT be dispatchable even
+    // though it's "before" the max approved version.
+    expect(isTaskDispatchEligible(store, mkTask({ version: '0.9.9' }))).toBe(false);
+    expect(isTaskDispatchEligible(store, mkTask({ version: '0.9.13' }))).toBe(false);
+    expect(isTaskDispatchEligible(store, mkTask({ version: '0.9.15' }))).toBe(false);
+  });
+
+  it('approvedVersions=[0.9.16, 0.9.14] makes both dispatchable but NOT v0.9.13 or v0.9.15', () => {
+    // 0.9.14 shipped so it doesn't block 0.9.16 via Rule 5 — this test is
+    // about approval set membership, not prior-version completion.
+    const proj = mkProjectExplicit(
+      ['0.9.16', '0.9.14'],
+      [
+        { version: '0.9.12', status: 'shipped' },
+        { version: '0.9.13', status: 'planned' },
+        { version: '0.9.14', status: 'shipped' },
+        { version: '0.9.15', status: 'planned' },
+        { version: '0.9.16', status: 'planned' },
+      ],
+    );
+    const store = { projects: [proj], tasks: [] };
+    expect(isTaskDispatchEligible(store, mkTask({ version: '0.9.14' }))).toBe(true);
+    expect(isTaskDispatchEligible(store, mkTask({ version: '0.9.16' }))).toBe(true);
+    expect(isTaskDispatchEligible(store, mkTask({ version: '0.9.13' }))).toBe(false);
+    expect(isTaskDispatchEligible(store, mkTask({ version: '0.9.15' }))).toBe(false);
+  });
+
+  it('legacy approvedThrough (no approvedVersions[]) preserves contiguous-prefix behavior', () => {
+    // Default mkProject uses approvedThrough='0.2.0' with no approvedVersions[].
+    const store = { projects: [mkProject()], tasks: [] };
+    expect(isTaskDispatchEligible(store, mkTask({ version: '0.1.0' }))).toBe(true);
+    expect(isTaskDispatchEligible(store, mkTask({ version: '0.2.0' }))).toBe(true);
+    expect(isTaskDispatchEligible(store, mkTask({ version: '0.3.0' }))).toBe(false);
+  });
+
+  it('Rule 5 with explicit list: skipping v0.9.13 (not approved) does NOT block v0.9.16 when v0.9.12 is shipped', () => {
+    const proj = mkProjectExplicit(
+      ['0.9.16'],
+      [
+        { version: '0.9.12', status: 'shipped' },
+        { version: '0.9.13', status: 'planned' }, // unapproved + unshipped, must NOT block
+        { version: '0.9.14', status: 'planned' },
+        { version: '0.9.15', status: 'planned' },
+        { version: '0.9.16', status: 'planned' },
+      ],
+    );
+    const store = { projects: [proj], tasks: [] };
+    expect(isTaskDispatchEligible(store, mkTask({ version: '0.9.16' }))).toBe(true);
+  });
+
+  it('Rule 5 with explicit list: a prior APPROVED version that is unshipped DOES block', () => {
+    const proj = mkProjectExplicit(
+      ['0.9.14', '0.9.16'],
+      [
+        { version: '0.9.12', status: 'shipped' },
+        { version: '0.9.14', status: 'planned' }, // approved + unshipped → blocks 0.9.16
+        { version: '0.9.16', status: 'planned' },
+      ],
+    );
+    const store = { projects: [proj], tasks: [] };
+    expect(isTaskDispatchEligible(store, mkTask({ version: '0.9.16' }))).toBe(false);
+    // 0.9.14 itself is dispatchable (its only approved prior, 0.9.12, is shipped).
+    expect(isTaskDispatchEligible(store, mkTask({ version: '0.9.14' }))).toBe(true);
+  });
+});

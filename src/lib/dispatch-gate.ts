@@ -13,6 +13,7 @@
  */
 import {
   getComponentApprovedThrough,
+  getComponentApprovedVersions,
   getComponentVersions,
   getEffectiveComponents,
   type ComponentVersionLike,
@@ -138,6 +139,23 @@ export function priorVersionsComplete(
   const versions = getComponentVersions(proj, componentId);
   if (versions.length === 0) return true;
   const sorted = sortVersionsCanonical(versions);
+
+  // #1212: when explicit approvedVersions[] is present, prerequisite check
+  // considers only prior versions that are ALSO in the approved set. A
+  // deliberately skipped (unapproved) prior version does NOT block a later
+  // approved one. Legacy approvedThrough mode keeps the all-prior walk.
+  const approvedVersions = getComponentApprovedVersions(proj, componentId);
+  if (approvedVersions.length > 0) {
+    const approvedSet = new Set(approvedVersions);
+    for (const v of sorted) {
+      if (v.version === targetVersion) break;
+      if (!approvedSet.has(v.version)) continue;
+      const status = v.status;
+      if (status !== 'shipped' && status !== 'done') return false;
+    }
+    return true;
+  }
+
   const idx = sorted.findIndex((v) => v.version === targetVersion);
   if (idx <= 0) return true; // first version OR not found
   for (let i = 0; i < idx; i++) {
@@ -169,9 +187,18 @@ export function isTaskDispatchEligible(store: StoreLike, task: TaskLike): boolea
   if (projState !== 'active' && projState !== 'started') return false;
 
   // Rule 3: task.version must be within the component's approval banner.
-  const approvedThrough = getComponentApprovedThrough(proj, task.sectionId);
-  if (!approvedThrough) return false;
-  if (!isVersionLessOrEqual(task.version, approvedThrough)) return false;
+  // #1212: explicit-list approval. When approvedVersions[] is present (the
+  // modern shape, post-#1186), enforce set membership so ticking one version
+  // doesn't retroactively approve all prior versions. Fall back to the
+  // legacy approvedThrough prefix check only when no explicit list exists.
+  const approvedVersions = getComponentApprovedVersions(proj, task.sectionId);
+  if (approvedVersions.length > 0) {
+    if (!approvedVersions.includes(task.version)) return false;
+  } else {
+    const approvedThrough = getComponentApprovedThrough(proj, task.sectionId);
+    if (!approvedThrough) return false;
+    if (!isVersionLessOrEqual(task.version, approvedThrough)) return false;
+  }
 
   // Rule 4: component-version waitsFor must be satisfied.
   if (isTaskGatedByWaitsFor(store, task)) return false;
@@ -320,8 +347,15 @@ export function isTaskWaiting(store: StoreLike, task: TaskLike): boolean {
   const proj = (store.projects || []).find((p) => p.id === task.projectId);
   if (!proj) return false;
 
-  const approvedThrough = getComponentApprovedThrough(proj, task.sectionId);
-  const withinHorizon = !!approvedThrough && isVersionLessOrEqual(task.version, approvedThrough);
+  const approvedVersions = getComponentApprovedVersions(proj, task.sectionId);
+  let withinHorizon: boolean;
+  if (approvedVersions.length > 0) {
+    // #1212: explicit-list mode — approval is set membership, not prefix.
+    withinHorizon = approvedVersions.includes(task.version);
+  } else {
+    const approvedThrough = getComponentApprovedThrough(proj, task.sectionId);
+    withinHorizon = !!approvedThrough && isVersionLessOrEqual(task.version, approvedThrough);
+  }
   if (!withinHorizon) return false;
 
   // Waiting on a per-version waitsFor edge (existing).
