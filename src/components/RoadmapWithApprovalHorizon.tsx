@@ -34,6 +34,71 @@ interface RoadmapItem {
   taskId?: string | null;
 }
 
+/**
+ * #1216: tiny inline owner picker reused per version row. Click the chip,
+ * pick a teammate, save fires. "(inherited)" hint when value is empty (so
+ * the dispatch fallback resolves to component.owner).
+ *
+ * Kept module-local: reuses the same teammate-select pattern as
+ * RoadmapTaskCreator without pulling in the dashboard's richer chip.
+ */
+function OwnerSelectInline({
+  value,
+  fallback,
+  teammates,
+  onSave,
+}: {
+  value: string;
+  fallback: string;
+  teammates: string[];
+  onSave: (next: string) => void | Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const inherited = !value || value === fallback;
+  const display = value && value.length > 0 ? value : (fallback || '—');
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); setEditing(true); }}
+        className="text-xs px-1.5 py-0.5 rounded text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] transition-colors"
+        title={inherited ? 'Owner inherited from component — click to override' : 'Owner override — click to change'}
+        style={inherited ? { fontStyle: 'italic', opacity: 0.75 } : undefined}
+      >
+        ○ {display}
+        {inherited && <span className="ml-1 text-[10px] uppercase tracking-wider">(inherited)</span>}
+      </button>
+    );
+  }
+  // Include current value (in case it's stale-out-of-roster) so the picker
+  // never silently drops it.
+  const options = Array.from(new Set([
+    ...(value ? [value] : []),
+    ...teammates,
+  ]));
+  return (
+    <select
+      autoFocus
+      defaultValue={value || ''}
+      onClick={(e) => e.stopPropagation()}
+      onChange={async (e) => {
+        const next = e.target.value;
+        setEditing(false);
+        if (next !== (value || '')) {
+          await onSave(next);
+        }
+      }}
+      onBlur={() => setEditing(false)}
+      className="text-xs px-1.5 py-0.5 rounded bg-[var(--bg-secondary)] text-[var(--text-primary)] border border-[var(--border-color)] outline-none"
+    >
+      <option value="">— inherit —</option>
+      {options.map((t) => (
+        <option key={t} value={t}>{t}</option>
+      ))}
+    </select>
+  );
+}
+
 interface RoadmapVersion {
   id: string;
   version: string;
@@ -44,6 +109,10 @@ interface RoadmapVersion {
   shipped_at?: number | null;
   sort_order?: number;
   version_type?: 'outcome' | 'foundation' | 'chore';
+  // #1216: per-version owner override. When set, this overrides the
+  // component-level owner for dispatch + UI display. When unset/empty, owner
+  // falls back to component.owner.
+  owner?: string | null;
 }
 
 interface Project {
@@ -89,13 +158,21 @@ interface RoadmapWithApprovalHorizonProps {
    * render. Required when `componentId` is set; ignored otherwise.
    *
    * #1188: now also carries `approvedVersions[]` (explicit list).
+   * #1216: also reads `owner` so the per-version owner editor can render the
+   * "(inherited)" hint when version.owner === component.owner.
    */
   component?: {
     id: string;
     approvedThrough?: string | null;
     approvedVersions?: string[];
+    owner?: string;
     [key: string]: any;
   };
+  /**
+   * #1216: roster of teammate names for the per-version owner picker.
+   * Optional: when omitted, the picker is hidden (e.g. legacy callers).
+   */
+  teammates?: string[];
 }
 
 export function RoadmapWithApprovalHorizon({
@@ -108,6 +185,7 @@ export function RoadmapWithApprovalHorizon({
   onTaskSelect,
   componentId,
   component,
+  teammates,
 }: RoadmapWithApprovalHorizonProps) {
   // #1112 PR 5: filtering / synthetic-card code removed — the parent page now
   // passes per-component versions directly. This component renders whatever
@@ -144,7 +222,35 @@ export function RoadmapWithApprovalHorizon({
   const [optimisticApprovedVersions, setOptimisticApprovedVersions] =
     useState<string[] | undefined>(undefined);
 
-  // #1112 PR 6 follow-up: source of truth depends on scope. When this
+  // #1216: optimistic per-version owner overrides. Keyed by version string so
+  // multiple in-flight edits don't clobber each other. Cleared on each
+  // versions-prop change (new fetch lands).
+  const [optimisticVersionOwners, setOptimisticVersionOwners] =
+    useState<Record<string, string>>({});
+  useEffect(() => {
+    setOptimisticVersionOwners({});
+  }, [versions]);
+
+  const saveVersionOwner = async (v: RoadmapVersion, nextOwner: string) => {
+    const prev = optimisticVersionOwners;
+    setOptimisticVersionOwners({ ...prev, [v.version]: nextOwner });
+    try {
+      // Pass the existing fields so the API doesn't drop them. The route's
+      // owner-COALESCE preserves owner when omitted, but title/status/items
+      // always overwrite — so we must echo them back unchanged.
+      await saveVersion(
+        v.version,
+        v.title,
+        v.status,
+        v.items || [],
+        v.version_type || 'outcome',
+        nextOwner,
+      );
+    } catch (e) {
+      console.error('Failed to update version owner:', e);
+      setOptimisticVersionOwners(prev);
+    }
+  };  // #1112 PR 6 follow-up: source of truth depends on scope. When this
   // instance is bound to a component, read its own `approvedThrough`. Else
   // fall back to legacy project-level (used for the no-components fallback
   // render in page.tsx).
@@ -218,7 +324,7 @@ export function RoadmapWithApprovalHorizon({
   const currentIdx = sortedVersions.findIndex(v => v.version === currentVersion);
   const currentVersionObj = currentIdx !== -1 ? sortedVersions[currentIdx] : null;
 
-  const saveVersion = async (version: string, title: string, status: string, items: RoadmapItem[], versionType?: string) => {
+  const saveVersion = async (version: string, title: string, status: string, items: RoadmapItem[], versionType?: string, owner?: string | null) => {
     setLoading(true);
     try {
       const response = await fetch(`/api/roadmap/${projectId}`, {
@@ -231,6 +337,9 @@ export function RoadmapWithApprovalHorizon({
           status,
           items,
           versionType: versionType || 'outcome',
+          // #1216: only include owner when caller passed it. The API
+          // preserves existing owner when the field is absent (COALESCE).
+          ...(owner !== undefined ? { owner } : {}),
         }),
       });
 
@@ -499,6 +608,26 @@ export function RoadmapWithApprovalHorizon({
             <span title={`Version type: ${versionType}`}>{typeBadge}</span>
             <span className="font-medium">{version.version}</span>
             <span className="text-sm text-[var(--text-secondary)]">— {version.title}</span>
+            {/* #1216: per-version owner picker. Renders only when teammates
+             * are passed in (parent supplies roster from settings). Inline
+             * click-to-edit so it doesn't fight the row's expand/collapse. */}
+            {!isEditing && teammates && teammates.length > 0 && (
+              <span
+                className="ml-auto mr-2 flex-shrink-0"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <OwnerSelectInline
+                  value={
+                    optimisticVersionOwners[version.version] !== undefined
+                      ? optimisticVersionOwners[version.version]
+                      : (version.owner || '')
+                  }
+                  fallback={component?.owner || ''}
+                  teammates={teammates}
+                  onSave={(next) => saveVersionOwner(version, next)}
+                />
+              </span>
+            )}
           </div>
 
           {!isEditing && (

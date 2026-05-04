@@ -351,6 +351,15 @@ function handleFileBasedRoadmap(
         return it;
       });
 
+      // #1216: mirror Postgres COALESCE-on-update semantics for owner so the
+      // fs fallback path also preserves owner across partial updates.
+      const ownerProvidedFs = Object.prototype.hasOwnProperty.call(payload, 'owner');
+      const ownerValueFs: string | null = ownerProvidedFs
+        ? (typeof payload.owner === 'string' && payload.owner.trim().length > 0 ? payload.owner : null)
+        : null;
+      const existingOwner = idx >= 0 ? (data.versions[idx]?.owner ?? null) : null;
+      const resolvedOwner = ownerProvidedFs ? ownerValueFs : existingOwner;
+
       const newVersion = {
         id: `rv-${projectId}-${version.replace(/\./g, '-')}`,
         version,
@@ -359,6 +368,7 @@ function handleFileBasedRoadmap(
         items: itemsWithIds,
         sort_order: versionSortKey(version),
         version_type: versionType || 'outcome',
+        owner: resolvedOwner,
       };
 
       if (idx >= 0) {

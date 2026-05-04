@@ -220,6 +220,84 @@ function OwnerChip({ name }: { name?: string }) {
   );
 }
 
+/**
+ * #1216: click-to-edit owner select. Shared by component-owner (right rail of
+ * CurrentVersionHero) and per-version owner (roadmap row). Renders the current
+ * value as a chip; clicking swaps to a teammate <select>. Save fires the
+ * provided onSave callback (which is responsible for optimistic update +
+ * persistence). Esc / blur outside cancels.
+ *
+ * Mirrors the same teammate-source pattern as RoadmapTaskCreator: roster comes
+ * from settings.teammates[].name, passed in via the `teammates` prop.
+ */
+function OwnerSelect({
+  value,
+  teammates,
+  onSave,
+  placeholder,
+  inheritedHint,
+  monoFont,
+}: {
+  value?: string;
+  teammates: string[];
+  onSave: (next: string) => void | Promise<void>;
+  placeholder?: string;
+  inheritedHint?: boolean;
+  monoFont?: string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const display = value && value.trim().length > 0 ? value : (placeholder || '—');
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); setEditing(true); }}
+        className="inline-flex items-center gap-1.5 text-[13px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+        title="Click to change owner"
+        style={inheritedHint ? { fontStyle: 'italic', opacity: 0.85 } : undefined}
+      >
+        <span className="truncate">{display}</span>
+        {inheritedHint && (
+          <span
+            className="text-[10px] uppercase tracking-[0.12em] text-[var(--text-muted)]"
+            style={monoFont ? { fontFamily: monoFont } : undefined}
+          >
+            (inherited)
+          </span>
+        )}
+      </button>
+    );
+  }
+  // Build options: include current value (even if not in roster) so we don't
+  // silently drop a stale assignment when the picker opens.
+  const options = Array.from(new Set([
+    ...(value ? [value] : []),
+    ...teammates,
+  ]));
+  return (
+    <select
+      autoFocus
+      defaultValue={value || ''}
+      onClick={(e) => e.stopPropagation()}
+      onChange={async (e) => {
+        const next = e.target.value;
+        setEditing(false);
+        if (next !== (value || '')) {
+          await onSave(next);
+        }
+      }}
+      onBlur={() => setEditing(false)}
+      className="px-2 py-1 rounded text-[12px] bg-[var(--card-highlight)] text-[var(--text-primary)] outline-none"
+      style={{ border: '1px solid var(--border-default)' }}
+    >
+      <option value="">— unassigned —</option>
+      {options.map((t) => (
+        <option key={t} value={t}>{t}</option>
+      ))}
+    </select>
+  );
+}
+
 /* -------------------------------------------------------------------------- */
 /* Inner page                                                                 */
 /* -------------------------------------------------------------------------- */
@@ -241,6 +319,45 @@ function ProjectDashboardPageInner() {
   const components = useMemo<ComponentLike[]>(
     () => (project ? getEffectiveComponents(project).filter((c) => !(c as any).archived) : []),
     [project]
+  );
+
+  // #1216: roster of teammate names for owner pickers (component owner +
+  // per-version owner in the roadmap below). Sourced from settings.teammates;
+  // a casing-fix lands earlier today so trust the canonical names.
+  const teammates: string[] = useMemo(
+    () =>
+      (storeData?.settings?.teammates || [])
+        .map((t: any) => (typeof t === 'string' ? t : t?.name))
+        .filter((n: any): n is string => typeof n === 'string' && n.length > 0),
+    [storeData],
+  );
+
+  // #1216: optimistic local override for component.owner. Cleared once the
+  // upstream prop catches up (next store WS push).
+  const [optimisticComponentOwner, setOptimisticComponentOwner] =
+    useState<{ componentId: string; owner: string } | null>(null);
+  const saveComponentOwner = useCallback(
+    async (componentId: string, nextOwner: string) => {
+      const prev = optimisticComponentOwner;
+      setOptimisticComponentOwner({ componentId, owner: nextOwner });
+      try {
+        const resp = await fetch('/api/store', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'updateComponent',
+            projectId,
+            componentId,
+            updates: { owner: nextOwner },
+          }),
+        });
+        if (!resp.ok) throw new Error('updateComponent failed');
+      } catch (e) {
+        console.error('Failed to update component owner:', e);
+        setOptimisticComponentOwner(prev);
+      }
+    },
+    [projectId, optimisticComponentOwner],
   );
 
   const allTasks: any[] = (storeData?.tasks || []) as any[];
@@ -673,13 +790,19 @@ function ProjectDashboardPageInner() {
         {activeComp && currentVersion ? (
           <CurrentVersionHero
             project={project}
-            component={activeComp}
+            component={
+              optimisticComponentOwner && optimisticComponentOwner.componentId === activeComp.id
+                ? { ...(activeComp as any), owner: optimisticComponentOwner.owner }
+                : activeComp
+            }
             version={currentVersion}
             taskById={taskById}
             beginTarget={beginTarget}
             onBeginWork={onBeginWork}
             onPickTask={onPickTask}
             monoFont={monoFont}
+            teammates={teammates}
+            onSaveComponentOwner={(next) => saveComponentOwner(activeComp.id, next)}
           />
         ) : (
           <div
@@ -834,7 +957,12 @@ function ProjectDashboardPageInner() {
                   setShowDetailPanel(true);
                 }}
                 componentId={activeComp.id}
-                component={activeComp as any}
+                component={
+                  optimisticComponentOwner && optimisticComponentOwner.componentId === activeComp.id
+                    ? { ...(activeComp as any), owner: optimisticComponentOwner.owner }
+                    : (activeComp as any)
+                }
+                teammates={teammates}
               />
             </div>
             {/* Stepper context line — at-a-glance prev/current/next. */}
@@ -1027,6 +1155,8 @@ function CurrentVersionHero({
   onBeginWork,
   onPickTask,
   monoFont,
+  teammates,
+  onSaveComponentOwner,
 }: {
   project: any;
   component: ComponentLike;
@@ -1036,6 +1166,8 @@ function CurrentVersionHero({
   onBeginWork: () => void;
   onPickTask: (taskId?: string) => void;
   monoFont: string;
+  teammates: string[];
+  onSaveComponentOwner: (next: string) => void | Promise<void>;
 }) {
   const items: any[] = version.items || [];
   const breakdown = doneWhenBreakdown(items, taskById);
@@ -1154,7 +1286,28 @@ function CurrentVersionHero({
               borderLeft: 'none',
             }}
           >
-            <RailItem mono={monoFont} label="Owner" value={(version as any).owner || (component as any).owner || project?.owner || '—'} />
+            <RailItem
+              mono={monoFont}
+              label="Component owner"
+              value={
+                <OwnerSelect
+                  value={(component as any).owner}
+                  teammates={teammates}
+                  onSave={onSaveComponentOwner}
+                  placeholder="— set owner —"
+                  monoFont={monoFont}
+                />
+              }
+            />
+            <RailItem
+              mono={monoFont}
+              label="Version owner"
+              value={
+                (version as any).owner
+                  ? (version as any).owner
+                  : ((component as any).owner || project?.owner || '—')
+              }
+            />
             {startedAt && (
               <RailItem
                 mono={monoFont}
