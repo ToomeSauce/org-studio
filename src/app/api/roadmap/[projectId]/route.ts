@@ -240,6 +240,7 @@ export async function POST(
             }
           }
 
+          await notifyRoadmapChange(client, projectId, action, version);
           return NextResponse.json({
             action: 'upserted',
             version,
@@ -253,6 +254,7 @@ export async function POST(
             [projectId, version, 'default-workspace']
           );
 
+          await notifyRoadmapChange(client, projectId, action, version);
           return NextResponse.json({ action: 'deleted', version });
         } else if (action === 'reorder') {
           // Update sort_order for each version in the order array
@@ -264,6 +266,7 @@ export async function POST(
             );
           }
 
+          await notifyRoadmapChange(client, projectId, action);
           return NextResponse.json({ action: 'reordered', order });
         }
 
@@ -285,6 +288,38 @@ export async function POST(
 function calculateProgress(items: RoadmapItem[]): { done: number; total: number } {
   const done = items.filter((i) => i.done).length;
   return { done, total: items.length };
+}
+
+/**
+ * Best-effort NOTIFY so subscribed clients (server.mjs LISTEN handler in
+ * particular) refresh their cached store after a roadmap mutation. Without
+ * this, `component.versions[]` (hydrated from rv-table on store read in
+ * #1125) stays stale on the dashboard until the next unrelated store write
+ * triggers a NOTIFY. Symptom: edit/save a version title, refresh, see old
+ * title from the cached store — even though Postgres has the new value.
+ */
+async function notifyRoadmapChange(
+  client: any,
+  projectId: string,
+  action: string,
+  version?: string,
+): Promise<void> {
+  try {
+    const payload = JSON.stringify({
+      type: 'roadmap_update',
+      action,
+      projectId,
+      ...(version ? { version } : {}),
+      timestamp: Date.now(),
+      source: 'roadmap-route',
+      workspace_id: 'default-workspace',
+    });
+    await client.query(
+      `NOTIFY org_studio_change, '${payload.replace(/'/g, "''")}'`,
+    );
+  } catch {
+    // best-effort — don't fail the user-facing write on a NOTIFY hiccup
+  }
 }
 
 function readRoadmapsFromFile(projectId: string): RoadmapVersion[] {
