@@ -18,6 +18,7 @@ import {
   type WorkspaceContext,
 } from '@/lib/workspace-auth';
 import { validateUpdateTaskPayload } from '@/lib/update-task-validation';
+import { canonicalizeTeammate } from '@/lib/canonicalize-teammate';
 
 const SCHEDULER_URL = 'http://localhost:4501/api/scheduler';
 
@@ -621,6 +622,10 @@ export async function POST(req: NextRequest) {
           ticketNumber,
           createdAt: now,
           ...payload.task,
+          // #1218: canonicalize assignee against the teammates roster.
+          // Runs after the #1126 default-owner snapshot so the canonical
+          // form is what gets persisted (and what fans out to triggers).
+          assignee: canonicalizeTeammate(payload.task?.assignee, store.settings?.teammates || []),
           workspace_id: payload.task?.workspace_id || workspace.id,
           statusHistory: [{ status: initialStatus, timestamp: now }],
           initiatedBy: payload.task?.initiatedBy || 'unknown',
@@ -725,6 +730,11 @@ export async function POST(req: NextRequest) {
           }
 
           const updates = { ...payload.updates };
+
+          // #1218: canonicalize assignee against the teammates roster on write.
+          if (updates.assignee !== undefined) {
+            updates.assignee = canonicalizeTeammate(updates.assignee, store.settings?.teammates || []);
+          }
 
           // #862: reject status 'qa' — QA is a component, not a column.
           if (updates.status !== undefined) {
@@ -1555,11 +1565,19 @@ export async function POST(req: NextRequest) {
           store.settings?.teammates || [],
         );
 
+        // #1218: canonicalize the final author against the teammates roster
+        // (layered AFTER #1217 resolveCommentAuthor so the resolver still
+        // owns the auth-method-aware rewrite logic).
+        const canonicalAuthor = canonicalizeTeammate(
+          resolvedAuthor,
+          store.settings?.teammates || [],
+        );
+
         const comment = {
           id: commentId,
           createdAt: Date.now(),
           ...payload.comment,
-          author: resolvedAuthor,
+          author: canonicalAuthor,
           model: payload.comment?.model || model, // explicit > resolved
         };
         // PERF: Use targeted provider.addComment() instead of full store write
