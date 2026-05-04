@@ -130,6 +130,78 @@ function StaleLabel({ minutes }: { minutes: number }) {
   return <span className={clsx('font-medium tabular-nums', color)}>{minutes}m</span>;
 }
 
+function RoadmapReconcileStatus() {
+  const [data, setData] = useState<any>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const load = () =>
+      fetch('/api/health/roadmap')
+        .then((r) => r.json())
+        .then((d) => { if (!cancelled) setData(d); })
+        .catch(() => {});
+    load();
+    const iv = setInterval(load, 30_000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, []);
+
+  if (!data) {
+    return <p className="text-sm text-[var(--text-muted)]">Checking…</p>;
+  }
+  if (!data.enabled) {
+    return (
+      <div className="flex items-center gap-2.5 text-sm">
+        <StatusDot ok={false} />
+        <span className="font-medium text-[var(--text-primary)]">Not initialized</span>
+        {data.detail && <span className="text-[var(--text-muted)]">— {data.detail}</span>}
+      </div>
+    );
+  }
+
+  const last = data.last;
+  const intervalMin = Math.round((data.intervalMs || 0) / 60_000);
+
+  if (!last) {
+    return (
+      <div className="space-y-1.5 text-sm">
+        <div className="flex items-center gap-2.5">
+          <StatusDot ok={true} />
+          <span className="font-medium text-[var(--text-primary)]">Pending first run</span>
+        </div>
+        <p className="text-xs text-[var(--text-muted)]">
+          Cron interval: {intervalMin}min. Awaiting startup reconcile (~30s after boot).
+        </p>
+      </div>
+    );
+  }
+
+  const s = last.summary;
+  const changed = s ? (s.flipped || 0) + (s.shipped || 0) + (s.advanced || 0) : 0;
+  return (
+    <div className="space-y-1.5 text-sm">
+      <div className="flex items-center gap-2.5">
+        <StatusDot ok={last.ok} />
+        <span className="font-medium text-[var(--text-primary)]">
+          {last.ok ? (changed > 0 ? 'Drift corrected' : 'Clean') : 'Errored'}
+        </span>
+        <span className="text-[var(--text-muted)]">
+          — last run {relativeTime(last.finishedAt)} ({last.trigger}, {last.durationMs}ms)
+        </span>
+      </div>
+      {s ? (
+        <div className="text-xs text-[var(--text-muted)] tabular-nums">
+          scanned {s.scanned} · flipped {s.flipped} · shipped {s.shipped} · advanced {s.advanced}
+          {s.skippedAdvance > 0 ? ` · skipped ${s.skippedAdvance}` : ''}
+        </div>
+      ) : last.error ? (
+        <div className="text-xs text-red-500">{last.error}</div>
+      ) : null}
+      <div className="text-xs text-[var(--text-muted)]">
+        Cron interval: {intervalMin}min · history: {data.history?.length || 0} runs
+      </div>
+    </div>
+  );
+}
+
 function PubSubStatus() {
   const [ps, setPs] = useState<any>(null);
   useEffect(() => {
@@ -273,6 +345,11 @@ export default function HealthPage() {
           ) : (
             <p className="text-sm text-[var(--text-muted)]">Checking...</p>
           )}
+        </Panel>
+
+        {/* ── 3b. Roadmap Reconcile (#982) ── */}
+        <Panel title="Roadmap Reconcile">
+          <RoadmapReconcileStatus />
         </Panel>
 
         {/* ── 4. Stuck Agents ── */}

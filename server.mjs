@@ -2435,10 +2435,28 @@ server.listen(port, async () => {
   // Initialize PostgreSQL LISTEN for bidirectional sync
   await initializePostgresListener();
 
-  // Roadmap reconcile: startup only (30s delay so Next.js route is warm).
-  // Version auto-advance is now fully event-driven via checkAndAutoAdvance
-  // in roadmap-sync.ts — the periodic poll was removed as part of KISS cleanup.
-  const safeRoadmapReconcile = async () => {
+  // Roadmap reconcile: startup (30s delay so Next.js route is warm) +
+  // periodic safety-net poll (#982). Auto-advance itself is still fully
+  // event-driven via checkAndAutoAdvance in roadmap-sync.ts — this poll
+  // is a *drift detector*, not the primary path. Edge cases the event
+  // path can miss: partial task moves, concurrent done-moves, version-
+  // spanning tasks (silent-drift audit vector #8). The poll catches and
+  // logs them and pushes a visible event to the activity feed so a
+  // silent correction never happens silently.
+  const ROADMAP_RECONCILE_HISTORY_MAX = 50;
+  const roadmapReconcileHistory = [];
+  let lastRoadmapReconcile = null;
+  // Expose to API routes (read-only snapshot copies).
+  globalThis.__orgStudioRoadmapReconcile = {
+    last: () => (lastRoadmapReconcile ? { ...lastRoadmapReconcile } : null),
+    history: () => roadmapReconcileHistory.slice().map((r) => ({ ...r })),
+  };
+
+  const safeRoadmapReconcile = async (trigger = 'manual') => {
+    const startedAt = Date.now();
+    let summary = null;
+    let error = null;
+    let httpStatus = 0;
     try {
       const port = process.env.PORT || 4501;
       const apiKey = process.env.ORG_STUDIO_API_KEY || '';
@@ -2450,16 +2468,70 @@ server.listen(port, async () => {
         },
         body: '{}',
       });
+      httpStatus = res.status;
       if (!res.ok) {
         console.warn(`[RoadmapReconcile] API returned HTTP ${res.status}`);
+        error = `HTTP ${res.status}`;
+      } else {
+        const body = await res.json().catch(() => ({}));
+        summary = {
+          scanned: Number(body.scanned) || 0,
+          flipped: Number(body.flipped) || 0,
+          shipped: Number(body.shipped) || 0,
+          advanced: Number(body.advanced) || 0,
+          skippedAdvance: Number(body.skippedAdvance) || 0,
+        };
       }
     } catch (e) {
       console.error('[RoadmapReconcile] self-call failed (non-fatal):', e.message);
+      error = e?.message || String(e);
     }
+
+    const finishedAt = Date.now();
+    const record = {
+      trigger,                 // 'startup' | 'cron' | 'manual'
+      startedAt,
+      finishedAt,
+      durationMs: finishedAt - startedAt,
+      ok: !error,
+      httpStatus,
+      error,
+      summary,                 // null on error
+    };
+    lastRoadmapReconcile = record;
+    roadmapReconcileHistory.unshift(record);
+    if (roadmapReconcileHistory.length > ROADMAP_RECONCILE_HISTORY_MAX) {
+      roadmapReconcileHistory.length = ROADMAP_RECONCILE_HISTORY_MAX;
+    }
+
+    // #982: push a visible event to the activity feed when reconcile
+    // *changed* something — flipped an item or shipped a version.
+    // Pure-zero ticks are silent (we don't want 96 noop events/day).
+    if (summary && (summary.flipped > 0 || summary.shipped > 0 || summary.advanced > 0)) {
+      try {
+        const parts = [];
+        if (summary.flipped > 0) parts.push(`${summary.flipped} item${summary.flipped === 1 ? '' : 's'} flipped`);
+        if (summary.shipped > 0) parts.push(`${summary.shipped} version${summary.shipped === 1 ? '' : 's'} shipped`);
+        if (summary.advanced > 0) parts.push(`${summary.advanced} project${summary.advanced === 1 ? '' : 's'} advanced`);
+        addActivityEvent({
+          type: 'roadmap-reconcile',
+          emoji: '🧹',
+          agent: 'system',
+          project: '',
+          message: `Roadmap reconcile (${trigger}): ${parts.join(', ')}`,
+          detail: summary,
+        });
+      } catch (e) {
+        console.error('[RoadmapReconcile] activity feed emit failed (non-fatal):', e.message);
+      }
+    }
+
+    return record;
   };
+
   setTimeout(async () => {
-    safeRoadmapReconcile();
-    console.log('[RoadmapReconcile] Startup reconcile fired (no recurring poll)');
+    safeRoadmapReconcile('startup');
+    console.log('[RoadmapReconcile] Startup reconcile fired (15-min recurring poll enabled, #982)');
 
     // #1187: post-reconcile auto-deactivate REMOVED. Project state is
     // user-controlled only — the system never flips active→inactive.
@@ -2467,6 +2539,13 @@ server.listen(port, async () => {
     // version, the project simply stays put until the user approves more
     // work or explicitly deactivates from the UI.
   }, 30_000);
+
+  // #982: Periodic reconcile every 15 min. Not a primary path — a drift
+  // detector. If it flips/ships/advances anything, the activity-feed
+  // emission above makes the silent correction visible to humans.
+  const ROADMAP_RECONCILE_INTERVAL_MS = 15 * 60_000;
+  setInterval(() => safeRoadmapReconcile('cron'), ROADMAP_RECONCILE_INTERVAL_MS);
+  console.log('[RoadmapReconcile] Periodic reconcile cron started (15min tick, #982)');
 
   // Daily metrics computation — runs at startup (15s delay) + daily at midnight
   setTimeout(async () => {
