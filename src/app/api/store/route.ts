@@ -676,6 +676,20 @@ export async function POST(req: NextRequest) {
       }
 
       case 'updateTask': {
+        // #1211: symmetric guard — adhoc-typed tasks must not carry a version.
+        {
+          const allowedAdhocTypes = ['bug', 'chore', 'followup', 'spike'];
+          const existingTask = store.tasks.find((t: any) => t.id === payload.id);
+          const effectiveType = payload.updates?.taskType ?? existingTask?.taskType;
+          const hasVersionUpdate = payload.updates && 'version' in payload.updates;
+          const effectiveVersion = hasVersionUpdate ? payload.updates.version : existingTask?.version;
+          if (effectiveType && allowedAdhocTypes.includes(effectiveType) && effectiveVersion) {
+            return NextResponse.json(
+              { error: `Adhoc task (taskType=${effectiveType}) cannot have a version. Clear the version field or change taskType to 'feature'.` },
+              { status: 400 }
+            );
+          }
+        }
         let triggeredAssignee: string | null = null;
         let versionCompletionTriggered: { projectId: string; project: any; version?: string } | null = null;
         let taskMatched = false; // #948: detect silent no-ops when the task isn't in the store snapshot.

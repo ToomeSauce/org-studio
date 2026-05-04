@@ -226,6 +226,11 @@ export function isTaskAdhocDispatchEligible(
   if (task.isArchived || task.loopPausedAt) return false;
   if (task.status !== 'backlog') return false;
   if (!task.taskType || !ADHOC_TASK_TYPES.has(task.taskType)) return false;
+  // #1211: adhoc tickets must NOT carry a version field. Such tasks are
+  // inconsistent (adhoc lane has no approvedThrough gate; the roadmap
+  // lane requires sectionId+roadmapItemId). Reject so the operator
+  // either clears `version` or converts to a feature task.
+  if ((task as any).version) return false;
   const proj = (store.projects || []).find((p) => p.id === task.projectId);
   if (!proj) return false;
   // #1185 rename: 'started' → 'active'. Both literals accepted during transition.

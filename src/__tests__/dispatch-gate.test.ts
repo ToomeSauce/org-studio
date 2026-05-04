@@ -369,6 +369,19 @@ describe('#1183 adhoc dispatch lane', () => {
     expect(isTaskAdhocDispatchEligible(store, t)).toBe(true);
   });
 
+  it('adhoc + version field is ineligible (#1211)', () => {
+    const store = { projects: [mkProject()], tasks: [] };
+    const t = mkAdhoc({ taskType: 'bug', version: '0.5.0' });
+    expect(isTaskAdhocDispatchEligible(store, t)).toBe(false);
+  });
+
+  it('adhoc without version is still eligible (#1211)', () => {
+    const store = { projects: [mkProject()], tasks: [] };
+    const t = mkAdhoc({ taskType: 'bug' });
+    expect((t as any).version).toBeUndefined();
+    expect(isTaskAdhocDispatchEligible(store, t)).toBe(true);
+  });
+
   it('umbrella accepts EITHER lane', () => {
     const store = { projects: [mkProject()], tasks: [] };
     // Roadmap-eligible task (versioned, in-horizon)
