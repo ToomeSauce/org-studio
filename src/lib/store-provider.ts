@@ -534,6 +534,18 @@ export class PostgresStoreProvider implements StoreProvider {
       );
 
       const projects = projectsResult.rows.map((row: any) => this.reconstructProject(row));
+
+      // #1125: hydrate component.versions[] from org_studio_roadmap_versions
+      // table on every read. The rv-table is the canonical source of truth;
+      // the shadow `component.versions[]` inside the project document used to
+      // drift silently. Single batched query (no N+1). Idempotent: re-running
+      // produces the same result. QA components (role==='qa') and support
+      // components are NOT auto-hydrated here — those are managed by the
+      // one-shot migration script (scripts/hydrate-component-versions.mjs).
+      // Existing component.versions[] entries with no matching rv-table row
+      // are preserved (manual edits / legacy data).
+      await this.hydrateComponentVersions(client, projects);
+
       const tasks = tasksResult.rows.map((row: any) => this.reconstructTask(row));
       const rawSettings = settingsResult.rows[0]?.data;
       const settings = rawSettings
@@ -547,6 +559,77 @@ export class PostgresStoreProvider implements StoreProvider {
       };
     } finally {
       client.release();
+    }
+  }
+
+  /**
+   * #1125: hydrate component.versions[] for the primary component on each
+   * project from the canonical org_studio_roadmap_versions table. Mutates
+   * `projects` in place. See read() for rationale.
+   *
+   * Field shape mirrors scripts/hydrate-component-versions.mjs so the read
+   * path and the migration script produce identical version objects.
+   */
+  private async hydrateComponentVersions(client: any, projects: any[]): Promise<void> {
+    if (projects.length === 0) return;
+    const projectIds = projects.map(p => p.id);
+    const rvResult = await client.query(
+      `SELECT project_id, id, version, title, status, items, sort_order, version_type, shipped_at, created_at
+         FROM org_studio_roadmap_versions
+        WHERE project_id = ANY($1::text[]) AND workspace_id = $2`,
+      [projectIds, this.workspaceId]
+    );
+    if (rvResult.rows.length === 0) return;
+
+    // Group rv rows by projectId, then sort by sort_order/version (parity
+    // with migration script).
+    const byProject = new Map<string, any[]>();
+    for (const r of rvResult.rows) {
+      if (!byProject.has(r.project_id)) byProject.set(r.project_id, []);
+      byProject.get(r.project_id)!.push({
+        id: r.id,
+        version: r.version,
+        status: r.status,
+        items: Array.isArray(r.items) ? r.items : (r.items ? (typeof r.items === 'string' ? JSON.parse(r.items) : r.items) : []),
+        sort_order: r.sort_order ?? undefined,
+        version_type: r.version_type || 'outcome',
+        title: r.title,
+        shipped_at: r.shipped_at ?? undefined,
+        createdAt: r.created_at ?? undefined,
+      });
+    }
+    for (const [, list] of byProject) {
+      list.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || String(a.version).localeCompare(String(b.version)));
+    }
+
+    for (const project of projects) {
+      // Effective components list: prefer `components[]`, fall back to `sections[]`.
+      // Mirrors getEffectiveComponents() and the migration script's behavior.
+      const components = (project.components && project.components.length > 0)
+        ? project.components
+        : (project.sections || []);
+      if (components.length === 0) continue;
+      // Primary = first component whose role is not 'qa' or 'support', else components[0]
+      const primary = components.find((c: any) => {
+        const role = c?.role ? String(c.role).toLowerCase() : '';
+        return role !== 'qa' && role !== 'support';
+      }) || components[0];
+      if (!primary) continue;
+      const primaryRole = primary.role ? String(primary.role).toLowerCase() : '';
+      if (primaryRole === 'qa' || primaryRole === 'support') continue;
+
+      const rvRows = byProject.get(project.id) || [];
+      if (rvRows.length === 0) continue;
+
+      const existing = Array.isArray(primary.versions) ? primary.versions : [];
+      const rvVersions = new Set(rvRows.map(r => r.version));
+      // Union: rv rows are the source of truth for overlapping versions;
+      // existing-only entries (no matching rv row) are preserved.
+      const merged: any[] = [...rvRows];
+      for (const ex of existing) {
+        if (!rvVersions.has(ex.version)) merged.push(ex);
+      }
+      primary.versions = merged;
     }
   }
 
