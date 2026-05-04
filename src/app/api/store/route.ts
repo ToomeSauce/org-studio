@@ -16,6 +16,7 @@ import {
   DEFAULT_WORKSPACE_ID,
   type WorkspaceContext,
 } from '@/lib/workspace-auth';
+import { validateUpdateTaskPayload } from '@/lib/update-task-validation';
 
 const SCHEDULER_URL = 'http://localhost:4501/api/scheduler';
 
@@ -677,6 +678,15 @@ export async function POST(req: NextRequest) {
       }
 
       case 'updateTask': {
+        // #1195: validate payload shape up front so silent no-ops (missing
+        // `updates`, `patch` typo, empty updates, missing id) become loud
+        // 400s instead of misleading `{ ok: true }`.
+        {
+          const validationErr = validateUpdateTaskPayload(payload);
+          if (validationErr) {
+            return NextResponse.json(validationErr.body, { status: validationErr.status });
+          }
+        }
         // #1211: symmetric guard — adhoc-typed tasks must not carry a version.
         {
           const allowedAdhocTypes = ['bug', 'chore', 'followup', 'spike'];
