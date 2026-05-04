@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { generateOrgMd, generateGenericOrgMd } from '@/lib/org-generator';
 import type { Teammate } from '@/lib/teammates';
 
@@ -175,10 +175,16 @@ describe('generateOrgMd', () => {
 
 describe('generateGenericOrgMd', () => {
   it('produces same output as generateOrgMd with no agentId', () => {
-    const ctx = makeContext();
-    const generic = generateGenericOrgMd(ctx);
-    const noAgent = generateOrgMd(ctx);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-04T00:00:00.000Z'));
+    try {
+      const ctx = makeContext();
+      const generic = generateGenericOrgMd(ctx);
+      const noAgent = generateOrgMd(ctx);
 
-    expect(generic).toBe(noAgent);
+      expect(generic).toBe(noAgent);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

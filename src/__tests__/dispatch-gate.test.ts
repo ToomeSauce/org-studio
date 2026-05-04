@@ -452,6 +452,27 @@ describe('#1189 getEligibleBacklogFifo — single FIFO queue', () => {
     expect(out[1].id).toBe('t-new-feature');
   });
 
+  it('falls back to sections[] when components[] is empty (#1192)', () => {
+    const project = mkProject({
+      components: [],
+      sections: [
+        {
+          id: 'cmp-main',
+          name: 'Main',
+          approvedThrough: '0.2.0',
+          versions: [
+            { version: '0.1.0', status: 'shipped' },
+            { version: '0.2.0', status: 'planned' },
+          ],
+        },
+      ],
+    });
+    const store = { projects: [project], tasks: [{ ...mkTask({ id: 't-legacy-sections' }), createdAt: 100 }] };
+
+    expect(isTaskDispatchEligible(store, mkTask())).toBe(true);
+    expect(getEligibleBacklogFifo(store, ['mikey']).map((t) => t.id)).toEqual(['t-legacy-sections']);
+  });
+
   it('skips ineligible tasks (other agents, in-progress, archived, paused, inactive project)', () => {
     const store = {
       projects: [
@@ -500,7 +521,7 @@ describe('#1189 getEligibleBacklogFifo — single FIFO queue', () => {
 // ---- #1212: explicit-list approval (no retroactive prior-version approval) ----
 
 describe('#1212 isTaskDispatchEligible — explicit approvedVersions[] set membership', () => {
-  function mkProjectExplicit(approvedVersions: string[], versions: any[]) {
+  function mkProjectExplicit(approvedVersions: string[], versions: any[]): any {
     return {
       id: 'p1',
       state: 'active',

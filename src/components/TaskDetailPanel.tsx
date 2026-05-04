@@ -56,9 +56,12 @@ function classifyTaskBlocker(
     };
   }
 
-  const components = (project as any).components || (project as any).sections || [];
+  const components = Array.isArray((project as any).components) && (project as any).components.length > 0
+    ? (project as any).components
+    : ((project as any).sections || []);
   const cmp = components.find((c: any) => c.id === task.sectionId);
-  const approvedThrough = cmp?.approvedThrough || cmp?.approved_through;
+  const approvedVersions = Array.isArray(cmp?.approvedVersions) ? cmp.approvedVersions : [];
+  const approvedThrough = approvedVersions.length > 0 ? undefined : (cmp?.approvedThrough || cmp?.approved_through);
 
   const cmpVer = (a: string, b: string): number => {
     const pa = String(a).replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
@@ -72,7 +75,8 @@ function classifyTaskBlocker(
     return 0;
   };
 
-  if (!approvedThrough || cmpVer(task.version, approvedThrough) > 0) {
+  if ((approvedVersions.length > 0 && !approvedVersions.includes(task.version)) ||
+      (approvedVersions.length === 0 && (!approvedThrough || cmpVer(task.version, approvedThrough) > 0))) {
     return {
       reason: 'above-horizon',
       label: `Above approval horizon (v${task.version}${

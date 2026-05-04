@@ -212,7 +212,7 @@ describe('StoreProvider Abstraction', () => {
       expect(settings.values).toHaveLength(1);
 
       const store = await fileProvider.read();
-      expect(store.settings.missionStatement).toBe('Test mission');
+      expect(store.settings?.missionStatement).toBe('Test mission');
     });
 
     test('should perform health check', async () => {

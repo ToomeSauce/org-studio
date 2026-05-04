@@ -19,6 +19,11 @@ import {
   isTaskAnyDispatchEligible,
   isTaskWaiting,
 } from './dispatch-gate';
+import {
+  getComponentApprovedThrough,
+  getComponentApprovedVersions,
+  getEffectiveComponents,
+} from './component-helpers';
 
 let _pool: any = undefined;
 
@@ -221,13 +226,24 @@ export function classifyBlocker(store: StoreLike, task: any): TopBlocker {
 
   if (!task.sectionId || !task.version) return 'no-section-version';
 
-  // Component-level horizon check
-  const components = (proj as any).components || (proj as any).sections || [];
+  // Component-level horizon check. Components live in `components` going
+  // forward, but older projects (including Garage during #1192) can still have
+  // an explicitly empty components[] plus populated sections[]. Use the same
+  // canonical fallback as the dispatch gate instead of treating [] as present.
+  const components = getEffectiveComponents(proj as any);
   const cmp = components.find((c: any) => c.id === task.sectionId);
   if (!cmp) return 'no-section-version';
 
-  const approvedThrough = cmp.approvedThrough || cmp.approved_through;
-  if (!approvedThrough) return 'above-horizon';
+  const approvedVersions = getComponentApprovedVersions(proj as any, task.sectionId);
+  const usesExplicitApproval = approvedVersions.length > 0;
+  const approvedThrough = usesExplicitApproval
+    ? undefined
+    : getComponentApprovedThrough(proj as any, task.sectionId);
+  if (usesExplicitApproval) {
+    if (!approvedVersions.includes(task.version)) return 'above-horizon';
+  } else if (!approvedThrough) {
+    return 'above-horizon';
+  }
 
   // Check waitsFor before climbing the version queue (keep classification
   // narrow — if waitsFor is the gate, surface that).
@@ -243,7 +259,7 @@ export function classifyBlocker(store: StoreLike, task: any): TopBlocker {
 
   // Compare task.version vs approvedThrough using a tolerant numeric sort
   // (semver-ish). If task.version > approvedThrough → above-horizon.
-  if (compareVersionsTolerant(task.version, approvedThrough) > 0) {
+  if (!usesExplicitApproval && compareVersionsTolerant(task.version, approvedThrough!) > 0) {
     return 'above-horizon';
   }
 

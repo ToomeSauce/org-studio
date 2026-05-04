@@ -227,7 +227,7 @@ describe('isTaskDispatchEligible — sequential gate (#1126 PR 2)', () => {
       assignee: 'Billy',
     };
     // Was true under the carve-out. Now false: the gate applies uniformly.
-    expect(isTaskDispatchEligible(store, qaTask)).toBe(false);
+    expect(isTaskDispatchEligible(store as any, qaTask)).toBe(false);
   });
 
   it('non-qa role still gets the sequential gate applied', () => {
@@ -300,6 +300,6 @@ describe('isTaskWaiting — sequential gate (#1126 PR 2)', () => {
     };
     const qaTask = { id: 'q', projectId: 'thrivor', sectionId: 'sec-qa', version: '0.3.0', status: 'backlog' };
     // Was false under the carve-out. Now true: gated like everyone else.
-    expect(isTaskWaiting(store, qaTask)).toBe(true);
+    expect(isTaskWaiting(store as any, qaTask)).toBe(true);
   });
 });

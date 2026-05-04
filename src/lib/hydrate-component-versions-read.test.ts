@@ -42,15 +42,11 @@ function makeFakePool(opts: {
 
 // Subclass that lets us inject the fake pool without touching real pg.
 class TestProvider extends PostgresStoreProvider {
-  constructor(private fakePool: any) {
+  constructor(public fakePool: any) {
     super('postgres://test/test', 'default-workspace');
   }
-  // Override the private getPool by name. TS allows this via any-cast.
-  protected async getPool() {
-    return this.fakePool;
-  }
 }
-// Patch the prototype so the override actually wins (the parent's getPool is private).
+// Patch the prototype so the override wins (the parent's getPool is private).
 (TestProvider.prototype as any).getPool = async function () {
   return (this as any).fakePool;
 };
