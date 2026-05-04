@@ -400,6 +400,52 @@ export function RoadmapWithApprovalHorizon({
     setEditForm({ version: '', title: '', status: 'planned', items: [], version_type: 'outcome' });
   };
 
+  // #1215: extracted from renderVersionRow so Zone B's hero card can render the
+  // same approval checkbox as Zone C without duplicating logic.
+  const renderApprovalCheckbox = (version: RoadmapVersion) => {
+    const checked = isVersionApproved(version.version);
+    const missingCount = (version.items || []).filter(
+      (item: any) => !item.taskId,
+    ).length;
+    const disabledReason =
+      !checked && missingCount > 0
+        ? `${missingCount} item(s) need planning tickets before approval`
+        : '';
+    return (
+      <button
+        type="button"
+        role="checkbox"
+        aria-checked={checked}
+        aria-label={
+          checked
+            ? `Unapprove version ${version.version}`
+            : `Approve version ${version.version}`
+        }
+        disabled={!!disabledReason}
+        title={
+          disabledReason ||
+          (checked
+            ? 'Approved — click to unapprove'
+            : 'Click to approve this version')
+        }
+        onClick={(e) => {
+          e.stopPropagation();
+          if (disabledReason) return;
+          toggleVersionApproval(version.version);
+        }}
+        className={clsx(
+          'w-4 h-4 rounded border-2 flex-shrink-0 flex items-center justify-center transition-colors',
+          'disabled:cursor-not-allowed disabled:opacity-40',
+          checked
+            ? 'bg-green-500 border-green-500 text-white hover:bg-green-600 hover:border-green-600'
+            : 'bg-transparent border-[var(--border-color)] hover:border-green-500',
+        )}
+      >
+        {checked && <Check size={10} strokeWidth={3} />}
+      </button>
+    );
+  };
+
   const renderVersionRow = (
     version: RoadmapVersion,
     isApproved: boolean = false,
@@ -449,53 +495,7 @@ export function RoadmapWithApprovalHorizon({
                 className={clsx('text-[var(--text-muted)] flex-shrink-0', isExpanded && 'rotate-90 transition-transform')}
               />
             )}
-            {showApprovalCheckbox && !isEditing && (() => {
-              // #1188: per-version approval checkbox. Click toggles inclusion in
-              // approvedVersions[]. Disabled when the version still has items
-              // missing taskIds ("not ready for launch") to mirror the old
-              // moveApprovalDown gate.
-              const checked = isVersionApproved(version.version);
-              const missingCount = (version.items || []).filter(
-                (item: any) => !item.taskId,
-              ).length;
-              const disabledReason =
-                !checked && missingCount > 0
-                  ? `${missingCount} item(s) need planning tickets before approval`
-                  : '';
-              return (
-                <button
-                  type="button"
-                  role="checkbox"
-                  aria-checked={checked}
-                  aria-label={
-                    checked
-                      ? `Unapprove version ${version.version}`
-                      : `Approve version ${version.version}`
-                  }
-                  disabled={!!disabledReason}
-                  title={
-                    disabledReason ||
-                    (checked
-                      ? 'Approved — click to unapprove'
-                      : 'Click to approve this version')
-                  }
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (disabledReason) return;
-                    toggleVersionApproval(version.version);
-                  }}
-                  className={clsx(
-                    'w-4 h-4 rounded border-2 flex-shrink-0 flex items-center justify-center transition-colors',
-                    'disabled:cursor-not-allowed disabled:opacity-40',
-                    checked
-                      ? 'bg-green-500 border-green-500 text-white hover:bg-green-600 hover:border-green-600'
-                      : 'bg-transparent border-[var(--border-color)] hover:border-green-500',
-                  )}
-                >
-                  {checked && <Check size={10} strokeWidth={3} />}
-                </button>
-              );
-            })()}
+            {showApprovalCheckbox && !isEditing && renderApprovalCheckbox(version)}
             <span title={`Version type: ${versionType}`}>{typeBadge}</span>
             <span className="font-medium">{version.version}</span>
             <span className="text-sm text-[var(--text-secondary)]">— {version.title}</span>
@@ -801,6 +801,8 @@ export function RoadmapWithApprovalHorizon({
           )}>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
+                {/* #1215: same approval checkbox as Zone C */}
+                {renderApprovalCheckbox(currentVersionObj)}
                 <span className="text-lg font-bold">v{currentVersionObj.version}</span>
                 <span className="text-sm text-[var(--text-secondary)]">{currentVersionObj.title}</span>
                 <span className="px-2 py-0.5 bg-blue-100 dark:bg-blue-950/30 text-blue-700 dark:text-blue-400 text-xs font-medium rounded flex items-center gap-1">Current
