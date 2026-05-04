@@ -678,7 +678,30 @@ export async function buildDispatchMessage(
   // is the ORDER — no more silent "versioned-first then adhoc" priority.
   // The single source of truth lives in dispatch-gate.ts; do not re-implement
   // the filter here.
-  const backlog = getEligibleBacklogFifo(store, [nameLower, agentId]) as any[];
+  //
+  // #1197/#1198 SINGLE-WIP HARD GATE
+  // -------------------------------
+  // If the agent already has any in-progress task, suppress the backlog list
+  // entirely from the dispatch message. The previous prompt-only rule (in the
+  // skill / scheduler sections) was insufficient: agents continued to claim
+  // backlog tickets while in-progress work was open, accumulating WIP that
+  // had to be manually consolidated. By withholding backlog from dispatch when
+  // in-progress is non-empty, we make multi-WIP impossible-by-default at the
+  // dispatch boundary while still showing the agent their resume list.
+  //
+  // Edge cases handled:
+  //   - QA in-progress: same rule, QA list still shown (in-progress takes
+  //     precedence; QA review of someone else's work is not new claim).
+  //   - blocked tasks: don't count toward in-progress, no effect on this gate.
+  //   - dispatch with ONLY in-progress (no backlog): unchanged behavior.
+  //
+  // The agent can still pull a new backlog task by:
+  //   1. Finishing the in-progress task (move to done/review), OR
+  //   2. Bouncing it back to backlog (move to backlog) with a focus comment.
+  // Either action clears the gate on the next dispatch.
+  const rawBacklog = getEligibleBacklogFifo(store, [nameLower, agentId]) as any[];
+  const backlog = inProgress.length > 0 ? [] : rawBacklog;
+  const backlogSuppressedCount = inProgress.length > 0 ? rawBacklog.length : 0;
   const inQA = agentTasks.filter((t: any) => t.status === 'qa');
 
   // Nothing ACTIONABLE to do — don't dispatch even if blocked tasks exist.
@@ -716,7 +739,15 @@ export async function buildDispatchMessage(
 
   // Priority 1: Resume in-progress work
   if (inProgress.length > 0) {
-    lines.push(`**Resume in-progress (${inProgress.length}):**`);
+    // #1198 SINGLE-WIP: when in-progress is non-empty, dispatcher hides backlog
+    // entirely. Tell the agent explicitly so they don't go pull from the board.
+    const lockNote = backlogSuppressedCount > 0
+      ? ` — backlog (${backlogSuppressedCount}) is hidden until in-progress is cleared`
+      : '';
+    lines.push(`**Resume in-progress (${inProgress.length})${lockNote}:**`);
+    if (inProgress.length > 1) {
+      lines.push(`> ⚠️ You have multiple in-progress tickets. Per the SINGLE-WIP rule, pick the one you'll actually finish now and move the rest back to backlog with a one-line focus comment. Do NOT work them in parallel.`);
+    }
     for (const t of inProgress) {
       const proj = projects.find((p: any) => p.id === t.projectId);
       lines.push(`- **${t.title}** ${t.ticketNumber ? `(#${t.ticketNumber})` : ''}`);
