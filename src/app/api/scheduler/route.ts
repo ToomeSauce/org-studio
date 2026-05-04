@@ -24,6 +24,7 @@ import {
 import {
   recordDispatchAttempt,
   diagnoseAgentBacklog,
+  classifyBlocker,
   findStaleBacklogAgents,
   type TriggerSource,
   type SkipReason,
@@ -809,6 +810,50 @@ export async function POST(request: NextRequest) {
           { ok: true, triggered: true, method: 'dispatch', sessionKey },
           { outcome: 'dispatched' },
         );
+      }
+
+      case 'diagnose': {
+        // #1194 — Public read-only wrapper around diagnoseAgentBacklog().
+        // Use this when debugging dispatch issues: "why isn't agent X picking up
+        // task Y?". Returns the same shape used internally by the trigger path,
+        // plus a per-task breakdown so callers can act on individual tickets.
+        // Expects: { action: 'diagnose', agentId: string }
+        const { agentId } = body;
+        if (!agentId) return NextResponse.json({ error: 'Missing agentId' }, { status: 400 });
+
+        const store = await readStore();
+        const agentName = getAgentName(store, agentId);
+        const diag = diagnoseAgentBacklog(store, agentId, agentName);
+
+        // Per-task breakdown — useful for "which specific tickets are stuck and why".
+        const nameLower = (agentName || '').toLowerCase();
+        const idLower = (agentId || '').toLowerCase();
+        const myBacklog = (store.tasks || []).filter((t: any) => {
+          const a = (t.assignee || '').toLowerCase();
+          return (a === nameLower || a === idLower) && t.status === 'backlog';
+        });
+        const perTask = myBacklog.map((t: any) => {
+          const eligible = isTaskAnyDispatchEligible(store as any, t);
+          return {
+            id: t.id,
+            ticketNumber: t.ticketNumber,
+            title: t.title,
+            projectId: t.projectId,
+            version: t.version || null,
+            sectionId: t.sectionId || null,
+            taskType: t.taskType || null,
+            eligible,
+            blocker: eligible ? null : classifyBlocker(store as any, t),
+          };
+        });
+
+        return NextResponse.json({
+          ok: true,
+          agentId,
+          agentName,
+          summary: diag,
+          perTask,
+        });
       }
 
       case 'sweep': {
