@@ -34,3 +34,11 @@ export function clearInFlightAgent(agentId: string): void {
 export function isInFlight(agentId: string): boolean {
   return inFlightAgents.has(agentId);
 }
+
+/**
+ * #983 — read-only snapshot of all agents currently marked in-flight.
+ * Returns a fresh array so callers can't mutate internal state.
+ */
+export function getInFlightAgents(): string[] {
+  return Array.from(inFlightAgents);
+}

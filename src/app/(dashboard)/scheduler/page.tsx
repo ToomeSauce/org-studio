@@ -470,6 +470,150 @@ function LoopCard({ loop, teammate, onUpdate, onDelete, onToggleEnabled, onRunNo
   );
 }
 
+// ─── Dispatch Health Widget (#983) ──────────────────────────────────
+
+function DispatchHealthWidget({ agents }: { agents: Teammate[] }) {
+  const [data, setData] = useState<any>(null);
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () =>
+      fetch('/api/scheduler/status')
+        .then((r) => r.json())
+        .then((d) => { if (!cancelled) setData(d); })
+        .catch(() => {});
+    load();
+    const iv = setInterval(load, 15_000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, []);
+
+  if (!data) {
+    return (
+      <div className="border border-[var(--border-default)] rounded-[var(--radius-lg)] px-5 py-3.5 text-[var(--text-xs)] text-[var(--text-muted)]">
+        Loading dispatch health…
+      </div>
+    );
+  }
+
+  const inFlight: string[] = data.inFlightAgents || [];
+  const lastTrigger: Record<string, number> = data.lastTriggerByAgent || {};
+  const ob = data.outboxDepth;
+  const sweep = data.lastSweep;
+
+  const agentRows = agents
+    .filter((a) => a.agentId)
+    .map((a) => ({
+      agentId: a.agentId!,
+      name: a.name,
+      inFlight: inFlight.includes(a.agentId!),
+      lastDispatchAt: lastTrigger[a.agentId!] || 0,
+    }))
+    .sort((x, y) => y.lastDispatchAt - x.lastDispatchAt);
+
+  const fmtRel = (ts: number) => {
+    if (!ts) return 'never';
+    const d = Date.now() - ts;
+    if (d < 0) return 'just now';
+    if (d < 60_000) return `${Math.floor(d / 1000)}s ago`;
+    if (d < 3_600_000) return `${Math.floor(d / 60_000)}m ago`;
+    if (d < 86_400_000) return `${Math.floor(d / 3_600_000)}h ago`;
+    return `${Math.floor(d / 86_400_000)}d ago`;
+  };
+
+  return (
+    <div className="border border-[var(--border-default)] rounded-[var(--radius-lg)] overflow-hidden">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-3 px-5 py-3.5 bg-[var(--bg-primary)] hover:bg-[var(--bg-hover)] transition-colors"
+      >
+        <Zap size={14} className="text-[var(--text-muted)] shrink-0" />
+        <div className="flex-1 text-left">
+          <span className="text-[var(--text-sm)] font-semibold text-[var(--text-secondary)]">Dispatch Health</span>
+          <span className="text-[var(--text-xs)] text-[var(--text-muted)] ml-2">
+            {inFlight.length} in-flight
+            {ob && typeof ob.queued === 'number' ? ` · outbox: ${ob.queued} queued, ${ob.in_flight} in-flight, ${ob.failed} failed` : ''}
+            {sweep ? ` · last sweep: ${sweep.checked} checked / ${sweep.triggered} fired (${fmtRel(sweep.finishedAt)})` : ' · no sweep yet'}
+          </span>
+        </div>
+        {expanded ? <ChevronUp size={14} className="text-[var(--text-muted)]" /> : <ChevronDown size={14} className="text-[var(--text-muted)]" />}
+      </button>
+
+      {expanded && (
+        <div className="border-t border-[var(--border-default)] bg-[var(--bg-secondary)] px-5 py-4 space-y-4">
+          {/* Per-agent dispatch state */}
+          <div>
+            <div className="text-[var(--text-xs)] font-semibold text-[var(--text-secondary)] mb-2">
+              Per-agent dispatch ({agentRows.length})
+            </div>
+            {agentRows.length === 0 ? (
+              <p className="text-[var(--text-xs)] text-[var(--text-muted)]">No agents configured.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-[var(--text-xs)]">
+                  <thead>
+                    <tr className="border-b border-[var(--border-subtle)]">
+                      <th className="text-left py-1.5 pr-4 font-semibold text-[var(--text-muted)]">Agent</th>
+                      <th className="text-left py-1.5 pr-4 font-semibold text-[var(--text-muted)]">In-flight</th>
+                      <th className="text-left py-1.5 font-semibold text-[var(--text-muted)]">Last dispatch</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {agentRows.map((r) => (
+                      <tr key={r.agentId} className="border-b border-[var(--border-subtle)] last:border-0">
+                        <td className="py-1.5 pr-4 font-medium text-[var(--text-primary)]">{r.name}</td>
+                        <td className="py-1.5 pr-4">
+                          {r.inFlight ? (
+                            <span className="inline-block px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 font-medium">yes</span>
+                          ) : (
+                            <span className="text-[var(--text-muted)]">no</span>
+                          )}
+                        </td>
+                        <td className="py-1.5 text-[var(--text-secondary)] tabular-nums" title={r.lastDispatchAt ? new Date(r.lastDispatchAt).toLocaleString() : ''}>
+                          {fmtRel(r.lastDispatchAt)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Last sweep results */}
+          {sweep && sweep.results && sweep.results.length > 0 && (
+            <div>
+              <div className="text-[var(--text-xs)] font-semibold text-[var(--text-secondary)] mb-2">
+                Last sweep results ({fmtRel(sweep.finishedAt)}, {sweep.durationMs}ms)
+              </div>
+              <ul className="space-y-1 text-[var(--text-xs)]">
+                {sweep.results.map((r: any, i: number) => (
+                  <li key={i} className="flex gap-2 text-[var(--text-secondary)]">
+                    <span className={r.triggered ? 'text-[var(--success)]' : 'text-[var(--text-muted)]'}>
+                      {r.triggered ? '→ fired' : '· skipped'}
+                    </span>
+                    <span className="font-medium">{r.agentId}</span>
+                    <span className="text-[var(--text-muted)]">{r.reason}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {sweep && (!sweep.results || sweep.results.length === 0) && (
+            <p className="text-[var(--text-xs)] text-[var(--text-muted)]">
+              Last sweep was a no-op ({fmtRel(sweep.finishedAt)}, {sweep.durationMs}ms) — no enabled loops needed dispatch.
+            </p>
+          )}
+
+          <p className="text-[var(--text-xs)] text-[var(--text-muted)]">
+            Dispatch cooldown: {Math.round((data.triggerCooldownMs || 0) / 1000)}s per agent. Refreshes every 15s. Source: <code>/api/scheduler/status</code>.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────
 
 export default function SchedulerPage() {
@@ -786,6 +930,9 @@ export default function SchedulerPage() {
           )}
         </div>
       </div>
+
+      {/* Dispatch Health (#983) */}
+      <DispatchHealthWidget agents={agents} />
 
       {/* Global Preamble */}
       <div className="border border-[var(--border-default)] rounded-[var(--radius-lg)] overflow-hidden">

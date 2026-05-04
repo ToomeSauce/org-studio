@@ -28,10 +28,16 @@ import {
   type TriggerSource,
   type SkipReason,
 } from '@/lib/dispatch-attempts';
+import {
+  recordTrigger,
+  recordSweep,
+  setTriggerCooldownMs,
+} from '@/lib/scheduler-state';
 const DEFAULT_MODEL = 'foundry-openai-chat/gpt-5.4';
 
 // Minimum seconds between event-driven triggers for the same agent (debounce)
 const TRIGGER_COOLDOWN_MS = 60_000; // 1 minute
+setTriggerCooldownMs(TRIGGER_COOLDOWN_MS);
 const lastTriggerByAgent: Record<string, number> = {};
 // #1184 phase 3 — 24h cooldown for stale-backlog Telegram escalations.
 const lastEscalateByAgent: Record<string, number> = {};
@@ -786,6 +792,7 @@ export async function POST(request: NextRequest) {
         }
 
         lastTriggerByAgent[agentId] = now;
+        recordTrigger(agentId, now);
 
         // Dispatch task to agent's main persistent session.
         // fireOneShot returns the sessionKey iff it actually enqueued to the
@@ -814,6 +821,7 @@ export async function POST(request: NextRequest) {
       case 'sweep': {
         // Global sweep — iterates all enabled loops and checks for orphaned/stuck work.
         // Safety net for event-driven triggers. Users call this via cron or manually.
+        const sweepStartedAt = Date.now();
         const store = await readStore();
         const loops: AgentLoop[] = store.settings?.loops || [];
         const enabledLoops = loops.filter(l => l.enabled);
@@ -841,6 +849,7 @@ export async function POST(request: NextRequest) {
 
             if (cooledDown) {
               lastTriggerByAgent[agentId] = now;
+              recordTrigger(agentId, now);
               try {
                 await fireOneShot(store, loop);
                 swept.push({ agentId, reason: `${backlogTasks.length} backlog orphan(s)`, triggered: true });
@@ -874,6 +883,7 @@ export async function POST(request: NextRequest) {
 
             if (cooledDown) {
               lastTriggerByAgent[agentId] = now2;
+              recordTrigger(agentId, now2);
               try {
                 await fireOneShot(store, loop);
                 swept.push({ agentId, reason: `${stuckTasks.length} stuck in-progress task(s)`, triggered: true });
@@ -897,6 +907,24 @@ export async function POST(request: NextRequest) {
         // Spec: spec-project-model-simplification.md §Auto-stop removal.
         // The vision owner explicitly deactivates from the project page when
         // they want to pause dispatch.
+
+        // #983 — record sweep summary + emit INFO log so silent no-op sweeps
+        // are visible to operators.
+        const sweepFinishedAt = Date.now();
+        const triggeredCount = swept.filter((s) => s.triggered).length;
+        const reasonsForLog = swept.length
+          ? swept.map((s) => `${s.agentId}:${s.triggered ? 'fire' : 'skip'}(${s.reason})`).join(', ')
+          : 'no-op';
+        console.log(
+          `[Sweep] checked=${enabledLoops.length} triggered=${triggeredCount} duration=${sweepFinishedAt - sweepStartedAt}ms reasons=[${reasonsForLog}]`,
+        );
+        recordSweep({
+          finishedAt: sweepFinishedAt,
+          durationMs: sweepFinishedAt - sweepStartedAt,
+          checked: enabledLoops.length,
+          triggered: triggeredCount,
+          results: swept.slice(),
+        });
 
         return NextResponse.json({ ok: true, swept });
       }
