@@ -574,7 +574,7 @@ export class PostgresStoreProvider implements StoreProvider {
     if (projects.length === 0) return;
     const projectIds = projects.map(p => p.id);
     const rvResult = await client.query(
-      `SELECT project_id, id, version, title, status, items, sort_order, version_type, shipped_at, created_at
+      `SELECT project_id, id, version, title, status, items, sort_order, version_type, owner, shipped_at, created_at
          FROM org_studio_roadmap_versions
         WHERE project_id = ANY($1::text[]) AND workspace_id = $2`,
       [projectIds, this.workspaceId]
@@ -593,6 +593,7 @@ export class PostgresStoreProvider implements StoreProvider {
         items: Array.isArray(r.items) ? r.items : (r.items ? (typeof r.items === 'string' ? JSON.parse(r.items) : r.items) : []),
         sort_order: r.sort_order ?? undefined,
         version_type: r.version_type || 'outcome',
+        owner: r.owner ?? undefined,
         title: r.title,
         shipped_at: r.shipped_at ?? undefined,
         createdAt: r.created_at ?? undefined,

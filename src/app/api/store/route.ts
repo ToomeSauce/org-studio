@@ -6,6 +6,7 @@ import { parseMentions } from '@/lib/mention-notifier';
 import { routeCommentNotifications } from '@/lib/notification-router';
 import { syncRoadmapItemForTask } from '@/lib/roadmap-sync';
 import { checkArchivedProject } from '@/lib/archived-project-compat';
+import { getEffectiveOwner } from '@/lib/component-helpers';
 import { isTelegramCommsEnabled } from '@/lib/telegram-guard';
 import {
   resolveWorkspaceContext,
@@ -1083,7 +1084,11 @@ export async function POST(req: NextRequest) {
 
                   // Trigger the dependent component's owner so the now-eligible
                   // backlog task surfaces on the next tick.
-                  if (cmp.owner) triggerAgentLoop(cmp.owner, store);
+                  // #1214: prefer version-level owner over component-level
+                  // owner when a version is in scope (matchingVersion). Falls
+                  // back to component owner via getEffectiveOwner.
+                  const depOwner = getEffectiveOwner(proj, cmp.id, matchingVersion.id) || cmp.owner;
+                  if (depOwner) triggerAgentLoop(depOwner, store);
                 }
               }
             }
@@ -1441,7 +1446,23 @@ export async function POST(req: NextRequest) {
                   const freshStore = await getStoreProvider().read();
                   const proj = freshStore.projects.find((p: any) => p.id === projectId);
                   // Trigger the component's owner if known, else any project devOwner.
-                  const ownerToWake = newComp.owner || proj?.devOwner;
+                  // #1214: when the promote moved tasks to a specific version
+                  // (result.to), prefer that version's owner over the component
+                  // owner. Resolve version string → versionId via the component.
+                  let versionLevelOwner: string | undefined;
+                  if (proj && result.to) {
+                    const compsList: any[] = (proj as any).components?.length
+                      ? (proj as any).components
+                      : ((proj as any).sections || []);
+                    const targetCmp = compsList.find((c: any) => c.id === targetComponentId);
+                    const matchedVer = targetCmp?.versions?.find(
+                      (v: any) => v.version === result.to || v.label === result.to,
+                    );
+                    if (matchedVer) {
+                      versionLevelOwner = getEffectiveOwner(proj as any, targetComponentId, matchedVer.id);
+                    }
+                  }
+                  const ownerToWake = versionLevelOwner || newComp.owner || proj?.devOwner;
                   if (ownerToWake && result.movedTasks > 0) {
                     triggerAgentLoop(ownerToWake, freshStore);
                   }

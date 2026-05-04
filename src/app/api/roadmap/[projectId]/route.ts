@@ -23,6 +23,7 @@ interface RoadmapVersion {
   shipped_at?: number | null;
   sort_order?: number;
   version_type?: 'outcome' | 'foundation' | 'chore';
+  owner?: string | null;
 }
 
 export async function GET(
@@ -53,7 +54,7 @@ export async function GET(
 
       try {
         const result = await client.query(
-          `SELECT id, version, title, status, items, shipped_at, sort_order, version_type
+          `SELECT id, version, title, status, items, shipped_at, sort_order, version_type, owner
            FROM org_studio_roadmap_versions
            WHERE project_id = $1 AND workspace_id = $2
            ORDER BY sort_order ASC, version ASC`,
@@ -69,6 +70,7 @@ export async function GET(
           shipped_at: row.shipped_at,
           sort_order: row.sort_order,
           version_type: row.version_type || 'outcome',
+          owner: row.owner ?? null,
           progress: calculateProgress(row.items || []),
         }));
 
@@ -119,6 +121,12 @@ export async function POST(
     const { projectId } = await params;
     const body = await req.json();
     const { action, version, title, status, items, order, versionType } = body;
+    // #1214: owner is OPTIONAL on the wire. When omitted, we preserve the
+    // existing row's owner (COALESCE on update) and persist NULL on insert.
+    const ownerProvided = Object.prototype.hasOwnProperty.call(body, 'owner');
+    const ownerValue: string | null = ownerProvided
+      ? (typeof body.owner === 'string' && body.owner.trim().length > 0 ? body.owner : null)
+      : null;
 
     // Validate version on any action that takes one (upsert/delete).
     // Accepts CalVer (YYYY.MM.DD or YYYY.MM.DD.N) and SemVer (MAJOR.MINOR.PATCH).
@@ -181,14 +189,18 @@ export async function POST(
           const resolvedVersionType = versionType || 'outcome';
           await client.query(
             `INSERT INTO org_studio_roadmap_versions 
-              (id, project_id, version, title, status, items, sort_order, created_at, version_type, workspace_id)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+              (id, project_id, version, title, status, items, sort_order, created_at, version_type, workspace_id, owner)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
              ON CONFLICT (project_id, version) DO UPDATE SET
               title = EXCLUDED.title,
               status = EXCLUDED.status,
               items = EXCLUDED.items,
               sort_order = EXCLUDED.sort_order,
-              version_type = EXCLUDED.version_type`,
+              version_type = EXCLUDED.version_type,
+              -- #1214: only overwrite owner when caller explicitly provided it.
+              -- COALESCE(EXCLUDED.owner, existing) preserves owner across
+              -- partial updates that omit the field.
+              owner = COALESCE(EXCLUDED.owner, org_studio_roadmap_versions.owner)`,
             [
               versionId,
               projectId,
@@ -200,6 +212,9 @@ export async function POST(
               Date.now(),
               resolvedVersionType,
               'default-workspace', // TODO(v0.17-multi-workspace): resolve from request context
+              // EXCLUDED.owner becomes this value; it's NULL when omitted so
+              // COALESCE falls through to the existing column.
+              ownerProvided ? ownerValue : null,
             ]
           );
 
@@ -230,6 +245,7 @@ export async function POST(
             version,
             id: versionId,
             version_type: resolvedVersionType,
+            owner: ownerProvided ? ownerValue : undefined,
           });
         } else if (action === 'delete') {
           await client.query(

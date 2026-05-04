@@ -89,6 +89,20 @@ export async function POST(req: NextRequest) {
         console.log('version_type column may already exist:', err.message);
       }
 
+      // #1214: Add owner column (per-version owner override).
+      // Precedence: task.assignee → version.owner → component.owner.
+      // NULL means "inherit from component". See getEffectiveOwner().
+      console.log('📋 Adding owner column...');
+      try {
+        await client.query(`
+          ALTER TABLE org_studio_roadmap_versions
+          ADD COLUMN IF NOT EXISTS owner TEXT;
+        `);
+        console.log('✅ owner column ready\n');
+      } catch (err: any) {
+        console.log('owner column may already exist:', err.message);
+      }
+
       // Step 2: Fetch all vision docs
       console.log('📖 Fetching vision docs...');
       

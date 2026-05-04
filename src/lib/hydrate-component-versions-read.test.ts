@@ -76,6 +76,7 @@ function rvRow(projectId: string, version: string, extras: Partial<any> = {}) {
     items: extras.items ?? [],
     sort_order: extras.sort_order ?? 0,
     version_type: extras.version_type ?? 'outcome',
+    owner: extras.owner ?? null,
     shipped_at: extras.shipped_at ?? null,
     created_at: extras.created_at ?? null,
   };
@@ -216,5 +217,24 @@ describe('#1125 hydrateComponentVersions on read()', () => {
     const va = a.projects[0].components[0].versions;
     const vb = b.projects[0].components[0].versions;
     expect(vb).toEqual(va);
+  });
+
+  // #1214: rv-table `owner` round-trips into component.versions[i].owner.
+  test('owner field round-trips from rv-table to component.versions[i].owner', async () => {
+    const projects = [
+      projectRow('p7', [{ id: 'c1', name: 'Main', owner: 'mikey', versions: [] }]),
+    ];
+    const rvRows = [
+      rvRow('p7', '1.0', { owner: 'ana' }),       // version-level override
+      rvRow('p7', '1.1', { owner: null }),         // null → falls through to component.owner via getEffectiveOwner
+    ];
+    const provider = new TestProvider(makeFakePool({ projects, rvRows }));
+    const store = await provider.read();
+    const primary = store.projects.find((x: any) => x.id === 'p7').components[0];
+    const v10 = primary.versions.find((v: any) => v.version === '1.0');
+    const v11 = primary.versions.find((v: any) => v.version === '1.1');
+    expect(v10.owner).toBe('ana');
+    // null in DB → undefined on the model (per hydration)
+    expect(v11.owner).toBeUndefined();
   });
 });
