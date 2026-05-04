@@ -631,6 +631,30 @@ export class PostgresStoreProvider implements StoreProvider {
         if (!rvVersions.has(ex.version)) merged.push(ex);
       }
       primary.versions = merged;
+
+      // Non-primary components (qa/support) keep their own version[] shape
+      // — we don't add or remove entries — but if a version string overlaps
+      // with the canonical rv-table row, refresh the editable fields
+      // (title, status, version_type, owner, items, shipped_at) so per-
+      // component views don't render stale data after a save against the
+      // project-scoped rv-table. Without this, editing a roadmap title
+      // while viewing a support component appears to silently revert on
+      // refresh because that component's shadow never got the new title.
+      const rvByVersion = new Map(rvRows.map(r => [r.version, r]));
+      for (const comp of components) {
+        if (comp === primary) continue;
+        const list = Array.isArray(comp.versions) ? comp.versions : [];
+        for (const entry of list) {
+          const rv = rvByVersion.get(entry.version);
+          if (!rv) continue;
+          entry.title = rv.title;
+          entry.status = rv.status;
+          entry.version_type = rv.version_type;
+          entry.owner = rv.owner;
+          entry.items = rv.items;
+          entry.shipped_at = rv.shipped_at;
+        }
+      }
     }
   }
 
