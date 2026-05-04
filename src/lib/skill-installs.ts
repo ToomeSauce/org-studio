@@ -90,14 +90,23 @@ export async function listInstalls({
   const p = await getPool();
   if (!p) return [];
   try {
-    const { rows } = await p.query(
-      `SELECT agent_id, skill, commit_hash, installed_at,
-              EXTRACT(EPOCH FROM (NOW() - installed_at))::INT AS age_seconds
-         FROM org_studio_skill_installs
-        WHERE skill = $1
-        ORDER BY installed_at DESC`,
-      [skill]
-    );
+    // #980 — 'all' (or empty) returns every skill, not just org-studio.
+    const allSkills = !skill || skill === 'all' || skill === '*';
+    const { rows } = allSkills
+      ? await p.query(
+          `SELECT agent_id, skill, commit_hash, installed_at,
+                  EXTRACT(EPOCH FROM (NOW() - installed_at))::INT AS age_seconds
+             FROM org_studio_skill_installs
+            ORDER BY skill ASC, installed_at DESC`,
+        )
+      : await p.query(
+          `SELECT agent_id, skill, commit_hash, installed_at,
+                  EXTRACT(EPOCH FROM (NOW() - installed_at))::INT AS age_seconds
+             FROM org_studio_skill_installs
+            WHERE skill = $1
+            ORDER BY installed_at DESC`,
+          [skill],
+        );
     return rows;
   } catch (e: any) {
     if (/does not exist/i.test(e?.message || '')) return [];

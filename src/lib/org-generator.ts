@@ -213,16 +213,42 @@ export function generateOrgMd(ctx: OrgContext, forAgentId?: string): string {
 
   // API Reference
   lines.push('## API Reference');
-  lines.push('Run this at the start of every session to ensure you have the latest Org Studio skill:');
+  lines.push('Run this at the start of every session to refresh your Org Studio skill **and report freshness for every other installed skill** (#980). Output is silent on success; failures never block startup.');
   lines.push('```bash');
   const agentIdForPing = forAgentId || 'unknown';
-  lines.push(`npx skills add ToomeSauce/org-studio --yes && \\`);
-  lines.push(`  SKILL_SHA=$(cd ~/.skills/ToomeSauce/org-studio 2>/dev/null && git rev-parse --short HEAD 2>/dev/null || echo unknown) && \\`);
-  lines.push(`  curl -s -m 3 "\${ORG_STUDIO_URL:-http://localhost:4501}/api/skill-install-ping" \\`);
-  lines.push(`    -X POST -H 'content-type: application/json' \\`);
-  lines.push(`    -d "{\\"agentId\\":\\"${agentIdForPing}\\",\\"skill\\":\\"org-studio\\",\\"commitHash\\":\\"$SKILL_SHA\\"}" >/dev/null 2>&1 || true`);
+  // 1. Refresh the org-studio skill itself (the source of truth for tasking)
+  //    and ping its install. Identical behavior to the original #861 hook.
+  lines.push(`ORG_STUDIO_URL="\${ORG_STUDIO_URL:-http://localhost:4501}"`);
+  lines.push(`AGENT_ID="${agentIdForPing}"`);
+  lines.push(`npx skills add ToomeSauce/org-studio --yes >/dev/null 2>&1 || true`);
+  lines.push(``);
+  lines.push(`# #980 — enumerate every installed skill and ping freshness for each.`);
+  lines.push(`# Skill roots checked (skip silently if missing):`);
+  lines.push(`#   ~/.agents/skills        — global skill installs`);
+  lines.push(`#   ./skills                — workspace-local skills (cwd)`);
+  lines.push(`# Per-skill version resolution (first hit wins):`);
+  lines.push(`#   1. \`git rev-parse --short HEAD\` if the dir is a git repo`);
+  lines.push(`#   2. \`skill.json#version\` if present`);
+  lines.push(`#   3. sha1 of SKILL.md (first 7 chars) as a content fingerprint`);
+  lines.push(`#   4. literal string "unknown" otherwise`);
+  lines.push(`for ROOT in "$HOME/.agents/skills" "$PWD/skills"; do`);
+  lines.push(`  [ -d "$ROOT" ] || continue`);
+  lines.push(`  for SKILL_DIR in "$ROOT"/*/; do`);
+  lines.push(`    [ -f "$SKILL_DIR/SKILL.md" ] || continue`);
+  lines.push(`    SKILL_NAME=$(basename "$SKILL_DIR")`);
+  lines.push(`    SKILL_VER=$( (cd "$SKILL_DIR" && git rev-parse --short HEAD 2>/dev/null) \\`);
+  lines.push(`      || (command -v jq >/dev/null && jq -r '.version // empty' "$SKILL_DIR/skill.json" 2>/dev/null) \\`);
+  lines.push(`      || (sha1sum "$SKILL_DIR/SKILL.md" 2>/dev/null | cut -c1-7) \\`);
+  lines.push(`      || echo unknown)`);
+  lines.push(`    [ -n "$SKILL_VER" ] || SKILL_VER=unknown`);
+  lines.push(`    curl -s -m 3 "$ORG_STUDIO_URL/api/skill-install-ping" \\`);
+  lines.push(`      -X POST -H 'content-type: application/json' \\`);
+  lines.push(`      -d "{\\"agentId\\":\\"$AGENT_ID\\",\\"skill\\":\\"$SKILL_NAME\\",\\"commitHash\\":\\"$SKILL_VER\\"}" \\`);
+  lines.push(`      >/dev/null 2>&1 || true`);
+  lines.push(`  done`);
+  lines.push(`done`);
   lines.push('```');
-  lines.push('This is fast and idempotent — if nothing changed, it\'s a no-op. The trailing `curl` pings Org Studio so we can verify skill freshness across the team; failures are silent and never block your session. See `references/api-reference.md` for endpoint schemas.');
+  lines.push('Idempotent and fast (one HTTP call per installed skill, 3-second timeout each). The `org-studio` skill is refreshed via `npx skills add` first; every other installed skill reports its current version so the Mission Control Skill Freshness widget shows per-skill drift across the team. Failures are silent and never block your session. See `references/api-reference.md` for endpoint schemas.');
   lines.push('');
 
   // Team roster

@@ -35,7 +35,9 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   const url = new URL(request.url);
-  const skill = url.searchParams.get('skill') || 'org-studio';
+  // #980 — default to ALL skills now (was 'org-studio'). Old callers passing
+  // ?skill=org-studio still work; ?skill=all explicit also works.
+  const skill = url.searchParams.get('skill') || 'all';
   const installs = await listInstalls({ skill });
   return NextResponse.json({ ok: true, installs });
 }
