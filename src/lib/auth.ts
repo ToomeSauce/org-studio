@@ -247,9 +247,18 @@ export function invalidateUserIdCache(): void {
   _userIdMapTs = 0;
 }
 
-/** Result of authenticateRequestWithContext — includes userId and auth method */
+/** Result of authenticateRequestWithContext — includes userId and auth method.
+ *
+ * NOTE: `userId` is intentionally `string | null`. For apikey and noauth, there
+ * is no real human owner — the global API key is shared infrastructure, and
+ * loopback dev mode has no logged-in user. Earlier versions hardcoded
+ * `userId: 'basil'` for both, which caused #1217 Bug B (comment authors
+ * silently rewritten to 'Basil' for any agent posting via Bearer token without
+ * an explicit `comment.author`). Callers that need a UI-display fallback may
+ * use `userId ?? 'basil'`, but ownership/attribution writes must NEVER do this.
+ */
 export interface AuthContext {
-  userId: string;
+  userId: string | null;
   method: 'session' | 'apikey' | 'noauth';
 }
 
@@ -318,14 +327,16 @@ export async function authenticateRequestWithContext(
     const authHeader = req.headers.get('authorization') || '';
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
     if (token === apiKey) {
-      // Global API key maps to the legacy owner (basil)
-      return { context: { userId: 'basil', method: 'apikey' } };
+      // Global API key has no human owner — userId is null. Callers that need
+      // a workspace-membership fallback should use `?? 'basil'` themselves.
+      // See #1217 Bug B for why hardcoding 'basil' here was wrong.
+      return { context: { userId: null, method: 'apikey' } };
     }
     return { error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) };
   }
 
-  // No auth configured — allow localhost dev mode (treat as basil for workspace purposes)
-  return { context: { userId: 'basil', method: 'noauth' } };
+  // No auth configured — allow localhost dev mode. No real user; null userId.
+  return { context: { userId: null, method: 'noauth' } };
 }
 
 /**

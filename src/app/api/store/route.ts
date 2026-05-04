@@ -8,6 +8,7 @@ import { syncRoadmapItemForTask } from '@/lib/roadmap-sync';
 import { checkArchivedProject } from '@/lib/archived-project-compat';
 import { getEffectiveOwner } from '@/lib/component-helpers';
 import { isTelegramCommsEnabled } from '@/lib/telegram-guard';
+import { validateAddComment, resolveCommentAuthor } from '@/lib/add-comment-validation';
 import {
   resolveWorkspaceContext,
   filterByWorkspace,
@@ -367,7 +368,10 @@ async function resolveRequestWorkspace(req: NextRequest): Promise<WorkspaceConte
   try {
     // Get auth context (includes userId for both session and Bearer)
     const authResult = await authenticateRequestWithContext(req);
-    const userId = authResult.context?.userId;
+    // #1217 Bug B fix: apikey/noauth now return userId=null. Fall back to
+    // 'basil' here for WORKSPACE-MEMBERSHIP purposes only — never for
+    // attribution. Comment author resolution lives in case 'addComment'.
+    const userId = authResult.context?.userId ?? 'basil';
     const wsResult = await resolveWorkspaceContext(req, userId);
     if (wsResult.error) return wsResult.error;
     if (wsResult.context) return wsResult.context;
@@ -401,11 +405,16 @@ export async function POST(req: NextRequest) {
   const authError = await authenticateRequest(req);
   if (authError) return authError;
 
-  // Resolve userId for this request (used to rewrite placeholder comment authors)
-  let requestUserId: string | undefined;
+  // Resolve userId + auth method for this request. userId is used to rewrite
+  // placeholder comment authors ('You' → teammate name); auth method gates
+  // whether the rewrite runs at all (#1217 Bug B — apikey/noauth must NOT
+  // rewrite, since the global API key has no real human owner).
+  let requestUserId: string | null | undefined;
+  let requestAuthMethod: 'session' | 'apikey' | 'noauth' | undefined;
   try {
     const authCtx = await authenticateRequestWithContext(req);
     requestUserId = authCtx.context?.userId;
+    requestAuthMethod = authCtx.context?.method;
   } catch { /* best-effort */ }
 
   // Resolve workspace context for this request
@@ -1505,6 +1514,14 @@ export async function POST(req: NextRequest) {
       }
 
       case 'addComment': {
+        // #1217 Bug A + B: empty-content guard + apikey-author guard.
+        // Pure validation lives in src/lib/add-comment-validation.ts so it
+        // can be unit-tested without booting Next.
+        const validation = validateAddComment(payload, requestAuthMethod);
+        if (!validation.ok) {
+          return NextResponse.json({ error: validation.error }, { status: validation.status });
+        }
+
         // Support both legacy { taskId, comment } and new { scope, comment } shapes
         const commentScope = payload.scope
           ? payload.scope
@@ -1527,29 +1544,16 @@ export async function POST(req: NextRequest) {
         const commentId = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
         const model = await resolveAgentModel(payload.comment?.author, store);
 
-        // Resolve placeholder author 'You' to the actual teammate name for the
-        // logged-in user. Otherwise mentions render as "💬 **You** mentioned you",
-        // which agents interpret as a self-test instead of a real user message.
-        // Multi-human-safe: always goes through session->teammate lookup, never
-        // hardcodes a name.
-        let resolvedAuthor = payload.comment?.author;
-        if (resolvedAuthor === 'You' || !resolvedAuthor) {
-          const teammates = store.settings?.teammates || [];
-          let matchedName: string | undefined;
-          if (requestUserId) {
-            const match = teammates.find((t: any) =>
-              t.id === requestUserId ||
-              t.agentId === requestUserId ||
-              t.name?.toLowerCase() === String(requestUserId).toLowerCase() ||
-              t.email?.toLowerCase() === String(requestUserId).toLowerCase()
-            );
-            if (match?.name) matchedName = match.name;
-          }
-          // Last resort: keep whatever userId the session gave us (better than
-          // 'You'). Only hits if the user is logged in but has no teammate
-          // record — they get labeled with their raw userId instead of a generic.
-          resolvedAuthor = matchedName || requestUserId || 'Unknown';
-        }
+        // #1217 Bug B fix: only the `session` auth method may rewrite a
+        // missing/'You' author into the logged-in user's teammate name. For
+        // apikey/noauth, the validator already guaranteed an explicit author
+        // (apikey) or we trust whatever the loopback caller sent (noauth).
+        const resolvedAuthor = resolveCommentAuthor(
+          payload.comment?.author,
+          requestAuthMethod,
+          requestUserId,
+          store.settings?.teammates || [],
+        );
 
         const comment = {
           id: commentId,

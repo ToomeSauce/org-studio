@@ -318,7 +318,14 @@ export function TaskDetailPanel({
     setTimeout(() => onDelete(task.id), 250);
   }, [task.id, onDelete, handleClose]);
 
-  const comments: TaskComment[] = task.comments || [];
+  // #1217: skip rendering rows where all three text fields are empty/whitespace.
+  // ~49 such rows existed at the time of the fix — demo seeds + a few real
+  // comments lost to the empty-body bug. Leaving the rows in place but
+  // hiding them in the UI avoids destructive cleanup.
+  const comments: TaskComment[] = (task.comments || []).filter((c: any) => {
+    const text = ((c?.content ?? '') + (c?.body ?? '') + (c?.text ?? '')).trim();
+    return text.length > 0;
+  });
   const statusHistory: { status: string; timestamp: number }[] = (task as any).statusHistory || [];
 
   return (
