@@ -504,7 +504,7 @@ describe('#1112 PR 5 — stacked per-component render shape', () => {
       ],
     };
     const primaryId = getPrimaryComponent(proj)!.id;
-    const tasks: Array<TaskLike & { title?: string }> = [
+    const tasks: Array<TaskLike & { title?: string; assignee?: string }> = [
       { id: 't1', title: 'Untagged legacy', projectId: 'p1', assignee: 'm', status: 'backlog' },
       { id: 't2', title: 'Main task', projectId: 'p1', sectionId: 'main', assignee: 'm', status: 'backlog' },
       { id: 't3', title: 'QA task', projectId: 'p1', sectionId: 'qa', assignee: 'b', status: 'backlog' },

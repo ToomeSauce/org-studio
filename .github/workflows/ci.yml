@@ -30,15 +30,28 @@ jobs:
         env:
           NEXT_PUBLIC_BUILD_SHA: ci-${{ github.sha }}
 
-  # Tests run in advisory mode for now — there are pre-existing failures
-  # (see follow-up ticket) and we don't want to gate PRs on them until that's
-  # cleaned up. Once the suite is green, drop continue-on-error to make this
-  # a gating check.
-  test:
-    name: test (advisory)
+  # Type check is gating now (#1145): test-file type drift is fixed and
+  # tsc is the cheapest way to keep mocks honest as types evolve.
+  typecheck:
+    name: typecheck (gating)
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: TypeScript --noEmit
+        run: npx tsc --noEmit
+
+  # Tests are gating as of #1145 — the suite is green and we want regressions
+  # to block PRs.
+  test:
+    name: test (gating)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

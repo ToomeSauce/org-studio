@@ -1,6 +1,7 @@
 /**
  * Tests for per-section metric computation
  */
+import { describe, test, expect } from 'vitest';
 import { computeSectionMetrics, SectionMetricsInput } from './metrics-section';
 
 const DAY = '2025-04-15';

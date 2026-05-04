@@ -3,6 +3,7 @@
  * Verifies FileStoreProvider and PostgresStoreProvider work correctly
  */
 
+import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { FileStoreProvider, PostgresStoreProvider, StoreProvider } from './store-provider';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -693,7 +694,6 @@ describe('StoreProvider Abstraction', () => {
 // Notification Router tests
 // ============================================================
 import { routeCommentNotifications, _resetDedupCache } from './notification-router';
-import { vi } from 'vitest';
 
 // Mock sendToAgent and rpc so no real network calls are made
 vi.mock('@/lib/runtimes/registry', () => ({
