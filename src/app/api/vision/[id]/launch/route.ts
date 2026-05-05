@@ -12,6 +12,7 @@ import { join } from 'path';
 import { rpc } from '@/lib/gateway-rpc';
 import { buildLaunchMessage } from '@/lib/vision-cron';
 import { getStoreProvider } from '@/lib/store-provider';
+import { ensureLaunchPreconditions } from '@/lib/launch-prep';
 
 export const dynamic = 'force-dynamic';
 
@@ -68,7 +69,23 @@ export async function POST(
       return NextResponse.json({ error: `Project ${projectId} not found` }, { status: 404 });
     }
 
+    // #1229: auto-mint plumbing on launch — mirror any missing rv-table
+    // rows from sections[].versions[] and stub a vision doc if absent.
+    // Idempotent; existing docs/rows untouched.
+    const prep = await ensureLaunchPreconditions(projectId, project);
+    if (!prep.ok) {
+      return NextResponse.json({ error: `launch-prep failed: ${prep.reason}` }, { status: 500 });
+    }
+    if (prep.mintedDoc) {
+      console.info(`[Vision Launch] minted stub vision doc for ${projectId}`);
+    }
+    if (prep.mintedVersions && prep.mintedVersions.length > 0) {
+      console.info(`[Vision Launch] mirrored rv rows for ${projectId}: ${prep.mintedVersions.join(', ')}`);
+    }
+
     // Check for VISION.md — try Postgres doc first, then filesystem
+    // (after launch-prep this should always pass when DATABASE_URL is set;
+    // file-store mode still falls through to disk).
     let hasDoc = false;
     try {
       const docRes = await fetch(`http://127.0.0.1:${process.env.PORT || 4501}/api/vision/${projectId}/doc`);

@@ -179,15 +179,94 @@ export async function promoteProjectToNextVersion(
   }
 
   // 5. All roadmap items must have taskIds
-  const versionRes = await client.query(
+  let versionRes = await client.query(
     `SELECT id, items FROM org_studio_roadmap_versions
      WHERE project_id = $1 AND version = $2 AND workspace_id = $3 LIMIT 1`,
     [projectId, targetVersion, wsId],
   );
-  if (versionRes.rows.length === 0) return noop('version row not found');
+  if (versionRes.rows.length === 0) {
+    // #1229: try to mirror from embedded sections[].versions[]/components[].versions[]
+    // before failing. Plumbing-only — doesn't invent items, just bridges the
+    // gap when a project was created without an rv-table row.
+    const componentsForMirror: any[] =
+      Array.isArray(projData.components) && projData.components.length > 0
+        ? projData.components
+        : Array.isArray(projData.sections)
+          ? projData.sections
+          : [];
+    let embedded: any = null;
+    let embeddedComponent: any = null;
+    for (const comp of componentsForMirror) {
+      const versions: any[] = Array.isArray(comp?.versions) ? comp.versions : [];
+      const match = versions.find((v: any) => v?.version === targetVersion);
+      if (match) {
+        embedded = match;
+        embeddedComponent = comp;
+        break;
+      }
+    }
+    if (!embedded) {
+      console.log(`[Promote] ${projectId}: ${targetVersion} not found in rv-table or embedded sections — nothing to mirror`);
+      return noop(`version ${targetVersion} not found in roadmap (rv-table or embedded)`);
+    }
+
+    const embeddedItems: any[] = Array.isArray(embedded?.items) ? embedded.items : [];
+    if (embeddedItems.length === 0) {
+      // Mirroring an empty version is pointless and would just re-fail in step 5.
+      // Surface the clearer error directly.
+      console.log(`[Promote] ${projectId}: ${targetVersion} has no roadmap items — cannot launch`);
+      return noop(`No roadmap items in target version ${targetVersion}. Add at least one item with a taskId before launching.`);
+    }
+
+    const itemsWithIds = embeddedItems.map((it: any) => {
+      if (it && typeof it === 'object' && !it.id) {
+        const newId = `item-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`;
+        return { ...it, id: newId };
+      }
+      return it;
+    });
+    const rvId = embedded?.id || `rv-${projectId}-${targetVersion.replace(/\./g, '-')}`;
+    const sortOrder =
+      typeof embedded?.sort_order === 'number'
+        ? embedded.sort_order
+        : 0;
+    const rvStatus = embedded?.status || 'planned';
+    const versionType = embedded?.version_type || embedded?.versionType || 'outcome';
+    const title = embedded?.title || targetVersion;
+    const owner = embedded?.owner || embeddedComponent?.owner || projData?.owner || projData?.devOwner || null;
+    const createdAt = typeof embedded?.createdAt === 'number' ? embedded.createdAt : Date.now();
+
+    try {
+      await client.query(
+        `INSERT INTO org_studio_roadmap_versions
+           (id, project_id, version, title, status, items, sort_order, created_at, version_type, workspace_id, owner)
+         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11)
+         ON CONFLICT (project_id, version) DO NOTHING`,
+        [rvId, projectId, targetVersion, title, rvStatus, JSON.stringify(itemsWithIds), sortOrder, createdAt, versionType, wsId, owner],
+      );
+      console.log(`[Promote] ${projectId}: mirrored embedded ${targetVersion} into rv-table (#1229)`);
+    } catch (mirrorErr: any) {
+      console.error(`[Promote] ${projectId}: rv-table mirror failed for ${targetVersion}:`, mirrorErr?.message);
+      return noop(`rv-table mirror failed: ${mirrorErr?.message}`);
+    }
+
+    versionRes = await client.query(
+      `SELECT id, items FROM org_studio_roadmap_versions
+       WHERE project_id = $1 AND version = $2 AND workspace_id = $3 LIMIT 1`,
+      [projectId, targetVersion, wsId],
+    );
+    if (versionRes.rows.length === 0) {
+      return noop('rv-table mirror succeeded but row still missing (concurrency?)');
+    }
+  }
 
   const versionRow = versionRes.rows[0];
   const items: any[] = versionRow.items || [];
+  if (items.length === 0) {
+    // Clearer error than the old draftItems-style noop.
+    console.log(`[Promote] ${projectId}: ${targetVersion} has no roadmap items — cannot launch`);
+    return noop(`No roadmap items in target version ${targetVersion}. Add at least one item with a taskId before launching.`);
+  }
   const draftItems = items.filter((i: any) => !i.taskId);
   if (draftItems.length > 0) {
     console.log(`[Promote] ${projectId}: ${targetVersion} has ${draftItems.length} item(s) without taskId`);
