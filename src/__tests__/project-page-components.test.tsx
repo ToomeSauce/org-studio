@@ -349,25 +349,22 @@ describe('getComponentVersions', () => {
 });
 
 describe('getComponentApprovedThrough', () => {
-  it('returns component.approvedThrough when set', () => {
+  it('returns max of component.approvedVersions when set', () => {
     const proj: ProjectLike = {
       id: 'p',
       name: 'P',
-      components: [{ id: 'main', name: 'Main', owner: 'M', approvedThrough: '0.5.0' }],
-      autonomy: { approvedThrough: '9.9.9' }, // ignored
+      components: [{ id: 'main', name: 'Main', owner: 'M', approvedVersions: ['0.5.0'] }],
     };
     expect(getComponentApprovedThrough(proj, 'main')).toBe('0.5.0');
   });
 
-  it('#1112 PR 6: no longer falls back to project.autonomy.approvedThrough (legacy shape is migrated away)', () => {
+  it('#1224: project.autonomy.approvedThrough is ignored — only component.approvedVersions[] counts', () => {
     const proj: ProjectLike = {
       id: 'p',
       name: 'P',
       components: [{ id: 'main', name: 'Main', owner: 'M' }],
-      autonomy: { approvedThrough: '0.5.0' },  // legacy — migration moved this onto the component
+      autonomy: { approvedThrough: '0.5.0' } as any,  // legacy stale data — ignored
     };
-    // Post-migration, the helper ignores the legacy field even when stale
-    // data still carries it.
     expect(getComponentApprovedThrough(proj, 'main')).toBeUndefined();
   });
 
@@ -379,7 +376,7 @@ describe('getComponentApprovedThrough', () => {
         { id: 'main', name: 'Main', owner: 'M' },
         { id: 'qa', name: 'QA', owner: 'B', role: 'qa' },
       ],
-      autonomy: { approvedThrough: '0.5.0' },
+      autonomy: { approvedThrough: '0.5.0' } as any,
     };
     expect(getComponentApprovedThrough(proj, 'qa')).toBeUndefined();
   });
@@ -419,7 +416,7 @@ describe('#1112 PR 5 — stacked per-component render shape', () => {
           id: 'main',
           name: 'Main',
           owner: 'M',
-          approvedThrough: '0.2.0',
+          approvedVersions: ['0.1.0', '0.2.0'],
           versions: [
             { version: '0.1.0', status: 'shipped' },
             { version: '0.2.0', status: 'current' },
@@ -430,7 +427,7 @@ describe('#1112 PR 5 — stacked per-component render shape', () => {
           name: 'QA',
           owner: 'B',
           role: 'qa',
-          approvedThrough: '0.1.0',
+          approvedVersions: ['0.1.0'],
           versions: [
             { version: '0.1.0', status: 'planned' },
             { version: '0.2.0', status: 'planned' },
@@ -453,13 +450,13 @@ describe('#1112 PR 5 — stacked per-component render shape', () => {
     expect(qaVersions.find((v) => v.version === '0.2.0')!.status).toBe('planned');
   });
 
-  it("each section's approvedThrough reflects its own component's banner (independent banners)", () => {
+  it("each section's approvedVersions reflects its own component's list (independent banners)", () => {
     const proj: ProjectLike = {
       id: 'p1',
       name: 'P',
       components: [
-        { id: 'main', name: 'Main', owner: 'M', approvedThrough: '0.2.0' },
-        { id: 'qa', name: 'QA', owner: 'B', role: 'qa', approvedThrough: '0.1.0' },
+        { id: 'main', name: 'Main', owner: 'M', approvedVersions: ['0.1.0', '0.2.0'] },
+        { id: 'qa', name: 'QA', owner: 'B', role: 'qa', approvedVersions: ['0.1.0'] },
       ],
     };
     expect(getComponentApprovedThrough(proj, 'main')).toBe('0.2.0');

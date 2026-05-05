@@ -60,28 +60,12 @@ function classifyTaskBlocker(
     ? (project as any).components
     : ((project as any).sections || []);
   const cmp = components.find((c: any) => c.id === task.sectionId);
-  const approvedVersions = Array.isArray(cmp?.approvedVersions) ? cmp.approvedVersions : [];
-  const approvedThrough = approvedVersions.length > 0 ? undefined : (cmp?.approvedThrough || cmp?.approved_through);
+  const approvedVersions: string[] = Array.isArray(cmp?.approvedVersions) ? cmp.approvedVersions : [];
 
-  const cmpVer = (a: string, b: string): number => {
-    const pa = String(a).replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
-    const pb = String(b).replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
-    const len = Math.max(pa.length, pb.length);
-    for (let i = 0; i < len; i++) {
-      const da = pa[i] ?? 0;
-      const db = pb[i] ?? 0;
-      if (da !== db) return da - db;
-    }
-    return 0;
-  };
-
-  if ((approvedVersions.length > 0 && !approvedVersions.includes(task.version)) ||
-      (approvedVersions.length === 0 && (!approvedThrough || cmpVer(task.version, approvedThrough) > 0))) {
+  if (approvedVersions.length === 0 || !approvedVersions.includes(task.version)) {
     return {
       reason: 'above-horizon',
-      label: `Above approval horizon (v${task.version}${
-        approvedThrough ? ' > v' + approvedThrough : ''
-      })`,
+      label: `Not approved (v${task.version})`,
       fixHref: `/projects/${project.id}?component=${task.sectionId}`,
       fixLabel: 'Advance horizon',
     };

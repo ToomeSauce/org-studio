@@ -277,9 +277,9 @@ export function generateOrgMd(ctx: OrgContext, forAgentId?: string): string {
   // Versioning & approval horizon — shared rule
   lines.push('## Versions & Approval Horizon');
   lines.push('- **Versions are CalVer: `YYYY.MM.DD` or `YYYY.MM.DD.N` for same-day hotfixes** (e.g. `2026.04.22`, `2026.04.22.1`). Legacy SemVer versions (`MAJOR.MINOR.PATCH`) are still valid for older entries. No `v` prefix — storage and display match exactly.');
-  lines.push('- **Approval horizon = `project.autonomy.approvedThrough`.** A single version string per project (CalVer or SemVer).');
-  lines.push('- **You may execute any task whose version ≤ `approvedThrough`.** You must not pull, plan, or work on tasks above the horizon — ever.');
-  lines.push('- **Only humans move the horizon.** When the current version\'s tasks all ship, the next planned version automatically promotes to `current` and its tasks land in backlog — but only if that next version is still ≤ horizon. If it would cross the horizon, the system stops. You wait for a human to bump `approvedThrough` before touching new work.');
+  lines.push('- **Approval is per-component, per-version, set membership.** Each component has an `approvedVersions[]` list. A task is dispatch-eligible only if its `version` is in that list — no contiguous-prefix rule, no “≤ banner” shortcut.');
+  lines.push('- **You may execute any task whose `(component, version)` pair is approved.** You must not pull, plan, or work on tasks whose version isn\'t ticked — ever.');
+  lines.push('- **Only humans approve versions.** When the current version ships, the next planned version auto-promotes to `current` and its tasks land in backlog — but only if that version is in `approvedVersions[]`. If the next planned version isn\'t approved, the system stops. You wait for a human to tick the box.');
   lines.push('- **In-progress and QA work is grandfathered.** If you started a task while it was approved, finish it even if the horizon doesn\'t move.');
   lines.push('- See `docs/decisions/2026-04-22-calver-migration.md` for the full contract.');
   lines.push('');

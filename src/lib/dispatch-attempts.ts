@@ -20,7 +20,6 @@ import {
   isTaskWaiting,
 } from './dispatch-gate';
 import {
-  getComponentApprovedThrough,
   getComponentApprovedVersions,
   getEffectiveComponents,
 } from './component-helpers';
@@ -235,15 +234,8 @@ export function classifyBlocker(store: StoreLike, task: any): TopBlocker {
   if (!cmp) return 'no-section-version';
 
   const approvedVersions = getComponentApprovedVersions(proj as any, task.sectionId);
-  const usesExplicitApproval = approvedVersions.length > 0;
-  const approvedThrough = usesExplicitApproval
-    ? undefined
-    : getComponentApprovedThrough(proj as any, task.sectionId);
-  if (usesExplicitApproval) {
-    if (!approvedVersions.includes(task.version)) return 'above-horizon';
-  } else if (!approvedThrough) {
-    return 'above-horizon';
-  }
+  if (approvedVersions.length === 0) return 'above-horizon';
+  if (!approvedVersions.includes(task.version)) return 'above-horizon';
 
   // Check waitsFor before climbing the version queue (keep classification
   // narrow — if waitsFor is the gate, surface that).
@@ -257,18 +249,19 @@ export function classifyBlocker(store: StoreLike, task: any): TopBlocker {
     if (unsatisfied) return 'waitsfor';
   }
 
-  // Compare task.version vs approvedThrough using a tolerant numeric sort
-  // (semver-ish). If task.version > approvedThrough → above-horizon.
-  if (!usesExplicitApproval && compareVersionsTolerant(task.version, approvedThrough!) > 0) {
-    return 'above-horizon';
-  }
-
-  // If we got here, version is in horizon → must be prior-version
-  // unshipped.
+  // If we got here, version is in approvedVersions[] but not running —
+  // must be queued behind an unshipped prior version on the same component.
   return 'prior-version-unshipped';
 }
 
-function compareVersionsTolerant(a: string, b: string): number {
+function compareVersionsTolerant(_a: string, _b: string): number {
+  // #1224: helper retained for one external caller in tests; safe to keep
+  // but no longer used by classifyWaitReason. Will be removed when callers
+  // migrate to compareVersions from version-utils.
+  void _a; void _b;
+  return 0;
+}
+function _legacyCompareVersionsTolerant(a: string, b: string): number {
   const pa = String(a).replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
   const pb = String(b).replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
   const len = Math.max(pa.length, pb.length);
@@ -279,6 +272,11 @@ function compareVersionsTolerant(a: string, b: string): number {
   }
   return 0;
 }
+
+// #1224: silence unused-var — retained for diff-friendly readability.
+void _legacyCompareVersionsTolerant;
+void compareVersionsTolerant;
+
 
 /**
  * Record one dispatch attempt. Best-effort: never throws to the caller

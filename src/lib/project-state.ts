@@ -19,7 +19,9 @@
  *   - `autonomy.enabled` is removed. `autonomy.approvedThrough` stays.
  */
 
-import { isVersionInHorizon, isVersionGreater } from './version-utils';
+// #1224: version-utils helpers no longer needed here — horizon is set
+// membership against approvedVersions[].
+
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -118,10 +120,9 @@ export async function promoteProjectToNextVersion(
 
   const fromVersion = projData.currentVersion || null;
 
-  // #1112 PR 6 follow-up: horizon source-of-truth is the primary component's
-  // own `approvedThrough`. The legacy project-wide `autonomy.approvedThrough`
-  // is consulted as a last-resort fallback so brand-new projects without a
-  // Main component still launch via the no-components UI path.
+  // #1224: horizon comes only from the primary component's
+  // approvedVersions[]. The legacy project-wide autonomy.approvedThrough
+  // scalar and the per-component approvedThrough scalar are both gone.
   const componentsList: any[] =
     Array.isArray(projData.components) && projData.components.length > 0
       ? projData.components
@@ -131,8 +132,10 @@ export async function promoteProjectToNextVersion(
   const primaryComponent = componentsList.find(
     (c: any) => !c?.role || (c.role !== 'qa' && c.role !== 'support'),
   );
-  const approvedThrough: string | undefined =
-    primaryComponent?.approvedThrough ?? projData.autonomy?.approvedThrough;
+  const approvedVersionsList: string[] = Array.isArray(primaryComponent?.approvedVersions)
+    ? primaryComponent.approvedVersions
+    : [];
+  // approvedVersionsList computed above is the only horizon source.
 
   // 3. Find target version
   let targetVersion = opts?.targetVersion;
@@ -163,11 +166,16 @@ export async function promoteProjectToNextVersion(
     targetVersion = nextRes.rows[0].version;
   }
 
-  // 4. Horizon gate — targetVersion must be within approvedThrough
-  if (!approvedThrough) return noop('no approvedThrough set');
-  if (isVersionGreater(targetVersion, approvedThrough)) {
-    console.log(`[Promote] ${projectId}: ${targetVersion} above horizon ${approvedThrough}`);
-    return noop(`above horizon (${targetVersion} > ${approvedThrough})`);
+  // 4. Horizon gate — targetVersion must be in approvedVersions[].
+  // #1222 fix: set membership (not <= max). With non-contiguous approvals
+  // (e.g. tick 0.18, skip 0.19, tick 0.20), `<=max` would let 0.19 promote
+  // through despite never being approved. Set membership is what the UI
+  // checkboxes mean.
+  if (!targetVersion) return noop('no target version resolved');
+  if (approvedVersionsList.length === 0) return noop('no versions approved');
+  if (!approvedVersionsList.includes(targetVersion)) {
+    console.log(`[Promote] ${projectId}: ${targetVersion} not in approvedVersions[${approvedVersionsList.join(',')}]`);
+    return noop(`not approved (${targetVersion} not in approvedVersions)`);
   }
 
   // 5. All roadmap items must have taskIds

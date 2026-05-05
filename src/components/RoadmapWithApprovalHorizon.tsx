@@ -118,7 +118,6 @@ interface RoadmapVersion {
 interface Project {
   id: string;
   autonomy?: {
-    approvedThrough?: string | null;
     [key: string]: any;
   };
   currentVersion?: string;
@@ -153,17 +152,15 @@ interface RoadmapWithApprovalHorizonProps {
    */
   componentId?: string;
   /**
-   * The component object itself — used to read its own `approvedThrough` /
-   * `approvedVersions` without re-traversing `project.components[]` on every
-   * render. Required when `componentId` is set; ignored otherwise.
+   * The component object itself — used to read its own `approvedVersions[]`
+   * without re-traversing `project.components[]` on every render. Required
+   * when `componentId` is set; ignored otherwise.
    *
-   * #1188: now also carries `approvedVersions[]` (explicit list).
    * #1216: also reads `owner` so the per-version owner editor can render the
    * "(inherited)" hint when version.owner === component.owner.
    */
   component?: {
     id: string;
-    approvedThrough?: string | null;
     approvedVersions?: string[];
     owner?: string;
     [key: string]: any;
@@ -250,18 +247,8 @@ export function RoadmapWithApprovalHorizon({
       console.error('Failed to update version owner:', e);
       setOptimisticVersionOwners(prev);
     }
-  };  // #1112 PR 6 follow-up: source of truth depends on scope. When this
-  // instance is bound to a component, read its own `approvedThrough`. Else
-  // fall back to legacy project-level (used for the no-components fallback
-  // render in page.tsx).
-  const scopedApproval = componentId
-    ? (component?.approvedThrough ?? null)
-    : (project.autonomy?.approvedThrough ?? null);
-
-  // #1188: explicit approved-versions list. When present, drives per-version
-  // checkbox state. When absent (no list yet — brand new project, or legacy
-  // project pre-migration), falls back to building a list from the legacy
-  // `approvedThrough` prefix string.
+  };  // #1224: source of truth is component.approvedVersions[]. The legacy
+  // project-level autonomy.approvedThrough scalar is gone.
   const propApprovedVersions: string[] = (() => {
     if (componentId && Array.isArray(component?.approvedVersions)) {
       return component!.approvedVersions!;
@@ -274,25 +261,16 @@ export function RoadmapWithApprovalHorizon({
       ? optimisticApprovedVersions
       : propApprovedVersions;
 
-  // Keep `approvedThrough` available for legacy display (e.g. the "approved
-  // through vX.Y.Z" caption shown elsewhere). Derived from the list when set;
-  // falls back to the scoped string for legacy projects.
+  // Single "approved through" string for caption display = max of the list.
   const approvedThrough: string | null =
     approvedVersionsList.length > 0
       ? approvedVersionsList.reduce((best, v) =>
           compareVersions(v, best) > 0 ? v : best,
         )
-      : scopedApproval;
+      : null;
 
-  const isVersionApproved = (versionStr: string): boolean => {
-    // List takes precedence when present.
-    if (approvedVersionsList.length > 0) {
-      return approvedVersionsList.includes(versionStr);
-    }
-    // Legacy fallback: contiguous prefix up to the string banner.
-    if (!scopedApproval) return false;
-    return compareVersions(versionStr, scopedApproval) <= 0;
-  };
+  const isVersionApproved = (versionStr: string): boolean =>
+    approvedVersionsList.includes(versionStr);
 
   // Sync optimistic state back to prop when it catches up
   useEffect(() => {
@@ -406,44 +384,30 @@ export function RoadmapWithApprovalHorizon({
   };
 
   /**
-   * #1188: persist a new approvedVersions[] list to the component.
+   * #1224: persist a new approvedVersions[] list to the component.
    *
    * Optimistic-first: updates UI state immediately, fires the API write in
-   * the background, reverts on failure. Empty array clears approval entirely
-   * (both `approvedVersions` and legacy `approvedThrough` are dropped).
+   * the background, reverts on failure. Empty array clears approval entirely.
    *
-   * Falls back to legacy `approvedThrough` write when this instance isn't
-   * bound to a component (brand-new project with no Main component yet).
+   * When this instance isn't bound to a component (brand-new project with
+   * no Main component yet), the action is a no-op — there's no longer a
+   * project-level approval scalar to fall back to.
    */
   const persistApprovedVersions = (next: string[]) => {
     setOptimisticApprovedVersions(next);
 
-    // Pick write path based on scope.
-    const body = componentId
-      ? {
-          action: 'updateComponent',
-          projectId,
-          componentId,
-          updates: { approvedVersions: next },
-        }
-      : {
-          // Pre-component fallback: keep using legacy project-wide string.
-          // We collapse the list to its max() so the server still sees a
-          // single approvedThrough value.
-          action: 'updateProject',
-          id: projectId,
-          updates: {
-            autonomy: {
-              ...project.autonomy,
-              approvedThrough:
-                next.length === 0
-                  ? null
-                  : next.reduce((best, v) =>
-                      compareVersions(v, best) > 0 ? v : best,
-                    ),
-            },
-          },
-        };
+    if (!componentId) {
+      // No-op: project has no component to attach approval to. The user
+      // must add a Main component first.
+      return;
+    }
+
+    const body = {
+      action: 'updateComponent',
+      projectId,
+      componentId,
+      updates: { approvedVersions: next },
+    };
 
     fetch('/api/store', {
       method: 'POST',
@@ -457,27 +421,10 @@ export function RoadmapWithApprovalHorizon({
   };
 
   /**
-   * #1188: toggle a single version's approval. If the list is currently
-   * empty AND this is a legacy project (only `approvedThrough` set), we
-   * first materialize the legacy prefix as an explicit list, then toggle.
-   * This makes the first checkbox click "upgrade" the project to the new
-   * model losslessly.
+   * #1224: toggle a single version's approval (set membership).
    */
   const toggleVersionApproval = (versionStr: string) => {
-    let baseList: string[];
-    if (approvedVersionsList.length > 0) {
-      baseList = [...approvedVersionsList];
-    } else if (scopedApproval) {
-      // Legacy: materialize prefix from sorted planned+current+shipped versions.
-      // We use sortedVersions (already in sort order) and pick everything
-      // <= scopedApproval that the user already had implicit approval for.
-      baseList = sortedVersions
-        .filter((v) => compareVersions(v.version, scopedApproval) <= 0)
-        .map((v) => v.version);
-    } else {
-      baseList = [];
-    }
-
+    const baseList = [...approvedVersionsList];
     const idx = baseList.indexOf(versionStr);
     if (idx >= 0) {
       baseList.splice(idx, 1);

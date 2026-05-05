@@ -323,7 +323,14 @@ export async function checkAndAutoAdvance(
         ? JSON.parse(projResult.rows[0].data)
         : projResult.rows[0].data || {};
 
-    const approvedThrough: string | undefined = projData.autonomy?.approvedThrough;
+    const approvedVersionsList: string[] = (() => {
+      // #1224: derive from primary component's approvedVersions[] only.
+      const comps: any[] = Array.isArray(projData.components) && projData.components.length > 0
+        ? projData.components
+        : Array.isArray(projData.sections) ? projData.sections : [];
+      const primary = comps.find((c: any) => !c?.role || (c.role !== 'qa' && c.role !== 'support'));
+      return Array.isArray(primary?.approvedVersions) ? primary.approvedVersions : [];
+    })();
 
     // 3a. #1191 — Telegram nudge to vision owner: "✅ vX shipped on <project>. Approve next?"
     // Fire-and-forget; idempotency key keyed off project+version so duplicate
@@ -353,13 +360,13 @@ export async function checkAndAutoAdvance(
       return;
     }
 
-    // 4. No horizon = nothing is approved.
+    // 4. No approvals = nothing to advance to.
     // #1187: auto-deactivate REMOVED. Project state is user-controlled only.
     // We log and return; the project stays active until the user explicitly
     // deactivates from the UI.
-    if (!approvedThrough) {
+    if (approvedVersionsList.length === 0) {
       console.log(
-        `[AutoAdvance] ${projectId}: no approvedThrough set — shipped ${current.version}, awaiting user approval to continue`,
+        `[AutoAdvance] ${projectId}: no versions approved — shipped ${current.version}, awaiting user approval to continue`,
       );
       return;
     }

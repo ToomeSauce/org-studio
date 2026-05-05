@@ -1253,11 +1253,17 @@ export async function POST(req: NextRequest) {
         await getStoreProvider().updateProject(payload.id, payload.updates);
         console.log('[API:store:updateProject] completed for', payload.id);
 
-        // When approvedThrough changes, check if a shipped version can now advance.
-        // This closes the gap where auto-advance stopped at the horizon ceiling,
-        // and a later horizon bump had no re-trigger.
-        const newApproved = payload.updates?.autonomy?.approvedThrough;
-        const oldApproved = oldProject?.autonomy?.approvedThrough;
+        // #1224: project-level autonomy.approvedThrough was a legacy bridge
+        // when approvals were a single scalar. Now approvals live as
+        // per-component approvedVersions[]. Strip any incoming scalar (the UI
+        // no longer writes it; this is just defense-in-depth) and skip the
+        // cascade — component-level updates fire their own promote retrigger
+        // via `updateComponent`.
+        if (payload.updates?.autonomy && 'approvedThrough' in payload.updates.autonomy) {
+          delete (payload.updates.autonomy as any).approvedThrough;
+        }
+        const newApproved: string | undefined = undefined;
+        const oldApproved: string | undefined = undefined;
         if (newApproved && newApproved !== oldApproved) {
           console.log(`[ApprovedThrough] ${payload.id}: ${oldApproved || 'null'} → ${newApproved}`);
           // Fire-and-forget: attempt promote if there's a shipped current version
@@ -1397,41 +1403,22 @@ export async function POST(req: NextRequest) {
         }
 
         const oldComp = comps[compIdx];
-        const oldApprovedThrough = oldComp?.approvedThrough ?? null;
         const oldApprovedVersionsKey = JSON.stringify(
           Array.isArray(oldComp?.approvedVersions) ? [...oldComp.approvedVersions].sort() : null,
         );
         const newComp = { ...oldComp, ...compUpdates };
-        // Normalize: explicit null clears the field rather than persisting null.
-        if (compUpdates.approvedThrough === null) {
-          delete newComp.approvedThrough;
-        }
-        // #1188: when approvedVersions is set, mirror max() to approvedThrough
-        // so legacy callers (still reading the string field) see a consistent
-        // value. Empty array → clear both fields.
+        // #1224: approvedThrough is dead. Strip any incoming/leftover scalar
+        // so it never persists to storage. The single source of truth for
+        // approval is approvedVersions[].
+        delete newComp.approvedThrough;
         if ('approvedVersions' in compUpdates) {
           const list: string[] = Array.isArray(compUpdates.approvedVersions)
             ? compUpdates.approvedVersions
             : [];
           if (list.length === 0) {
             delete newComp.approvedVersions;
-            delete newComp.approvedThrough;
           } else {
-            // numeric-aware max
-            const max = list.reduce((best, v) => {
-              const ap = best.split('.').map((s) => parseInt(s, 10));
-              const bp = v.split('.').map((s) => parseInt(s, 10));
-              const len = Math.max(ap.length, bp.length);
-              for (let i = 0; i < len; i++) {
-                const a = Number.isFinite(ap[i]) ? ap[i] : 0;
-                const b = Number.isFinite(bp[i]) ? bp[i] : 0;
-                if (a < b) return v;
-                if (a > b) return best;
-              }
-              return best;
-            }, list[0]);
             newComp.approvedVersions = list;
-            newComp.approvedThrough = max;
           }
         }
         comps[compIdx] = newComp;
@@ -1443,18 +1430,15 @@ export async function POST(req: NextRequest) {
         );
 
         // Promote re-trigger when component approval moves.
-        // #1188: also fires when `approvedVersions` changes (per-version checkbox
-        // toggles), not just legacy `approvedThrough`.
-        const newApprovedThrough = newComp.approvedThrough ?? null;
+        // #1224: only approvedVersions[] is consulted now.
         const newApprovedVersionsKey = JSON.stringify(
           Array.isArray(newComp?.approvedVersions) ? [...newComp.approvedVersions].sort() : null,
         );
         const horizonChanged =
-          ('approvedThrough' in compUpdates && newApprovedThrough !== oldApprovedThrough) ||
-          ('approvedVersions' in compUpdates && newApprovedVersionsKey !== oldApprovedVersionsKey);
+          'approvedVersions' in compUpdates && newApprovedVersionsKey !== oldApprovedVersionsKey;
         if (horizonChanged) {
           console.log(
-            `[ComponentApproval] ${projectId}/${targetComponentId}: ${oldApprovedThrough || 'null'} → ${newApprovedThrough || 'null'}`,
+            `[ComponentApproval] ${projectId}/${targetComponentId}: approvedVersions ${oldApprovedVersionsKey} → ${newApprovedVersionsKey}`,
           );
           // Fire-and-forget promote against this project. promoteProjectToNextVersion
           // walks every component (post follow-up) and advances any whose horizon

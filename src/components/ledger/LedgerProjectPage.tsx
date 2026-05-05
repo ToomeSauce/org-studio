@@ -579,7 +579,28 @@ function VisionAndGuardrails({ project, projectId }: { project: any; projectId: 
   const guardrails: string[] = (project.guardrails || []).filter(Boolean);
   const cadence = autonomy.cadence;
   const approvalMode = autonomy.approvalMode;
-  const approvedThrough = autonomy.approvedThrough;
+  // #1224: derive ledger "through" string from primary component's
+  // approvedVersions[] (max). Project-level autonomy.approvedThrough is gone.
+  const approvedThrough: string | undefined = (() => {
+    const comps: any[] = (project as any).components?.length
+      ? (project as any).components
+      : ((project as any).sections || []);
+    const primary = comps.find((c: any) => !c?.role || (c.role !== 'qa' && c.role !== 'support'));
+    const list: string[] = Array.isArray(primary?.approvedVersions) ? primary.approvedVersions : [];
+    if (list.length === 0) return undefined;
+    return list.reduce((best, v) => {
+      const ap = best.split('.').map((s: string) => parseInt(s, 10));
+      const bp = v.split('.').map((s: string) => parseInt(s, 10));
+      const len = Math.max(ap.length, bp.length);
+      for (let i = 0; i < len; i++) {
+        const a = Number.isFinite(ap[i]) ? ap[i] : 0;
+        const b = Number.isFinite(bp[i]) ? bp[i] : 0;
+        if (a < b) return v;
+        if (a > b) return best;
+      }
+      return best;
+    }, list[0]);
+  })();
 
   // Fetch the project's full vision document from Postgres-backed
   // /api/vision/[id]/doc. Falls back gracefully — a missing doc is

@@ -38,7 +38,7 @@ function mkLegacySectionsProject(overrides: Partial<ProjectFixture> = {}): Proje
         id: 'sec-main-proj-garage',
         name: 'Main',
         owner: 'Gem',
-        approvedThrough: '1.20.0',
+        approvedVersions: ['1.19.0', '1.20.0'],
         versions: [
           { version: '1.19.0', status: 'shipped' },
           { version: '1.20.0', status: 'current' },

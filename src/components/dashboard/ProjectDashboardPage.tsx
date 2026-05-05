@@ -501,28 +501,23 @@ function ProjectDashboardPageInner() {
 
   const launchTarget = useMemo<any | null>(() => {
     if (!project) return null;
-    if (primaryComponent) {
-      const horizon = getComponentApprovedThrough(project as any, primaryComponent.id);
-      if (!horizon) return null;
-      const compVers = (getComponentVersions(project as any, primaryComponent.id) as any[]) || [];
-      const sortedCompVers = [...compVers].sort((a, b) =>
-        compareVersions(a.version, b.version)
-      );
-      return (
-        sortedCompVers.find(
-          (v) => v.status !== 'shipped' && isVersionInHorizon(v.version, horizon)
-        ) || null
-      );
-    }
-    // Pre-component fallback: project-level horizon over the active stream.
-    const legacyHorizon = (project as any)?.autonomy?.approvedThrough;
-    if (!legacyHorizon) return null;
+    if (!primaryComponent) return null;
+    // #1224: launch target = first unshipped version on the primary
+    // component that's in approvedVersions[]. No project-level fallback.
+    const approved: string[] = Array.isArray((primaryComponent as any).approvedVersions)
+      ? (primaryComponent as any).approvedVersions
+      : [];
+    if (approved.length === 0) return null;
+    const compVers = (getComponentVersions(project as any, primaryComponent.id) as any[]) || [];
+    const sortedCompVers = [...compVers].sort((a, b) =>
+      compareVersions(a.version, b.version)
+    );
     return (
-      sortedCompVersions.find(
-        (v) => v.status !== 'shipped' && isVersionInHorizon(v.version, legacyHorizon)
+      sortedCompVers.find(
+        (v) => v.status !== 'shipped' && approved.includes(v.version),
       ) || null
     );
-  }, [project, primaryComponent, sortedCompVersions]);
+  }, [project, primaryComponent]);
 
   // #1185 rename: 'stopped' → 'inactive'. Accept both during transition.
   const projectStopped =

@@ -22,7 +22,7 @@ function mkProject(overrides: any = {}) {
       {
         id: 'cmp-main',
         name: 'Main',
-        approvedThrough: '0.2.0',
+        approvedVersions: ['0.1.0', '0.2.0'],
         versions: [
           { version: '0.1.0', status: 'shipped' },
           { version: '0.2.0', status: 'planned' },
@@ -93,9 +93,9 @@ describe('isTaskDispatchEligible — Rule 3 (approval banner)', () => {
     expect(isTaskDispatchEligible(store, mkTask({ version: '0.3.0' }))).toBe(false);
   });
 
-  it('NOT eligible when component has no approvedThrough', () => {
+  it('NOT eligible when component has no approvedVersions', () => {
     const proj = mkProject();
-    proj.components[0].approvedThrough = undefined;
+    proj.components[0].approvedVersions = [];
     const store = { projects: [proj], tasks: [] };
     expect(isTaskDispatchEligible(store, mkTask())).toBe(false);
   });
@@ -106,13 +106,13 @@ describe('isTaskDispatchEligible — Rule 3 (approval banner)', () => {
         {
           id: 'cmp-main',
           name: 'Main',
-          approvedThrough: '0.2.0',
+          approvedVersions: ['0.2.0', '0.1.0'],
           versions: [{ version: '0.2.0', status: 'planned' }, { version: '0.3.0', status: 'planned' }],
         },
         {
           id: 'cmp-qa',
           name: 'QA',
-          approvedThrough: '0.1.0',
+          approvedVersions: ['0.1.0'],
           versions: [{ version: '0.1.0', status: 'planned' }, { version: '0.2.0', status: 'planned' }],
         },
       ],
@@ -136,13 +136,13 @@ describe('isTaskDispatchEligible — Rule 4 (waitsFor)', () => {
         {
           id: 'cmp-main',
           name: 'Main',
-          approvedThrough: '0.2.0',
+          approvedVersions: ['0.2.0', '0.2.0'],
           versions: [{ version: '0.2.0', status: 'planned' }],
         },
         {
           id: 'cmp-qa',
           name: 'QA',
-          approvedThrough: '0.2.0',
+          approvedVersions: ['0.2.0'],
           versions: [
             { version: '0.2.0', status: 'planned', waitsFor: { componentId: 'cmp-main', version: '0.2.0' } },
           ],
@@ -159,13 +159,13 @@ describe('isTaskDispatchEligible — Rule 4 (waitsFor)', () => {
         {
           id: 'cmp-main',
           name: 'Main',
-          approvedThrough: '0.2.0',
+          approvedVersions: ['0.2.0', '0.2.0'],
           versions: [{ version: '0.2.0', status: 'shipped' }],
         },
         {
           id: 'cmp-qa',
           name: 'QA',
-          approvedThrough: '0.2.0',
+          approvedVersions: ['0.2.0'],
           versions: [
             { version: '0.2.0', status: 'planned', waitsFor: { componentId: 'cmp-main', version: '0.2.0' } },
           ],
@@ -248,13 +248,13 @@ describe('isTaskWaiting', () => {
         {
           id: 'cmp-main',
           name: 'Main',
-          approvedThrough: '0.2.0',
+          approvedVersions: ['0.2.0', '0.2.0'],
           versions: [{ version: '0.2.0', status: 'planned' }],
         },
         {
           id: 'cmp-qa',
           name: 'QA',
-          approvedThrough: '0.2.0',
+          approvedVersions: ['0.2.0'],
           versions: [
             { version: '0.2.0', status: 'planned', waitsFor: { componentId: 'cmp-main', version: '0.2.0' } },
           ],
@@ -459,7 +459,7 @@ describe('#1189 getEligibleBacklogFifo — single FIFO queue', () => {
         {
           id: 'cmp-main',
           name: 'Main',
-          approvedThrough: '0.2.0',
+          approvedVersions: ['0.1.0', '0.2.0'],
           versions: [
             { version: '0.1.0', status: 'shipped' },
             { version: '0.2.0', status: 'planned' },
@@ -580,13 +580,10 @@ describe('#1212 isTaskDispatchEligible — explicit approvedVersions[] set membe
     expect(isTaskDispatchEligible(store, mkTask({ version: '0.9.15' }))).toBe(false);
   });
 
-  it('legacy approvedThrough (no approvedVersions[]) preserves contiguous-prefix behavior', () => {
-    // Default mkProject uses approvedThrough='0.2.0' with no approvedVersions[].
-    const store = { projects: [mkProject()], tasks: [] };
-    expect(isTaskDispatchEligible(store, mkTask({ version: '0.1.0' }))).toBe(true);
-    expect(isTaskDispatchEligible(store, mkTask({ version: '0.2.0' }))).toBe(true);
-    expect(isTaskDispatchEligible(store, mkTask({ version: '0.3.0' }))).toBe(false);
-  });
+  // #1224: "legacy approvedThrough preserves contiguous-prefix behavior"
+  // test removed — the legacy fallback no longer exists. The default
+  // mkProject fixture has been migrated to approvedVersions[].
+
 
   it('Rule 5 with explicit list: skipping v0.9.13 (not approved) does NOT block v0.9.16 when v0.9.12 is shipped', () => {
     const proj = mkProjectExplicit(

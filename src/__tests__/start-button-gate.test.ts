@@ -49,7 +49,7 @@ describe('Start button gate — hasAnyApprovedUnshippedWork', () => {
           {
             id: 'cmp-main',
             name: 'Main',
-            approvedThrough: '0.3.0',
+            approvedVersions: ['0.1.0', '0.2.0', '0.3.0'],
             versions: [
               { version: '0.1.0', status: 'shipped' },
               { version: '0.2.0', status: 'shipped' },
@@ -70,7 +70,7 @@ describe('Start button gate — hasAnyApprovedUnshippedWork', () => {
           {
             id: 'cmp-main',
             name: 'Main',
-            approvedThrough: '0.2.0',
+            approvedVersions: ['0.1.0', '0.2.0'],
             versions: [
               { version: '0.1.0', status: 'shipped' },
               { version: '0.2.0', status: 'shipped' },
@@ -80,7 +80,7 @@ describe('Start button gate — hasAnyApprovedUnshippedWork', () => {
             id: 'cmp-qa',
             name: 'QA',
             role: 'qa',
-            approvedThrough: '0.2.0',
+            approvedVersions: ['0.1.0', '0.2.0'],
             versions: [
               { version: '0.1.0', status: 'shipped' },
               { version: '0.2.0', status: 'current' }, // ← QA still validating
@@ -99,7 +99,7 @@ describe('Start button gate — hasAnyApprovedUnshippedWork', () => {
           {
             id: 'cmp-main',
             name: 'Main',
-            approvedThrough: '0.2.0',
+            approvedVersions: ['0.1.0', '0.2.0'],
             versions: [
               { version: '0.1.0', status: 'shipped' },
               { version: '0.2.0', status: 'shipped' },
@@ -110,7 +110,7 @@ describe('Start button gate — hasAnyApprovedUnshippedWork', () => {
             id: 'cmp-qa',
             name: 'QA',
             role: 'qa',
-            approvedThrough: '0.2.0',
+            approvedVersions: ['0.1.0', '0.2.0'],
             versions: [
               { version: '0.1.0', status: 'shipped' },
               { version: '0.2.0', status: 'shipped' },
@@ -206,7 +206,7 @@ describe('Thrivor regression — QA cycle should enable Start', () => {
         {
           id: 'cmp-main',
           name: 'Main',
-          approvedThrough: '0.908.1',
+          approvedVersions: ['0.1.0', '0.908.1'],
           versions: [
             { version: '0.1.0', status: 'shipped' },
             { version: '0.908.1', status: 'shipped' },
@@ -216,7 +216,7 @@ describe('Thrivor regression — QA cycle should enable Start', () => {
           id: 'cmp-qa',
           name: 'QA',
           role: 'qa',
-          approvedThrough: '0.908.1',
+          approvedVersions: ['0.1.0', '0.2.0', '0.9.0', '0.908.1'],
           versions: [
             { version: '0.1.0', status: 'shipped' },
             { version: '0.2.0', status: 'shipped' },

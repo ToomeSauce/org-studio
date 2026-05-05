@@ -1,11 +1,12 @@
 /**
- * Tests for #1186 — `approvedVersions` (explicit list) replacing
- * `approvedThrough` (contiguous-prefix string).
+ * Tests for #1224 — `approvedVersions[]` (explicit list) is the only
+ * source of truth for per-component approval. The legacy `approvedThrough`
+ * scalar (and its contiguous-prefix semantics) was removed in this ticket.
  *
- * Verifies the transitional helpers in component-helpers.ts:
- *   - getComponentApprovedThrough() → max() of approvedVersions when present
- *   - getComponentApprovedVersions() → returns the list (or [] if legacy-only)
- *   - isVersionApproved() → list-includes when present, prefix-fallback otherwise
+ * Verifies the helpers in component-helpers.ts:
+ *   - getComponentApprovedThrough() → max() of approvedVersions, or undefined
+ *   - getComponentApprovedVersions() → returns the list (or [] when unset)
+ *   - isVersionApproved() → set membership against approvedVersions[]
  */
 
 import { describe, it, expect } from 'vitest';
@@ -28,12 +29,11 @@ const baseProject = (componentOverrides: any = {}) => ({
   ],
 });
 
-describe('#1186: approvedVersions list (transitional)', () => {
+describe('#1224: approvedVersions list (sole source of truth)', () => {
   describe('getComponentApprovedThrough', () => {
     it('returns max() of approvedVersions when list is set', () => {
       const proj = baseProject({
         approvedVersions: ['1.0.0', '1.1.0', '1.2.0'],
-        approvedThrough: '0.5.0', // legacy stale; list takes precedence
       });
       expect(getComponentApprovedThrough(proj as any, 'cmp1')).toBe('1.2.0');
     });
@@ -46,20 +46,12 @@ describe('#1186: approvedVersions list (transitional)', () => {
       expect(getComponentApprovedThrough(proj as any, 'cmp1')).toBe('1.5.0');
     });
 
-    it('falls back to legacy approvedThrough when list is empty/missing', () => {
-      const proj = baseProject({ approvedThrough: '0.7.0' });
-      expect(getComponentApprovedThrough(proj as any, 'cmp1')).toBe('0.7.0');
+    it('returns undefined when approvedVersions is empty', () => {
+      const proj = baseProject({ approvedVersions: [] });
+      expect(getComponentApprovedThrough(proj as any, 'cmp1')).toBeUndefined();
     });
 
-    it('falls back to legacy approvedThrough when list is empty array', () => {
-      const proj = baseProject({
-        approvedVersions: [],
-        approvedThrough: '0.7.0',
-      });
-      expect(getComponentApprovedThrough(proj as any, 'cmp1')).toBe('0.7.0');
-    });
-
-    it('returns undefined when neither field is set', () => {
+    it('returns undefined when approvedVersions is missing', () => {
       const proj = baseProject({});
       expect(getComponentApprovedThrough(proj as any, 'cmp1')).toBeUndefined();
     });
@@ -87,8 +79,8 @@ describe('#1186: approvedVersions list (transitional)', () => {
       ]);
     });
 
-    it('returns empty array when only legacy approvedThrough is set', () => {
-      const proj = baseProject({ approvedThrough: '0.5.0' });
+    it('returns empty array when approvedVersions is unset', () => {
+      const proj = baseProject({});
       expect(getComponentApprovedVersions(proj as any, 'cmp1')).toEqual([]);
     });
 
@@ -101,7 +93,7 @@ describe('#1186: approvedVersions list (transitional)', () => {
   });
 
   describe('isVersionApproved', () => {
-    it('uses list inclusion when approvedVersions is set', () => {
+    it('uses set membership against approvedVersions', () => {
       const proj = baseProject({
         approvedVersions: ['1.0.0', '1.2.0'], // note: 1.1.0 is NOT approved
       });
@@ -111,16 +103,13 @@ describe('#1186: approvedVersions list (transitional)', () => {
       expect(isVersionApproved(proj as any, 'cmp1', '1.3.0')).toBe(false);
     });
 
-    it('falls back to prefix semantics when only legacy approvedThrough is set', () => {
-      const proj = baseProject({ approvedThrough: '1.2.0' });
-      expect(isVersionApproved(proj as any, 'cmp1', '1.0.0')).toBe(true);
-      expect(isVersionApproved(proj as any, 'cmp1', '1.1.0')).toBe(true);
-      expect(isVersionApproved(proj as any, 'cmp1', '1.2.0')).toBe(true);
-      expect(isVersionApproved(proj as any, 'cmp1', '1.3.0')).toBe(false);
+    it('returns false when approvedVersions is unset', () => {
+      const proj = baseProject({});
+      expect(isVersionApproved(proj as any, 'cmp1', '1.0.0')).toBe(false);
     });
 
-    it('returns false when neither field is set', () => {
-      const proj = baseProject({});
+    it('returns false when approvedVersions is empty', () => {
+      const proj = baseProject({ approvedVersions: [] });
       expect(isVersionApproved(proj as any, 'cmp1', '1.0.0')).toBe(false);
     });
 

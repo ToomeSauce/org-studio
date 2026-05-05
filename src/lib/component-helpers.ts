@@ -69,28 +69,19 @@ export interface ComponentLike {
    */
   waitsFor?: ComponentWaitsFor[];
   /**
-   * #1112 PR 3 (additive): per-component approval banner. Tasks whose
-   * `version` is beyond this value are NOT dispatch-eligible even when the
-   * project is active. Replaces the project-wide
-   * `project.autonomy.approvedThrough` field (which is still consulted as a
-   * fallback for the primary component until PR 6 completes migration).
+   * #1224: legacy scalar approval banner, fully removed in favor of
+   * `approvedVersions[]`. Field kept on the type as an optional read-only
+   * relic so older snapshots/backups still parse, but the API no longer
+   * writes it and no production code consumes it.
    *
-   * #1186: superseded by `approvedVersions[]` (explicit list). The shim
-   * `getComponentApprovedThrough()` now derives the max from
-   * `approvedVersions` when present, falling back to this field. Both fields
-   * are read during the transition; ticket E refactors callers and drops
-   * this field once writes go through `approvedVersions` only.
+   * @deprecated removed by #1224 — use `approvedVersions` instead.
    */
   approvedThrough?: string;
   /**
-   * #1186: explicit list of approved versions for this component. Replaces
-   * `approvedThrough` (which described a contiguous prefix range). With
-   * an explicit list, the vision owner can approve any subset of versions
-   * — including non-contiguous picks — by ticking checkboxes on the
-   * roadmap admin surface (ticket D).
-   *
-   * Migration backfills this from `approvedThrough`: every roadmap version
-   * `v` with `v <= approvedThrough` is added.
+   * #1186 / #1224: explicit list of approved versions for this component.
+   * The single source of truth for dispatch eligibility. The vision owner
+   * approves any subset (including non-contiguous picks) by ticking
+   * checkboxes on the roadmap admin surface.
    */
   approvedVersions?: string[];
   /**
@@ -116,6 +107,7 @@ export interface ProjectLike {
   autonomy?: {
     cadence?: string;
     approvalMode?: string;
+    /** @deprecated #1224 — removed; kept for backup-file parsing only. */
     approvedThrough?: string | null;
   };
 }
@@ -296,6 +288,12 @@ export function getComponentVersions(
  * Returns `undefined` when the component has no banner — nothing is
  * dispatch-eligible for that component until one is set.
  */
+/**
+ * #1224: max-of-approvedVersions[] convenience reader. Returns `undefined`
+ * when nothing is approved. Used in UI surfaces that still want a single
+ * "banner string" to render; gating logic should use
+ * `getComponentApprovedVersions()` + set membership instead.
+ */
 export function getComponentApprovedThrough(
   project: ProjectLike,
   componentId: string,
@@ -303,12 +301,10 @@ export function getComponentApprovedThrough(
   const comps = getEffectiveComponents(project);
   const component = comps.find((c) => c.id === componentId);
   if (!component) return undefined;
-  // #1186: prefer explicit list when present; max() yields the same string
-  // semantics legacy callers expect.
   if (Array.isArray(component.approvedVersions) && component.approvedVersions.length > 0) {
     return maxVersion(component.approvedVersions);
   }
-  return component.approvedThrough;
+  return undefined;
 }
 
 /**
@@ -343,12 +339,7 @@ export function isVersionApproved(
   const comps = getEffectiveComponents(project);
   const component = comps.find((c) => c.id === componentId);
   if (!component) return false;
-  if (Array.isArray(component.approvedVersions) && component.approvedVersions.length > 0) {
-    return component.approvedVersions.includes(version);
-  }
-  // Legacy fallback: contiguous prefix up to approvedThrough.
-  if (!component.approvedThrough) return false;
-  return isVersionLessOrEqualLocal(version, component.approvedThrough);
+  return Array.isArray(component.approvedVersions) && component.approvedVersions.includes(version);
 }
 
 /**

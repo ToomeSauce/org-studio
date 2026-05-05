@@ -25,7 +25,7 @@ function mkStore(overrides: any = {}) {
             id: 'cmp-main',
             name: 'Main',
             owner: 'Mikey',
-            approvedThrough: '0.3.0',
+            approvedVersions: ['0.1.0', '0.2.0', '0.3.0'],
             versions: [
               { version: '0.1.0', status: 'shipped', sort_order: 1 },
               { version: '0.2.0', status: 'planned', sort_order: 2 },
@@ -77,7 +77,7 @@ describe('priorVersionsComplete (#1126 PR 2)', () => {
             id: 'cmp-main',
             name: 'Main',
             owner: 'Mikey',
-            approvedThrough: '0.3.0',
+            approvedVersions: ['0.1.0', '0.2.0', '0.3.0'],
             versions: [
               { version: '0.1.0', status: 'done', sort_order: 1 },
               { version: '0.2.0', status: 'shipped', sort_order: 2 },
@@ -100,7 +100,7 @@ describe('priorVersionsComplete (#1126 PR 2)', () => {
             id: 'cmp-main',
             name: 'Main',
             owner: 'Mikey',
-            approvedThrough: '0.10.0',
+            approvedVersions: ['0.10.0', '0.1.0', '0.2.0'],
             versions: [
               { version: '0.10.0', status: 'planned', sort_order: 1 }, // first by sort_order
               { version: '0.1.0',  status: 'shipped', sort_order: 2 },
@@ -122,7 +122,7 @@ describe('priorVersionsComplete (#1126 PR 2)', () => {
             id: 'cmp-main',
             name: 'Main',
             owner: 'Mikey',
-            approvedThrough: '1.0.0',
+            approvedVersions: ['0.2.0', '0.1.0', '1.0.0'],
             versions: [
               { version: '0.2.0', status: 'shipped' },
               { version: '0.1.0', status: 'shipped' },
@@ -176,7 +176,7 @@ describe('isTaskDispatchEligible — sequential gate (#1126 PR 2)', () => {
             id: 'cmp-main',
             name: 'Main',
             owner: 'Mikey',
-            approvedThrough: '0.1.0',
+            approvedVersions: ['0.1.0'],
             versions: [
               { version: '0.1.0', status: 'planned', sort_order: 1 },
               { version: '0.2.0', status: 'planned', sort_order: 2 },
@@ -206,7 +206,7 @@ describe('isTaskDispatchEligible — sequential gate (#1126 PR 2)', () => {
               name: 'QA',
               role: 'qa', // wouldn't be creatable anymore, but defended in code
               owner: 'Billy',
-              approvedThrough: '0.908.1',
+              approvedVersions: ['0.1.0', '0.2.0', '0.908.1'],
               versions: [
                 { version: '0.1.0',   status: 'shipped', sort_order: 1 },
                 { version: '0.2.0',   status: 'planned', sort_order: 2 }, // unfinished prior
@@ -239,7 +239,7 @@ describe('isTaskDispatchEligible — sequential gate (#1126 PR 2)', () => {
             name: 'Main',
             role: 'dev', // arbitrary non-qa role
             owner: 'Mikey',
-            approvedThrough: '0.3.0',
+            approvedVersions: ['0.1.0', '0.2.0', '0.3.0'],
             versions: [
               { version: '0.1.0', status: 'shipped', sort_order: 1 },
               { version: '0.2.0', status: 'planned', sort_order: 2 },
@@ -267,8 +267,8 @@ describe('isTaskWaiting — sequential gate (#1126 PR 2)', () => {
     // Above the approval banner — no human-resolvable wait, just unapproved.
     const store = mkStore();
     const task = mkTask({ version: '0.3.0' });
-    // shrink banner so 0.3.0 is above horizon
-    store.projects[0].components[0].approvedThrough = '0.2.0';
+    // shrink approvedVersions so 0.3.0 is no longer approved
+    store.projects[0].components[0].approvedVersions = ['0.1.0', '0.2.0'];
     expect(isTaskWaiting(store, task)).toBe(false);
   });
 
@@ -286,7 +286,7 @@ describe('isTaskWaiting — sequential gate (#1126 PR 2)', () => {
               id: 'sec-qa',
               name: 'QA',
               role: 'qa',
-              approvedThrough: '0.3.0',
+              approvedVersions: ['0.1.0', '0.2.0', '0.3.0'],
               versions: [
                 { version: '0.1.0', status: 'shipped', sort_order: 1 },
                 { version: '0.2.0', status: 'planned', sort_order: 2 },
