@@ -115,7 +115,7 @@ export async function POST(
 
     if (gateway) {
       // Local mode: fire directly via Gateway RPC
-      const message = buildLaunchMessage(project);
+      const message = await buildLaunchMessage(project);
       const at = new Date(Date.now() + 5000).toISOString();
       
       const result = await rpc('cron.add', {

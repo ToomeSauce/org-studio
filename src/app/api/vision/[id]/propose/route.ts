@@ -1,69 +1,29 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { buildVisionPrompt } from '@/lib/vision-prompt';
-import { getStoreProvider } from '@/lib/store-provider';
-import { checkArchivedProject } from '@/lib/archived-project-compat';
+/**
+ * POST /api/vision/[id]/propose
+ *
+ * RETIRED 2026-05-05 (#1230): the only consumer of this endpoint was the
+ * legacy `buildLaunchMessage` script that told the launched agent to
+ * "draft a version proposal and send a Telegram message with
+ * approve/reject buttons." That flow was abandoned in favor of roadmap-
+ * level approval (approvedVersions[] checkboxes in the Org Studio UI)
+ * and the launch message no longer instructs anyone to call this route.
+ *
+ * Kept as a 410 stub so that any stale agent invocation gets a loud,
+ * obvious error rather than silently re-spawning the old loop.
+ */
+
+import { NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
 
-/**
- * POST /api/vision/[id]/propose
- * 
- * Generates a version proposal prompt for a vision.
- * Returns the structured prompt that an agent (or cron) uses to propose the next version.
- */
-export async function POST(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    const { id: projectId } = await params;
-    const store = await getStoreProvider().read();
-
-    // 410 compat: archived qa-fold projects
-    const archCheck = checkArchivedProject(store.projects, projectId);
-    if (archCheck.migrated) {
-      return NextResponse.json(
-        { error: 'Project moved', migratedTo: archCheck.migratedTo },
-        { status: 410 }
-      );
-    }
-
-    const project = store.projects.find((p: any) => p.id === projectId);
-    if (!project) {
-      return NextResponse.json(
-        { error: `Project ${projectId} not found` },
-        { status: 404 }
-      );
-    }
-
-    // Build the agent prompt
-    const projectTasks = (store.tasks || []).filter((t: any) => t.projectId === projectId);
-    const prompt = await buildVisionPrompt(project, projectTasks, store.projects || []);
-
-    // Check for skip/error
-    if (prompt.startsWith('SKIP:') || prompt.startsWith('ERROR:')) {
-      return NextResponse.json({ projectId, status: 'skipped', message: prompt });
-    }
-
-    // Store as pending (awaiting agent response)
-    await getStoreProvider().updateProject(projectId, {
-      autonomy: {
-        ...(project.autonomy || {}),
-        pendingVersion: 'awaiting_agent_response',
-        lastProposedAt: Date.now(),
-      },
-    });
-
-    return NextResponse.json({
-      projectId,
-      status: 'proposal_generated',
-      prompt,
-    });
-  } catch (e: any) {
-    console.error('[Vision Propose]', e);
-    return NextResponse.json(
-      { error: e.message },
-      { status: 500 }
-    );
-  }
+export async function POST() {
+  return NextResponse.json(
+    {
+      ok: false,
+      error: 'gone',
+      message:
+        'POST /api/vision/[id]/propose has been retired (#1230). Version planning happens in the Org Studio roadmap UI; agents do not draft proposals. If a future flow needs version proposals, design it fresh.',
+    },
+    { status: 410 },
+  );
 }

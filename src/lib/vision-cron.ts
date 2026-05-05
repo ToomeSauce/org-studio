@@ -59,75 +59,108 @@ function resolveDevAgentId(project: Project): string | null {
 }
 
 /**
- * Build the vision cycle message that the cron agent will receive
- * Exported for use by both legacy cron and new Launch model
+ * Build the wake message handed to the devOwner agent when a project
+ * launches a new version.
+ *
+ * Roadmap-aware, in-session only. The version was already approved via
+ * the Org Studio roadmap UI (approvedVersions[] checkboxes); the agent's
+ * job is to start working — not to propose a version, not to send a
+ * Telegram side-channel, not to push approve/reject buttons anywhere.
+ *
+ * #1230: ripped out the legacy "Version Proposal: ... vision_approve:"
+ * Telegram flow. If a future flow needs version proposals, it should be
+ * a separate cron + a separate prompt, not bolted into Launch.
  */
-export function buildLaunchMessage(project: Project): string {
+export async function buildLaunchMessage(project: Project): Promise<string> {
   const projectId = project.id;
   const projectName = project.name;
-  const devOwner = project.devOwner || 'unknown';
-  const notifyTarget = process.env.NOTIFY_CHAT_ID || '';
-  const apiKey = process.env.ORG_STUDIO_API_KEY || '';
+  const version = project.currentVersion || '(unset)';
 
-  return `You are running a vision improvement cycle for the ${projectName} project.
+  const itemsLines = await loadVersionItemSummary(projectId, project.currentVersion || null);
+  const itemsBlock = itemsLines.length
+    ? `\nRoadmap items in this version:\n${itemsLines.map((l, i) => `${i + 1}. ${l}`).join('\n')}\n`
+    : '';
 
-## Step 1: Get the proposal prompt
-Call: POST http://localhost:4501/api/vision/${projectId}/propose
-This returns a structured prompt with the current VISION.md content, roadmap items, aspirations, boundaries, and constraints.
+  return `${projectName} just launched ${version}.
+${itemsBlock}
+Next steps:
+1. Open the roadmap for this project in Org Studio (http://localhost:4501) and confirm each item's \`doneWhen\` is sharp enough to work against. Edit it inline if not.
+2. Pick the first item's task, move it to \`in-progress\`, and start working.
+3. Update task status as you go (in-progress → review/done). The next dispatch is automatic; don't ask for one.
 
-## Step 2: Analyze and propose
-Read the prompt field from the response. Think through what would meaningfully move ${projectName} forward. Apply all constraints (impact thesis, max 8 tasks, demo test, no duplicates, boundary enforcement).
+Do NOT propose a new version — that already happened in the roadmap UI before launch.
+Do NOT send Telegram approve/reject messages or buttons — the legacy proposal flow is retired.
 
-Determine the next unshipped version by reading the roadmap. Look for the first version section that still has unchecked \`- [ ]\` items. Do NOT propose a version that is already fully shipped (all items \`- [x]\`).
+If something is genuinely blocking (missing context, conflicting requirement, unclear scope), comment on the task with status=blocked and stop.`;
+}
 
-## Step 3: If no meaningful improvements exist, return: NO_IMPROVEMENTS_FOUND
+/**
+ * Load a short "title → task #ticket" line per roadmap item for the
+ * current version. Best-effort: if Postgres isn't reachable or the row
+ * isn't present, return [] and the caller will skip the items block.
+ */
+async function loadVersionItemSummary(
+  projectId: string,
+  version: string | null,
+): Promise<string[]> {
+  if (!version) return [];
+  if (!process.env.DATABASE_URL) return [];
+  try {
+    const pg = await import('pg');
+    const client = new pg.Client(process.env.DATABASE_URL);
+    await client.connect();
+    try {
+      const rv = await client.query(
+        `SELECT items FROM org_studio_roadmap_versions
+         WHERE project_id = $1 AND version = $2 AND workspace_id = $3 LIMIT 1`,
+        [projectId, version, 'default-workspace'],
+      );
+      if (rv.rows.length === 0) return [];
+      const items: any[] = Array.isArray(rv.rows[0].items) ? rv.rows[0].items : [];
+      if (items.length === 0) return [];
 
-## Step 4: Send proposal with inline buttons
-If you have a proposal, send it via the message tool with inline approve/reject buttons:
-
-Use: message(action="send", channel="telegram", target="${notifyTarget}", message="...", buttons=[[{"text": "✅ Approve", "callback_data": "vision_approve:${projectId}:v{VERSION}", "style": "success"}, {"text": "❌ Reject", "callback_data": "vision_reject:${projectId}:v{VERSION}", "style": "danger"}]])
-
-Format the message as:
-🔮 **Version Proposal: ${projectName} v{version}**
-_Proposed by: ${devOwner} (vision cycle)_
-
-{rationale}
-
-**Tasks ({count}):**
-1. **{title}** — {impact} _{effort}_
-...
-
-Lifecycle: stays \`{LIFECYCLE}\`
-⚠️ _Proposal only — no tasks created yet._
-
-After sending via the message tool, reply NO_REPLY.
-
-IMPORTANT: This is a PROPOSAL only. Do NOT create tasks or modify any code. Wait for human approval before any execution.
-
-## Step 5: Report completion
-After sending the proposal (or finding no improvements), call:
-
-POST http://localhost:4501/api/vision/${projectId}/complete
-Authorization: Bearer ${apiKey}
-Content-Type: application/json
-
-If you proposed a version:
-Body: {"proposal": {"version": "X.Y", "tasks": [{"title": "...", "impact": "..."}], "rationale": "..."}}
-
-If no improvements found:
-Body: {"noImprovements": true}
-
-This step is MANDATORY. The system uses this to track cycle state and auto-approve minor versions.`;
+      // For each item, look up the ticket number if the taskId is set so
+      // the agent can navigate directly. Don't fail the whole message if
+      // a single lookup misses.
+      const lines: string[] = [];
+      for (const it of items) {
+        const title = it?.title || '(untitled)';
+        if (it?.taskId) {
+          try {
+            const t = await client.query(
+              `SELECT ticket_number FROM org_studio_tasks WHERE id = $1 AND workspace_id = $2 LIMIT 1`,
+              [it.taskId, 'default-workspace'],
+            );
+            const num = t.rows[0]?.ticket_number;
+            lines.push(num ? `${title} → #${num}` : `${title} → task ${it.taskId}`);
+          } catch {
+            lines.push(`${title} → task ${it.taskId}`);
+          }
+        } else {
+          lines.push(`${title} (no task linked)`);
+        }
+      }
+      return lines;
+    } finally {
+      await client.end();
+    }
+  } catch (e: any) {
+    console.warn(`[vision-cron] loadVersionItemSummary failed for ${projectId} ${version}: ${e?.message}`);
+    return [];
+  }
 }
 
 
 /**
  * Build a cron job for a vision
+ * @deprecated #1230 — buildLaunchMessage is async now and the legacy
+ * weekly-cron flow is unwired. Kept as a stub; remove in a follow-up
+ * once we've verified nothing imports it.
  */
-export function buildVisionCronJob(project: Project): CronJob {
+export async function buildVisionCronJob(project: Project): Promise<CronJob> {
   const cadence = project.autonomy?.cadence || 'weekly';
   const cronExpr = cadenceToCron(cadence);
-  const message = buildLaunchMessage(project);
+  const message = await buildLaunchMessage(project);
 
   return {
     name: `Vision: ${project.name} — improvement cycle`,
@@ -139,7 +172,7 @@ export function buildVisionCronJob(project: Project): CronJob {
     payload: {
       kind: 'agentTurn',
       message,
-      model: 'foundry-openai/gpt-5.4', // Reasoning model for strategic work
+      model: 'foundry-openai/gpt-5.4',
       timeoutSeconds: 300,
     },
     sessionTarget: 'isolated',
