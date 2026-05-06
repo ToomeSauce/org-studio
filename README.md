@@ -44,6 +44,18 @@ node server.mjs
 # → http://localhost:4501
 ```
 
+### Local deploy (already running under systemd)
+
+If you already run the dashboard as a long-lived service (e.g. `mc-dashboard.service`), use the bundled deploy script after pulling/committing changes — it builds and restarts atomically and prints the live `BUILD_ID` + git SHA so you can verify the running process matches your latest commit:
+
+```bash
+npm run deploy            # build + restart + health check
+npm run deploy -- --skip-build   # restart only
+npm run deploy -- --no-restart   # build only
+```
+
+The service runs in production mode (`dev = false` in `server.mjs`), so a plain `systemctl restart` alone serves the previously compiled `.next/` bundle. `npm run deploy` exists specifically to make `git push && deploy` idempotent.
+
 Works without a database (file-backed). Optional PostgreSQL for production.
 
 ## Learn More

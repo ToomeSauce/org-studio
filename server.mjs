@@ -117,6 +117,28 @@ const app = next({ dev, dir: __dirname, port });
 const handle = app.getRequestHandler();
 await app.prepare();
 
+// #1261 — log build identity at boot so `systemctl --user status` /
+// journalctl makes it obvious which commit is actually serving traffic.
+// Cheap (read once at startup) and rescues us when somebody forgets the
+// build step before restarting in production mode.
+try {
+  const fs = await import('node:fs');
+  const child = await import('node:child_process');
+  let buildId = 'unknown';
+  try {
+    buildId = fs.readFileSync(new URL('./.next/BUILD_ID', import.meta.url), 'utf8').trim();
+  } catch { /* .next not present yet (first boot of dev container) */ }
+  let sha = 'unknown';
+  let branch = 'unknown';
+  try {
+    sha = child.execSync('git rev-parse --short HEAD', { cwd: __dirname, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+    branch = child.execSync('git rev-parse --abbrev-ref HEAD', { cwd: __dirname, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+  } catch { /* not a git checkout */ }
+  console.log(`[boot] org-studio dashboard live: BUILD_ID=${buildId} SHA=${sha} branch=${branch} dev=${dev}`);
+} catch (err) {
+  console.warn('[boot] could not stamp build identity:', err?.message || err);
+}
+
 const server = createServer((req, res) => {
   // Activity feed REST endpoint
   // Debug: confirm server.mjs is running (not standalone server.js)
