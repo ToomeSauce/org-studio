@@ -550,19 +550,31 @@ function TasksPageInner() {
       context: newContext.trim() || undefined,
     };
     const desc = composeSeedDescription({ ...seedFields, description: newDescription.trim() });
-    await addTask({
-      title: newTitle.trim(),
-      status,
-      projectId: newProject || (filterProject !== 'all' ? filterProject : (projects[0]?.id || '')),
-      assignee: newAssignee || teammates[0]?.name || '',
-      description: desc,
-      // priority field removed (#1249); ordering is via column position (sortOrder, see #1250).
-      taskType: newTaskType,  // #698: adhoc task type
-      // #862: testType / testAssignee no longer sent from UI — QA routes via standard assignee.
-      ...(newSectionId ? { sectionId: newSectionId } : {}),
-      ...seedFields,
-    });
-    resetAddForm();
+    try {
+      // #1260: surface server validation errors. Without this, a 400 from
+      // /api/store (e.g. 'Adhoc tasks require taskType to be one of: bug,
+      // chore, followup, spike') was just a silent dead button — the click
+      // handler swallowed the rejection and the user saw nothing.
+      await addTask({
+        title: newTitle.trim(),
+        status,
+        projectId: newProject || (filterProject !== 'all' ? filterProject : (projects[0]?.id || '')),
+        assignee: newAssignee || teammates[0]?.name || '',
+        description: desc,
+        // priority field removed (#1249); ordering is via column position (sortOrder, see #1250).
+        taskType: newTaskType,  // #698: adhoc task type
+        // #862: testType / testAssignee no longer sent from UI — QA routes via standard assignee.
+        ...(newSectionId ? { sectionId: newSectionId } : {}),
+        ...seedFields,
+      });
+      resetAddForm();
+    } catch (err: any) {
+      console.error('[handleAdd] addTask failed', err);
+      const msg = (err && typeof err.message === 'string' && err.message)
+        || 'Failed to create task. Check the browser console for details.';
+      toast.error(msg, { autoClose: 6000 });
+      // Leave the form open so the user can fix the input and retry.
+    }
   };
 
   if (loading) {

@@ -284,7 +284,30 @@ async function mutateStore(action: string, payload: Record<string, any> = {}): P
     }
     throw new Error('Session expired');
   }
-  if (!resp.ok) throw new Error(`Store mutation failed: ${resp.status}`);
+  if (!resp.ok) {
+    // #1260: read the server's {error: "…"} body so callers can show a real
+    // message instead of a silent dead button. Falls back to status code if
+    // the body isn't JSON / has no error field.
+    let serverMessage = '';
+    try {
+      const body = await resp.clone().json();
+      if (body && typeof body.error === 'string' && body.error.trim()) {
+        serverMessage = body.error.trim();
+      }
+    } catch {
+      try {
+        const text = await resp.text();
+        if (text && text.trim()) serverMessage = text.trim().slice(0, 500);
+      } catch {
+        // ignore — fall through to generic message below
+      }
+    }
+    const msg = serverMessage
+      ? `${serverMessage} (HTTP ${resp.status})`
+      : `Store mutation failed: ${resp.status}`;
+    console.warn('[store:mutateStore] failure', { action, status: resp.status, serverMessage });
+    throw new Error(msg);
+  }
   return resp.json();
 }
 
