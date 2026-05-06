@@ -37,7 +37,11 @@ interface HealthRow {
 const BLOCKER_LABEL: Record<string, string> = {
   'project-stopped': 'project stopped',
   'no-section-version': 'missing section/version',
-  'above-horizon': 'above approval horizon',
+  // #1224: per-component approval is now an explicit approvedVersions[] set
+  // (checkboxes on the roadmap), not a single horizon. The stable enum value
+  // 'above-horizon' is preserved in dispatch-attempts rows; only the label
+  // changes here.
+  'above-horizon': 'version not approved',
   waitsfor: 'waiting on dependency',
   'prior-version-unshipped': 'prior version unshipped',
   unassigned: 'unassigned',
@@ -48,7 +52,7 @@ const BLOCKER_LABEL: Record<string, string> = {
 
 const BLOCKER_FIX_LABEL: Record<string, string | null> = {
   'project-stopped': 'Start project',
-  'above-horizon': 'Advance horizon',
+  'above-horizon': 'Approve version',
   'no-section-version': null, // ticket-side fix
   waitsfor: 'View dependency',
   'prior-version-unshipped': 'Ship prior version',

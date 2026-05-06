@@ -67,7 +67,7 @@ function classifyTaskBlocker(
       reason: 'above-horizon',
       label: `Not approved (v${task.version})`,
       fixHref: `/projects/${project.id}?component=${task.sectionId}`,
-      fixLabel: 'Advance horizon',
+      fixLabel: 'Approve version',
     };
   }
 
