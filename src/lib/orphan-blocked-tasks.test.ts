@@ -93,4 +93,14 @@ describe('getOrphanBlockedTasks', () => {
     ];
     expect(getOrphanBlockedTasks(tasks, 'p1').map((x) => x.id)).toEqual(['a']);
   });
+
+  // #1254 — projectScoped opt-in for legitimate project-wide blocked work
+  // (launches, exit gates, cross-cutting milestones).
+  it('hides blocked tasks explicitly marked projectScoped', () => {
+    const tasks: TaskLike[] = [
+      t({ id: 'launch', projectId: 'p1', status: 'blocked', projectScoped: true }),
+      t({ id: 'orph', projectId: 'p1', status: 'blocked' }),
+    ];
+    expect(getOrphanBlockedTasks(tasks, 'p1').map((x) => x.id)).toEqual(['orph']);
+  });
 });

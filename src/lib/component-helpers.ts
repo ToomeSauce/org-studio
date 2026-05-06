@@ -109,6 +109,9 @@ export interface TaskLike {
   projectId: string;
   roadmapItemId?: string;
   parentId?: string;
+  // #1254 — explicit project-scope opt-in for blocked tasks that have no
+  // component (cross-cutting milestones, launches, exit gates).
+  projectScoped?: boolean;
 }
 
 /**
@@ -119,7 +122,9 @@ export interface TaskLike {
  *   - has status === 'blocked',
  *   - is NOT anchored to a component (sectionId),
  *   - is NOT anchored to a roadmap item (roadmapItemId),
- *   - is NOT a sub-task of another task (parentId).
+ *   - is NOT a sub-task of another task (parentId),
+ *   - is NOT explicitly marked projectScoped (#1254 — opt-in for legitimate
+ *     project-wide blocked work like launches and exit gates).
  *
  * The projects-list dashboard counts every blocked task in the project
  * (`tasks.filter(t => t.status==='blocked').length`), but the per-version
@@ -137,6 +142,7 @@ export function getOrphanBlockedTasks<T extends TaskLike>(
     if (t.sectionId) return false;
     if (t.roadmapItemId) return false;
     if (t.parentId) return false;
+    if (t.projectScoped) return false;
     return true;
   });
 }

@@ -183,6 +183,12 @@ export interface Task {
   loopPausedAt?: number;    // Timestamp when loop was paused due to stall detection
   loopPauseReason?: string; // Why the loop was paused
   blockedReason?: string;   // Why the task is blocked (required when status='blocked' — see #1138 follow-up)
+  // #1254 — Project-scope opt-in for blocked tasks that legitimately have
+  // no component (cross-cutting milestones, launches, exit gates). When
+  // true, the orphan-blocked callout on ProjectDashboardPage skips this
+  // task. Has no effect when sectionId/roadmapItemId/parentId are set —
+  // those already disqualify the task from the callout.
+  projectScoped?: boolean;
   // #1192 — "blocked on whom?". Lowercase agent name(s) or 'basil' for the
   // human owner. Drives the home Blockers section: only tickets where this
   // includes the user's name surface on the home page. Empty/null = blocked

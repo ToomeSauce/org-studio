@@ -628,6 +628,56 @@ function ProjectDashboardPageInner() {
     [setProjectState]
   );
 
+  // #1254 — Mutate a task for the orphan-blocked callout.
+  // Same optimistic-then-reconcile pattern as setProjectState (#1253):
+  // patch the WS-cached store synchronously so the callout updates in the
+  // same render cycle, then await the server. Roll back on failure.
+  const mutateTaskOptimistic = useCallback(
+    async (taskId: string, updates: Record<string, any>) => {
+      // Snapshot pre-mutation values for clean rollback.
+      let prevTask: any = null;
+      pushOptimisticUpdate('store', (s: any) => {
+        if (!s?.tasks) return s;
+        return {
+          ...s,
+          tasks: s.tasks.map((t: any) => {
+            if (t.id !== taskId) return t;
+            prevTask = t;
+            return { ...t, ...updates };
+          }),
+        };
+      });
+      try {
+        const resp = await fetch('/api/store', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'updateTask', id: taskId, updates }),
+        });
+        if (!resp.ok) {
+          const body = await resp.json().catch(() => ({}));
+          throw new Error(body?.error || `HTTP ${resp.status}`);
+        }
+      } catch (e: any) {
+        console.error('Task update failed:', e);
+        // Rollback to pre-mutation snapshot.
+        if (prevTask) {
+          const snapshot = prevTask;
+          pushOptimisticUpdate('store', (s: any) => {
+            if (!s?.tasks) return s;
+            return {
+              ...s,
+              tasks: s.tasks.map((t: any) =>
+                t.id === taskId ? snapshot : t
+              ),
+            };
+          });
+        }
+        alert(`Couldn't update task: ${e?.message || 'unknown error'}`);
+      }
+    },
+    []
+  );
+
   if (!storeData) {
     return (
       <div className="flex items-center justify-center h-full text-sm text-[var(--text-muted)]">
@@ -813,22 +863,32 @@ function ProjectDashboardPageInner() {
                     <ul className="flex flex-col gap-1.5">
                       {orphanBlocked.map((t) => (
                         <li key={t.id}>
-                          <button
-                            type="button"
-                            onClick={() => onPickTask(t.id)}
-                            className="w-full text-left rounded px-3 py-2 text-[13px] transition-colors hover:bg-[var(--card-highlight)]"
+                          {/* #1254 — Per-row controls. Title click = open detail panel.
+                            * Component picker rehomes the task in one selection.
+                            * Project-scope button suppresses the orphan callout for tasks
+                            * that legitimately have no component (launches, exit gates).
+                            */}
+                          <div
+                            className="rounded px-3 py-2 text-[13px]"
                             style={{
                               background: 'var(--card)',
                               border: '1px solid var(--border-default)',
                               color: 'var(--text-primary)',
                             }}
-                            title="Open task"
                           >
                             <div className="flex items-center gap-2 flex-wrap">
                               <span style={{ color: '#ff5c5c', fontSize: 11 }}>
                                 🚫
                               </span>
-                              <span className="truncate">{t.title || '(untitled)'}</span>
+                              <button
+                                type="button"
+                                onClick={() => onPickTask(t.id)}
+                                className="truncate text-left hover:underline"
+                                style={{ color: 'var(--text-primary)', background: 'none', padding: 0 }}
+                                title="Open task"
+                              >
+                                {t.title || '(untitled)'}
+                              </button>
                               {t.assignee && (
                                 <span
                                   className="text-[11px]"
@@ -846,7 +906,58 @@ function ProjectDashboardPageInner() {
                                 </span>
                               )}
                             </div>
-                          </button>
+                            <div className="mt-2 flex items-center gap-2 flex-wrap">
+                              <label
+                                className="text-[11px] uppercase tracking-[0.1em]"
+                                style={{ color: 'var(--text-tertiary)', fontFamily: monoFont }}
+                              >
+                                Rehome:
+                              </label>
+                              <select
+                                defaultValue=""
+                                onChange={(e) => {
+                                  const compId = e.target.value;
+                                  if (!compId) return;
+                                  void mutateTaskOptimistic(t.id, { sectionId: compId });
+                                  // Reset the select to placeholder for clarity.
+                                  e.target.value = '';
+                                }}
+                                className="text-[12px] rounded px-2 py-1"
+                                style={{
+                                  background: 'var(--card-highlight)',
+                                  border: '1px solid var(--border-default)',
+                                  color: 'var(--text-primary)',
+                                  fontFamily: monoFont,
+                                }}
+                                title="Move this task into one of the project's components"
+                              >
+                                <option value="" disabled>
+                                  pick component…
+                                </option>
+                                {components.map((c) => (
+                                  <option key={c.id} value={c.id}>
+                                    {c.name || c.id}
+                                  </option>
+                                ))}
+                              </select>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void mutateTaskOptimistic(t.id, { projectScoped: true })
+                                }
+                                className="text-[11px] uppercase tracking-[0.1em] rounded px-2 py-1 transition-colors"
+                                style={{
+                                  background: 'var(--card-highlight)',
+                                  border: '1px solid var(--border-default)',
+                                  color: 'var(--text-secondary)',
+                                  fontFamily: monoFont,
+                                }}
+                                title="Mark as project-wide — this task legitimately has no component (launches, exit gates, cross-cutting work). Suppresses the orphan callout without changing blocked status."
+                              >
+                                Project-wide
+                              </button>
+                            </div>
+                          </div>
                         </li>
                       ))}
                     </ul>
