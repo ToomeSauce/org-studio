@@ -120,12 +120,48 @@ function makeSnippet(content: string, maxLen = 200): string {
 
 // ---------- Message templates ----------
 
-function buildMessage(scope: CommentScope, comment: RouterComment, ctx: RouteParams['context']): string {
+// Why the recipient is being notified — lets the template tailor the
+// envelope (e.g. "mentioned you" vs. "commented on your task").
+export type RecipientReason =
+  | 'mention'
+  | 'assignee'
+  | 'watcher'
+  | 'project-owner'
+  | 'section-owner'
+  | 'dm-participant'
+  | 'dm';
+
+function buildMessage(
+  scope: CommentScope,
+  comment: RouterComment,
+  ctx: RouteParams['context'],
+  reason: RecipientReason = 'mention',
+): string {
   const snippet = makeSnippet(comment.content);
   switch (scope.kind) {
     case 'task': {
+      // #1262 — use the same rich "reply on the task" envelope that the
+      // LISTEN-path mention notifier emits. The previous one-line snippet
+      // template ("📣 @author commented on task «...»") landed in agent
+      // sessions as easy-to-skim chat noise; the rich envelope is what
+      // makes agents actually pick the comment up and reply on the
+      // ticket. Reason switches the verb so an assignee-only delivery
+      // reads "commented on your task" instead of "mentioned you".
       const title = ctx.task?.title || 'Unknown task';
-      return `📣 @${comment.author} commented on task «${title}»: ${snippet}`;
+      const taskId = ctx.task?.id || (scope as any).taskId || '';
+      const verb = reason === 'mention' ? 'mentioned you on task' : 'commented on your task';
+      const author = comment.author;
+      // Keep the body short — use the snippet, not full content. Long
+      // comments still arrive through the UI; the prompt's job is to
+      // make the agent stop and look.
+      return (
+        `💬 **${author}** ${verb}: **${title}**\n\n` +
+        `> ${snippet}\n\n` +
+        `Task ID: ${taskId}\n\n` +
+        `**Reply on the task, not in chat.** Call \`addComment\` against this task id ` +
+        `so ${author} sees your response on the ticket. Include @${author} in your reply ` +
+        `to notify them.`
+      );
     }
     case 'board': {
       const projectName = ctx.project?.name || 'Unknown project';
@@ -163,14 +199,20 @@ function isAuthor(teammate: Teammate, authorName: string): boolean {
   );
 }
 
-function resolveRecipients(params: RouteParams): string[] {
+function resolveRecipients(params: RouteParams): Map<string, RecipientReason> {
   const { scope, comment, teammates, context } = params;
-  const recipientIds = new Set<string>();
+  // First-write-wins: we want 'mention' to beat 'assignee' for the same
+  // recipient so the envelope says "mentioned you" rather than "commented
+  // on your task". Mentions are added first below.
+  const recipientIds = new Map<string, RecipientReason>();
+  const addOnce = (agentId: string, reason: RecipientReason) => {
+    if (!recipientIds.has(agentId)) recipientIds.set(agentId, reason);
+  };
 
-  // 1. Mentioned agents (all scopes)
+  // 1. Mentioned agents (all scopes) — added first so mention wins on tie.
   const mentions = parseMentions(comment.content, teammates);
   for (const m of mentions) {
-    recipientIds.add(m.teammate.agentId);
+    addOnce(m.teammate.agentId, 'mention');
   }
 
   switch (scope.kind) {
@@ -178,17 +220,17 @@ function resolveRecipients(params: RouteParams): string[] {
       // assignee
       if (context.task?.assignee) {
         const t = resolveTeammate(context.task.assignee, teammates);
-        if (t) recipientIds.add(t.agentId);
+        if (t) addOnce(t.agentId, 'assignee');
       }
       // watchers
       for (const wid of context.watchers || []) {
-        recipientIds.add(wid);
+        addOnce(wid, 'watcher');
       }
       // project owners (auto-notify: devOwner + qaOwner)
       if (context.project) {
         for (const ownerName of [context.project.devOwner, context.project.qaOwner].filter(Boolean)) {
           const t = resolveTeammate(ownerName!, teammates);
-          if (t) recipientIds.add(t.agentId);
+          if (t) addOnce(t.agentId, 'project-owner');
         }
       }
       break;
@@ -200,7 +242,7 @@ function resolveRecipients(params: RouteParams): string[] {
         const projSet = getProjectTeammateNames(context.project, context.projectTasks);
         const projSetLower = new Set([...projSet].map(n => n.toLowerCase()));
         // Filter mentions to project teammates only
-        for (const id of [...recipientIds]) {
+        for (const id of [...recipientIds.keys()]) {
           const t = teammates.find(tm => tm.agentId === id);
           if (t && !projSetLower.has(t.name?.toLowerCase() || '') && !projSetLower.has(t.agentId?.toLowerCase() || '')) {
             recipientIds.delete(id);
@@ -214,14 +256,14 @@ function resolveRecipients(params: RouteParams): string[] {
       // section owner
       if (context.section?.owner) {
         const t = resolveTeammate(context.section.owner, teammates);
-        if (t) recipientIds.add(t.agentId);
+        if (t) addOnce(t.agentId, 'section-owner');
       }
       // Filter mentions to project teammate set
       if (context.project && context.projectTasks) {
         const projSet = getProjectTeammateNames(context.project, context.projectTasks);
         if (context.section?.owner) projSet.add(context.section.owner);
         const projSetLower = new Set([...projSet].map(n => n.toLowerCase()));
-        for (const id of [...recipientIds]) {
+        for (const id of [...recipientIds.keys()]) {
           const t = teammates.find(tm => tm.agentId === id);
           if (t && !projSetLower.has(t.name?.toLowerCase() || '') && !projSetLower.has(t.agentId?.toLowerCase() || '')) {
             recipientIds.delete(id);
@@ -238,7 +280,7 @@ function resolveRecipients(params: RouteParams): string[] {
         if (parts.length === 3 && parts[0] === 'dm') {
           for (const pid of [parts[1], parts[2]]) {
             const t = resolveTeammate(pid, teammates);
-            if (t) recipientIds.add(t.agentId);
+            if (t) addOnce(t.agentId, 'dm-participant');
           }
         }
       }
@@ -246,7 +288,7 @@ function resolveRecipients(params: RouteParams): string[] {
     }
   }
 
-  return [...recipientIds];
+  return recipientIds;
 }
 
 // ---------- Delivery ----------
@@ -291,10 +333,10 @@ export async function routeCommentNotifications(params: RouteParams): Promise<Ro
   const commentId = comment.id || String(Date.now());
   const result: RouteResult = { notified: [], skipped: [] };
 
-  // Resolve all candidate recipients
-  const recipientIds = resolveRecipients(params);
+  // Resolve all candidate recipients (with reason → template)
+  const recipientReasons = resolveRecipients(params);
 
-  for (const agentId of recipientIds) {
+  for (const [agentId, reason] of recipientReasons) {
     const teammate = teammates.find(t => t.agentId === agentId);
     if (!teammate) {
       result.skipped.push({ agentId, reason: 'not-found' });
@@ -319,8 +361,8 @@ export async function routeCommentNotifications(params: RouteParams): Promise<Ro
       continue;
     }
 
-    // Build message
-    const message = buildMessage(scope, comment, params.context);
+    // Build message (template branches on the reason for task scope)
+    const message = buildMessage(scope, comment, params.context, reason);
     const idempotencyKey = `notify-${scope.kind}-${commentId}-${agentId}`;
 
     // Deliver

@@ -135,6 +135,38 @@ describe('#1246 — auto-notify ticket owner on every comment', () => {
     expect(res.notified).toContain('mikey');
   });
 
+  // #1262 — the assignee envelope must read like the rich "reply on the
+  // task" mention envelope, not a one-line snippet, OR Basil keeps having
+  // to @mention us to get a reply.
+  it('uses the rich "reply on the task" envelope for assignee-only deliveries', async () => {
+    sentMessages.length = 0;
+    await routeCommentNotifications({
+      comment: { id: 'c-rich-asg', author: 'Basil', content: 'follow-up question' },
+      scope: { kind: 'task', taskId: baseTask.id },
+      teammates,
+      context: { task: baseTask },
+    });
+    const sent = sentMessages.find((m) => m.agentId === 'mikey');
+    expect(sent, 'no delivery to mikey').toBeTruthy();
+    expect(sent!.message).toMatch(/commented on your task/);
+    expect(sent!.message).toMatch(/Reply on the task, not in chat/);
+    expect(sent!.message).toMatch(/Task ID: t-1/);
+  });
+
+  it('uses "mentioned you" wording when the recipient is also @mentioned', async () => {
+    sentMessages.length = 0;
+    await routeCommentNotifications({
+      comment: { id: 'c-rich-mnt', author: 'Basil', content: '@mikey thoughts?' },
+      scope: { kind: 'task', taskId: baseTask.id },
+      teammates,
+      context: { task: baseTask },
+    });
+    const sent = sentMessages.find((m) => m.agentId === 'mikey');
+    expect(sent, 'no delivery to mikey').toBeTruthy();
+    expect(sent!.message).toMatch(/mentioned you on task/);
+    expect(sent!.message).not.toMatch(/commented on your task/);
+  });
+
   it('reproduces the #1246 follow-up case: 2nd comment without @mention still notifies owner', async () => {
     // First comment with @mention — works today.
     await routeCommentNotifications({
