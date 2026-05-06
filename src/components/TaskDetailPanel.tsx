@@ -367,7 +367,7 @@ export function TaskDetailPanel({
         </div>
 
         {/* Scrollable content */}
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain">
           {/* Metadata row */}
           <div className="grid grid-cols-2 gap-3 px-5 py-4 border-b border-[var(--border-default)]">
             <div>
@@ -633,7 +633,7 @@ export function TaskDetailPanel({
                     {task.status === 'review' ? 'Review Notes' : 'Completion Notes'}
                   </span>
                 </div>
-                <p className="text-[var(--text-sm)] text-[var(--text-secondary)] leading-relaxed whitespace-pre-wrap">{task.reviewNotes}</p>
+                <p className="text-[var(--text-sm)] text-[var(--text-secondary)] leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{task.reviewNotes}</p>
               </div>
             </div>
           )}
@@ -674,7 +674,7 @@ export function TaskDetailPanel({
                       )}
                       <span className="text-[10px] text-[var(--text-muted)]">{formatTimestamp(c.createdAt)}</span>
                     </div>
-                    <p className="text-[var(--text-sm)] text-[var(--text-secondary)] leading-relaxed whitespace-pre-wrap">{renderCommentWithMentions(c.content)}</p>
+                    <p className="text-[var(--text-sm)] text-[var(--text-secondary)] leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{renderCommentWithMentions(c.content)}</p>
                   </div>
                 ))}
               </div>

@@ -622,12 +622,11 @@ function ProjectDashboardPageInner() {
       <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-10 pb-24">
         {/* HEADER STRIP — sticky */}
         <header
-          className="sticky top-0 z-30 flex items-center justify-between gap-4 py-3 -mx-4 sm:-mx-6 lg:-mx-10 px-4 sm:px-6 lg:px-10"
+          className="sticky top-0 z-30 flex flex-wrap md:flex-nowrap items-center justify-between gap-x-4 gap-y-2 py-3 -mx-4 sm:-mx-6 lg:-mx-10 px-4 sm:px-6 lg:px-10"
           style={{
             background: 'rgba(19, 21, 28, 0.92)',
             backdropFilter: 'blur(8px)',
             borderBottom: '1px solid var(--border-default)',
-            minHeight: 56,
           }}
         >
           <div className="flex items-center gap-3 min-w-0">
