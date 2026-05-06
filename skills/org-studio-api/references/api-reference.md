@@ -36,7 +36,6 @@ Returns all projects, tasks, and settings.
     "projectId": "proj-123",
     "status": "backlog",
     "assignee": "AgentName",
-    "priority": "medium",
     "version": "0.1",
     "description": "Optional detailed description",
     "doneWhen": "Optional acceptance criteria",

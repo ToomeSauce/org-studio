@@ -430,6 +430,13 @@ export async function POST(req: NextRequest) {
 
     switch (action) {
       case 'addTask': {
+        // #1249 — priority field removed. Strip any client-supplied priority
+        // up-front so callers using stale templates do not poison the data bag.
+        // Ordering is via column position (sortOrder); see #1250 for the
+        // user-facing drag-and-drop UI.
+        if (payload?.task && 'priority' in payload.task) {
+          delete payload.task.priority;
+        }
         // 410 compat: reject tasks targeting archived qa-fold projects
         const addTaskProjectId = payload.task?.projectId;
         if (addTaskProjectId) {
@@ -736,6 +743,11 @@ export async function POST(req: NextRequest) {
       }
 
       case 'updateTask': {
+        // #1249 — priority field removed. Strip any client-supplied priority
+        // from `updates` so stale templates cannot reintroduce the field.
+        if (payload?.updates && 'priority' in payload.updates) {
+          delete payload.updates.priority;
+        }
         // #1195: validate payload shape up front so silent no-ops (missing
         // `updates`, `patch` typo, empty updates, missing id) become loud
         // 400s instead of misleading `{ ok: true }`.

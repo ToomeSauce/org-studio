@@ -965,7 +965,9 @@ export class PostgresStoreProvider implements StoreProvider {
           status,
           projectId,
           assignee,
-          priority,
+          // priority removed (#1249) — ordering is via sortOrder/column position.
+          // Existing tasks may still carry a stale priority; we strip it from the
+          // working object below so it does not get persisted into the data bag.
           testType,
           testAssignee,
           initiatedBy,
@@ -981,6 +983,7 @@ export class PostgresStoreProvider implements StoreProvider {
           createdAt,
           statusHistory,
           comments,
+          priority: _droppedPriority, // #1249 — strip stale priority off old rows so it does not bleed into the data JSON bag
           ...overflow
         } = current;
 

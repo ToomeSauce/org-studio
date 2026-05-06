@@ -556,7 +556,7 @@ function TasksPageInner() {
       projectId: newProject || (filterProject !== 'all' ? filterProject : (projects[0]?.id || '')),
       assignee: newAssignee || teammates[0]?.name || '',
       description: desc,
-      priority: 'medium',
+      // priority field removed (#1249); ordering is via column position (sortOrder, see #1250).
       taskType: newTaskType,  // #698: adhoc task type
       // #862: testType / testAssignee no longer sent from UI — QA routes via standard assignee.
       ...(newSectionId ? { sectionId: newSectionId } : {}),

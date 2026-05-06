@@ -63,7 +63,11 @@ export const TASK_COLUMNS: ColumnDef[] = [
   { field: 'status',          col: 'status',            defaultOnWrite: 'backlog', falsyIsMissing: true },
   { field: 'projectId',       col: 'project_id' },
   { field: 'assignee',        col: 'assignee' },
-  { field: 'priority',        col: 'priority' },
+  // priority field removed (#1249, 2026-05-06). Ordering is via sortOrder /
+  // column position; see #1250 for the user-facing drag-and-drop UI. The DB
+  // column is intentionally retained as deprecated for one observation cycle
+  // before a follow-up migration drops it; while it remains, the column-map
+  // entry is omitted so writes no longer touch it.
   { field: 'testType',        col: 'test_type' },
   { field: 'testAssignee',    col: 'test_assignee' },
   { field: 'initiatedBy',     col: 'initiated_by' },

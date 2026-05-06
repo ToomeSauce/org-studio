@@ -170,7 +170,10 @@ export interface Task {
   status: 'planning' | 'backlog' | 'in-progress' | 'review' | 'done' | 'blocked';
   projectId: string;
   assignee: string;
-  priority?: 'high' | 'medium' | 'low';
+  // priority field removed (#1249, 2026-05-06). Ordering is via sortOrder /
+  // column position; see #1250 for the user-facing drag-and-drop UI. The DB
+  // column `priority` is intentionally retained as deprecated until a follow-up
+  // migration drops it.
   sectionId?: string;     // Section within the project this task belongs to
   version?: string;       // Version field (e.g., "0.902") — set when vision cycle creates the task
   sortOrder?: number;
