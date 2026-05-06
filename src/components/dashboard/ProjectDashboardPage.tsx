@@ -19,7 +19,7 @@ import { useMemo, useState, Suspense, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowUpRight, Clock, Play, Loader2, Square } from 'lucide-react';
+import { ArrowUpRight, Clock, Play, Loader2, Square, AlertTriangle } from 'lucide-react';
 
 // Lazy-loaded — heavy editor with optimistic write logic. Keeps the dashboard
 // shell snappy and matches the dynamic() pattern used by the legacy page.
@@ -33,6 +33,7 @@ import {
   getComponentVersions,
   getComponentApprovedThrough,
   getComponentIcon,
+  getOrphanBlockedTasks,
   type ComponentLike,
 } from '@/lib/component-helpers';
 import { isVersionInHorizon, compareVersions } from '@/lib/version-utils';
@@ -737,6 +738,94 @@ function ProjectDashboardPageInner() {
         {storeData && (
           <DispatchHealthBanner store={storeData} projectId={projectId} />
         )}
+
+        {/* #1235 — Orphan blocked tasks. Tasks with status='blocked' that are
+         * not anchored to any component (sectionId), roadmap item, or parent
+         * task wouldn't otherwise be reachable from this dashboard. The
+         * project-list "X blocked" badge counts them, but the per-version
+         * breakdowns only see roadmap-anchored tasks, leaving orphans
+         * invisible. Surface them here, clickable to open the detail panel,
+         * so users can find every task that contributes to the blocked count.
+         *
+         * Render only when at least one orphan exists — no empty section.
+         */}
+        {(() => {
+          const orphanBlocked = getOrphanBlockedTasks(allTasks, projectId);
+          if (orphanBlocked.length === 0) return null;
+          return (
+            <section className="mt-6">
+              <div
+                className="rounded-md p-4 sm:p-5"
+                style={{
+                  background: 'rgba(255, 92, 92, 0.06)',
+                  border: '1px solid rgba(255, 92, 92, 0.30)',
+                }}
+              >
+                <div className="flex items-start gap-3">
+                  <AlertTriangle
+                    size={16}
+                    style={{ color: '#ff5c5c', marginTop: 2, flexShrink: 0 }}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div
+                      className="text-[11px] uppercase tracking-[0.16em] mb-1"
+                      style={{ color: '#ff5c5c', fontFamily: monoFont }}
+                    >
+                      {orphanBlocked.length} orphan blocked task
+                      {orphanBlocked.length === 1 ? '' : 's'}
+                    </div>
+                    <div className="text-[12px] text-[var(--text-tertiary)] mb-3">
+                      Blocked tasks not anchored to any component or roadmap
+                      item. They count toward the project blocked total but
+                      live outside the roadmap below — click through to
+                      unblock or re-home them.
+                    </div>
+                    <ul className="flex flex-col gap-1.5">
+                      {orphanBlocked.map((t) => (
+                        <li key={t.id}>
+                          <button
+                            type="button"
+                            onClick={() => onPickTask(t.id)}
+                            className="w-full text-left rounded px-3 py-2 text-[13px] transition-colors hover:bg-[var(--card-highlight)]"
+                            style={{
+                              background: 'var(--card)',
+                              border: '1px solid var(--border-default)',
+                              color: 'var(--text-primary)',
+                            }}
+                            title="Open task"
+                          >
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span style={{ color: '#ff5c5c', fontSize: 11 }}>
+                                🚫
+                              </span>
+                              <span className="truncate">{t.title || '(untitled)'}</span>
+                              {t.assignee && (
+                                <span
+                                  className="text-[11px]"
+                                  style={{ color: 'var(--text-tertiary)', fontFamily: monoFont }}
+                                >
+                                  · {t.assignee}
+                                </span>
+                              )}
+                              {t.blockedReason && (
+                                <span
+                                  className="text-[11px] truncate"
+                                  style={{ color: 'var(--text-tertiary)' }}
+                                >
+                                  — {t.blockedReason}
+                                </span>
+                              )}
+                            </div>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </section>
+          );
+        })()}
 
         {/* SUB-HEADER — currently viewing component:version */}
         {activeComp && currentVersion && (

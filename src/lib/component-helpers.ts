@@ -107,6 +107,38 @@ export interface TaskLike {
   sectionId?: string;
   version?: string;
   projectId: string;
+  roadmapItemId?: string;
+  parentId?: string;
+}
+
+/**
+ * #1235 — Orphan blocked tasks for a project.
+ *
+ * A task is considered "orphan blocked" when it:
+ *   - belongs to the project (projectId match),
+ *   - has status === 'blocked',
+ *   - is NOT anchored to a component (sectionId),
+ *   - is NOT anchored to a roadmap item (roadmapItemId),
+ *   - is NOT a sub-task of another task (parentId).
+ *
+ * The projects-list dashboard counts every blocked task in the project
+ * (`tasks.filter(t => t.status==='blocked').length`), but the per-version
+ * roadmap renders only roadmap-anchored tasks. Orphans contribute to the
+ * count yet have nowhere to surface in the project dashboard — this helper
+ * makes them findable so users can open and resolve each one.
+ */
+export function getOrphanBlockedTasks<T extends TaskLike>(
+  tasks: T[],
+  projectId: string,
+): T[] {
+  return tasks.filter((t) => {
+    if (!t || t.projectId !== projectId) return false;
+    if (t.status !== 'blocked') return false;
+    if (t.sectionId) return false;
+    if (t.roadmapItemId) return false;
+    if (t.parentId) return false;
+    return true;
+  });
 }
 
 // ─── Icon selection ───
