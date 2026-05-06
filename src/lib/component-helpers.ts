@@ -327,9 +327,13 @@ export function getComponentApprovedVersions(
 }
 
 /**
- * #1186: is `version` approved for this component? Checks the explicit list
- * first; falls back to legacy contiguous-prefix semantics via
- * `approvedThrough` when no list is set.
+ * #1186: is `version` approved for this component? Set membership against
+ * `component.approvedVersions[]`. The legacy `approvedThrough` scalar fallback
+ * was retired by #1224 — explicit-list approval is now the only mode.
+ *
+ * Set membership (not `<=` comparison) is intentional: with non-contiguous
+ * approvals (e.g. tick 0.18, skip 0.19, tick 0.20), a `<=max` check would
+ * let an unapproved 0.19 promote through. Locked in by #1222.
  */
 export function isVersionApproved(
   project: ProjectLike,
