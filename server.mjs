@@ -215,6 +215,9 @@ const server = createServer((req, res) => {
 const wss = new WebSocketServer({ server, path: '/ws' });
 
 const DATA_DIR = join(__dirname, 'data');
+// #1265: STORE_PATH retained only for legacy backups/restore + dev offline mode.
+// In Postgres mode (DATABASE_URL set), the file is never read or written by the live app.
+// data/store.json was removed in this commit; the path stays so existsSync() guards skip cleanly.
 const STORE_PATH = join(DATA_DIR, 'store.json');
 const STATUS_PATH = join(DATA_DIR, 'activity-status.json');
 
@@ -1208,18 +1211,32 @@ async function initializePostgresListener() {
 // Also sync ORG.md when store changes
 initWorkspaceBase();
 
-if (WORKSPACE_BASE && existsSync(STORE_PATH)) {
+if (WORKSPACE_BASE) {
   let orgTimer = null;
-  watch(STORE_PATH, () => {
-    if (orgTimer) clearTimeout(orgTimer);
-    orgTimer = setTimeout(() => {
-      const data = safeRead(STORE_PATH);
-      if (data) syncOrgFiles(data);
-    }, 500);
-  });
-  // Initial sync on startup
-  const initialStore = safeRead(STORE_PATH);
-  if (initialStore) syncOrgFiles(initialStore);
+  // #1265: ORG.md sync now driven by Postgres LISTEN/NOTIFY (see syncOrgFiles call in the
+  // notification handler). The file watcher below is a no-op safety net for non-Postgres
+  // dev mode only — under Postgres it never fires because data/store.json is never written.
+  if (existsSync(STORE_PATH) && !usePostgres) {
+    watch(STORE_PATH, () => {
+      if (orgTimer) clearTimeout(orgTimer);
+      orgTimer = setTimeout(() => {
+        const data = safeRead(STORE_PATH);
+        if (data) syncOrgFiles(data);
+      }, 500);
+    });
+  }
+
+  // Initial sync on startup — Postgres-first.
+  // (#1265: previously read stale STORE_PATH here, which fed agents April-15 ORG.md
+  // data on every restart. Now we always pull from /api/store like the rest of server.mjs.)
+  (async () => {
+    try {
+      const initialStore = await refreshCachedStore();
+      if (initialStore) syncOrgFiles(initialStore);
+    } catch (e) {
+      console.warn('[ORG sync] initial sync skipped:', e?.message || e);
+    }
+  })();
 
   // Seed activity feed from recent task history
   // Always fetch from API (Postgres) to get current data — local store.json may be stale
@@ -1305,8 +1322,11 @@ async function refreshCachedStore() {
       return cachedStore;
     }
   } catch (e) {
-    // Fallback to local file
-    cachedStore = safeRead(STORE_PATH);
+    // #1265: Postgres-first. Falling back to STORE_PATH used to silently feed stale
+    // April-15 data into the in-memory cache. Now we just log and return null —
+    // callers already gracefully handle a missing cachedStore.
+    console.warn('[refreshCachedStore] /api/store fetch failed:', e?.message || e);
+    cachedStore = null;
   }
   return cachedStore;
 }
@@ -1403,8 +1423,10 @@ wss.on('connection', (ws) => {
   pollFailureCount = 0;
   scheduleNextPoll(100);
 
-  // Send all cached state immediately
-  const store = cachedStore || safeRead(STORE_PATH);
+  // Send all cached state immediately. cachedStore is Postgres-backed and warmed at
+  // startup via refreshCachedStore(); if it's null the client will pick it up on the
+  // next /api/store HTTP poll. (#1265: dropped stale STORE_PATH fallback.)
+  const store = cachedStore;
   if (store) ws.send(JSON.stringify({ type: 'store', data: store, ts: Date.now() }));
 
   const statuses = safeRead(STATUS_PATH);
@@ -1536,7 +1558,7 @@ const _projectIntegrityLoggedMap = new Map(); // key: `${projectId}:${violationT
 const PROJECT_INTEGRITY_DEDUP_MS = 60 * 60_000; // 60 minutes
 
 async function projectIntegrityAudit() {
-  const store = cachedStore || safeRead(STORE_PATH);
+  const store = cachedStore; // #1265: Postgres-backed only; no stale STORE_PATH fallback.
   if (!store?.projects?.length) return;
 
   const now = Date.now();
@@ -1614,8 +1636,8 @@ async function projectIntegrityAudit() {
 }
 
 async function stuckTaskWatchdog() {
-  // Use cachedStore (Postgres-backed) if available, fall back to file
-  const store = cachedStore || safeRead(STORE_PATH);
+  // #1265: cachedStore is Postgres-backed; no stale STORE_PATH fallback.
+  const store = cachedStore;
   if (!store?.tasks?.length) return;
 
   // Log incidents for stuck tasks (merged from standalone stuckTaskDetector)

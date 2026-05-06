@@ -17,6 +17,7 @@ const BASE_COLUMNS: { key: Task['status']; label: string; color: string }[] = [
   { key: 'in-progress', label: 'In Progress', color: 'bg-[var(--warning)]' },
   { key: 'review', label: 'Review', color: 'bg-purple-500' },
   { key: 'done', label: 'Done', color: 'bg-[var(--success)]' },
+  { key: 'blocked', label: 'Blocked', color: 'bg-[var(--error)]' }, // #1264 — blocked tickets need a column or they go invisible on the board.
 ];
 
 const QA_COLUMN_LEGACY_SENTINEL = null; // #862: QA is a component, not a column. Sentinel kept so grep catches any regressions.

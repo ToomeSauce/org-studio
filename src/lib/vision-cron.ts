@@ -7,8 +7,6 @@
 
 import { Project } from './store';
 import { rpc } from './gateway-rpc';
-import { readFileSync } from 'fs';
-import { join } from 'path';
 
 export interface CronJob {
   name: string;
@@ -41,22 +39,9 @@ export function cadenceToCron(cadence: string): string {
   }
 }
 
-/**
- * Resolve devOwner name to agentId from store
- */
-function resolveDevAgentId(project: Project): string | null {
-  if (!project.devOwner) return null;
-  try {
-    const store = JSON.parse(readFileSync(join(process.cwd(), 'data', 'store.json'), 'utf-8'));
-    const teammates = store.settings?.teammates || [];
-    const match = teammates.find((t: any) => 
-      t.name?.toLowerCase() === project.devOwner?.toLowerCase()
-    );
-    return match?.agentId || null;
-  } catch {
-    return null;
-  }
-}
+// #1265: removed dead `resolveDevAgentId` helper. It read data/store.json directly
+// (stale since Postgres cutover 2026-03-27) and had no callers. If a future caller
+// needs name->agentId resolution, fetch settings.teammates from the API instead.
 
 /**
  * Build the wake message handed to the devOwner agent when a project

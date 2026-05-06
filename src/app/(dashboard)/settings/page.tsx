@@ -390,7 +390,7 @@ function DataStorageSection() {
               </>
             ) : (
               <>
-                <p>Data is stored in <code className="text-[10px] bg-[var(--bg-tertiary)] px-1 py-0.5 rounded font-mono">data/store.json</code>. To enable remote access and multi-instance sync, set <code className="text-[10px] bg-[var(--bg-tertiary)] px-1 py-0.5 rounded font-mono">DATABASE_URL</code> in <code className="text-[10px] bg-[var(--bg-tertiary)] px-1 py-0.5 rounded font-mono">.env.local</code>.</p>
+                <p>Data is stored in <code className="text-[10px] bg-[var(--bg-tertiary)] px-1 py-0.5 rounded font-mono">data/store.json</code>. <strong>File-based storage is for offline / dev only and is not the supported production path.</strong> To enable remote access, multi-instance sync, and proper data durability, set <code className="text-[10px] bg-[var(--bg-tertiary)] px-1 py-0.5 rounded font-mono">DATABASE_URL</code> in <code className="text-[10px] bg-[var(--bg-tertiary)] px-1 py-0.5 rounded font-mono">.env.local</code>.</p>
               </>
             )}
           </div>
