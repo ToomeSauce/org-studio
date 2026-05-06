@@ -190,6 +190,28 @@ class WSManager {
     }
   }
 
+  /**
+   * #1253 — Optimistic local cache patch.
+   *
+   * Lets a mutation handler immediately reflect the result in any UI bound
+   * to `useWSData(type)` without waiting for the server's WS broadcast or
+   * the 5s HTTP poll. Pass a producer that receives the current cached
+   * value and returns the next value (immutable update). All subscribed
+   * listeners are notified synchronously.
+   *
+   * The next real broadcast (NOTIFY → server.mjs broadcast or HTTP poll)
+   * will overwrite this optimistic value with the canonical server state,
+   * which is the desired "converge to truth" behaviour. If the mutation
+   * fails server-side, the caller is responsible for reverting (pass the
+   * pre-mutation value back through the same producer).
+   */
+  pushOptimistic(type: MessageType, producer: (current: any) => any) {
+    const current = this.cache.get(type) ?? null;
+    const next = producer(current);
+    this.cache.set(type, next);
+    this.listeners.forEach(fn => fn({ type, data: next, ts: Date.now() }));
+  }
+
   private stopHttpFallback(type: MessageType) {
     const interval = this.httpPollers.get(type);
     if (interval) {
@@ -310,5 +332,25 @@ export function useLiveData() {
   const httpAvailable = useHttpAvailable();
 
   return { sessions, cron, store, activityStatus, gatewayStatus, connected, httpAvailable };
+}
+
+/**
+ * #1253 — Top-level helper for mutation handlers.
+ *
+ * Apply an optimistic patch to the locally-cached value of a WS type so any
+ * `useWSData(type)` consumers re-render in the same React tick. Use after a
+ * server mutation succeeds (or before, if you trust the round-trip and want
+ * true optimistic UX). The next server broadcast/poll will reconcile.
+ *
+ * Example:
+ *   pushOptimisticUpdate('store', (s) => ({
+ *     ...s,
+ *     projects: s.projects.map(p =>
+ *       p.id === id ? { ...p, state: 'active' } : p
+ *     ),
+ *   }));
+ */
+export function pushOptimisticUpdate(type: MessageType, producer: (current: any) => any) {
+  getManager().pushOptimistic(type, producer);
 }
 

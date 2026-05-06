@@ -27,7 +27,7 @@ const RoadmapWithApprovalHorizon = dynamic(
   () => import('@/components/RoadmapWithApprovalHorizon').then(mod => mod.RoadmapWithApprovalHorizon),
   { ssr: false }
 );
-import { useWSData } from '@/lib/ws';
+import { useWSData, pushOptimisticUpdate } from '@/lib/ws';
 import {
   getEffectiveComponents,
   getComponentVersions,
@@ -561,9 +561,23 @@ function ProjectDashboardPageInner() {
   const setProjectState = useCallback(
     async (state: 'active' | 'inactive') => {
       if (!projectId) return;
+      // #1253 — capture pre-mutation state for optimistic rollback on failure.
+      const prevState = (project as any)?.state;
       setStateBusy(true);
+      // Optimistic UI: patch the WS-cached store so the button transitions
+      // in the same render cycle. Real broadcast (Postgres NOTIFY → WS, or
+      // 5s HTTP poll) reconciles afterward.
+      pushOptimisticUpdate('store', (s: any) => {
+        if (!s?.projects) return s;
+        return {
+          ...s,
+          projects: s.projects.map((p: any) =>
+            p.id === projectId ? { ...p, state } : p
+          ),
+        };
+      });
       try {
-        await fetch('/api/store', {
+        const resp = await fetch('/api/store', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -572,13 +586,30 @@ function ProjectDashboardPageInner() {
             updates: { state },
           }),
         });
-      } catch (e) {
+        if (!resp.ok) {
+          const body = await resp.json().catch(() => ({}));
+          throw new Error(body?.error || `HTTP ${resp.status}`);
+        }
+      } catch (e: any) {
         console.error('Failed to update project state:', e);
+        // Rollback optimistic patch.
+        pushOptimisticUpdate('store', (s: any) => {
+          if (!s?.projects) return s;
+          return {
+            ...s,
+            projects: s.projects.map((p: any) =>
+              p.id === projectId ? { ...p, state: prevState } : p
+            ),
+          };
+        });
+        alert(
+          `Couldn't ${state === 'active' ? 'activate' : 'deactivate'} project: ${e?.message || 'unknown error'}`
+        );
       } finally {
         setStateBusy(false);
       }
     },
-    [projectId]
+    [projectId, project]
   );
 
   const onStartProject = useCallback(async () => {
