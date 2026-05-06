@@ -670,12 +670,14 @@ export async function buildDispatchMessage(
   const inProgress = agentTasks.filter((t: any) => t.status === 'in-progress');
   const blocked = agentTasks.filter((t: any) => t.status === 'blocked');
 
-  // #1189 — single FIFO dispatch queue. Versioned roadmap tickets and adhoc
-  // bug/chore/spike/followup tickets sit in the same queue, ordered by
-  // createdAt ASC. The eligibility rules per lane are unchanged (versioned
-  // tickets still need horizon/waitsFor/priorVersionsComplete; adhoc tickets
-  // need only an active project + assignee + backlog status); what changed
-  // is the ORDER — no more silent "versioned-first then adhoc" priority.
+  // #1189 / #1250 — single ordered dispatch queue. Versioned roadmap tickets
+  // and adhoc bug/chore/spike/followup tickets sit in the same queue, ordered
+  // by user-controlled sortOrder ASC (createdAt as deterministic tiebreaker).
+  // The eligibility rules per lane are unchanged (versioned tickets still
+  // need horizon/waitsFor/priorVersionsComplete; adhoc tickets need only an
+  // active project + assignee + backlog status); what changed is the ORDER
+  // — it is now the same field the context-board DnD writes (sortOrder), so
+  // dragging a ticket to the top of backlog moves it to the top of dispatch.
   // The single source of truth lives in dispatch-gate.ts; do not re-implement
   // the filter here.
   //

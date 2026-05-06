@@ -84,6 +84,11 @@ export const TASK_COLUMNS: ColumnDef[] = [
   { field: 'version',         col: 'version' },
   { field: 'statusHistory',   col: 'status_history',    json: true,  defaultOnWrite: [] },
   { field: 'comments',        col: 'comments',          json: true,  defaultOnWrite: [] },
+  // #1250 — explicit per-(project, status) ordering. Single source of truth
+  // for both UI drag-and-drop and dispatcher pickup. Migration:
+  // scripts/migrate-task-sort-order.mjs (ALTER TABLE + backfill).
+  // falsyIsMissing is intentionally false so 0 is a valid sortOrder.
+  { field: 'sortOrder',       col: 'sort_order' },
 ];
 
 /**

@@ -31,6 +31,7 @@ interface TaskLike {
   taskType?: string;
   loopPausedAt?: number | string | null;
   createdAt?: number;
+  sortOrder?: number; // #1250 — user-controlled column order, dispatcher reads this primary, createdAt as tiebreaker
 }
 
 // #1183 — adhoc tickets (taskType bug/chore/spike/followup) are filed without
@@ -282,27 +283,31 @@ export function isTaskAnyDispatchEligible(
 }
 
 /**
- * #1189 — single FIFO dispatch queue per (assignee, project).
+ * #1189 / #1250 — single ordered dispatch queue per agent.
  *
  * Returns this agent's eligible backlog tickets across ALL active projects,
- * ordered by `createdAt` ASC (oldest landing first). Versioned roadmap
- * tickets and adhoc bug/chore tickets sit in the same queue in landing
- * order — there is no separate "versioned-first then adhoc" priority.
+ * ordered by their user-controlled `sortOrder` (ASC — lower = top of stack =
+ * dispatched first). createdAt is the deterministic tiebreaker for tasks
+ * that share a sortOrder (or, transitionally, for any row the migration
+ * has not backfilled yet).
  *
- * Rationale: the old behavior was that the scheduler picked `backlog[0]`,
- * where `backlog` was a filter result — order was insertion order in
- * `store.tasks`, which usually matches createdAt but not always (e.g.
- * after Postgres reorders, after migrations). Pinning the order to
- * `createdAt` makes it explicit and predictable. New versions added on
- * the fly land at the bottom by virtue of having the largest createdAt;
- * vision owners can drag-reorder via ticket F (#1190).
+ * sortOrder is the SAME field the context-board DnD writes (#1250). UI and
+ * scheduler now agree: dragging a ticket to the top of backlog moves it to
+ * the top of the dispatch queue. There is no separate insertion-order /
+ * createdAt path. Versioned roadmap tickets and adhoc bug/chore tickets
+ * sit in the same queue — the order is whatever the user (or the vision
+ * cycle) set.
+ *
+ * Rationale for the createdAt tiebreaker rather than `id`: createdAt makes
+ * "oldest of the tied group wins" obvious in logs and in the UI, and matches
+ * the behavior new readers expect after years of FIFO dispatch.
  *
  * Args:
  *   - agentMatchers: lowercased strings the task.assignee field can match.
  *     Pass [agentName.toLowerCase(), agentId] from the caller — this lets
  *     the predicate be agnostic about agent-name resolution.
  *
- * Returns: tasks newest-last. Caller usually takes [0].
+ * Returns: tasks top-first. Caller usually takes [0].
  */
 export function getEligibleBacklogFifo(
   store: StoreLike,
@@ -317,8 +322,15 @@ export function getEligibleBacklogFifo(
     if (!isTaskAnyDispatchEligible(store, t)) continue;
     eligible.push(t);
   }
-  // Stable ASC by createdAt; ties keep array order (insertion).
-  eligible.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+  // Stable ASC by sortOrder; createdAt is the deterministic tiebreaker for
+  // ties (or for un-migrated rows missing sortOrder — those sort to the end
+  // of the column because Number.POSITIVE_INFINITY beats any real value).
+  eligible.sort((a, b) => {
+    const sa = typeof a.sortOrder === 'number' ? a.sortOrder : Number.POSITIVE_INFINITY;
+    const sb = typeof b.sortOrder === 'number' ? b.sortOrder : Number.POSITIVE_INFINITY;
+    if (sa !== sb) return sa - sb;
+    return (a.createdAt ?? 0) - (b.createdAt ?? 0);
+  });
   return eligible;
 }
 

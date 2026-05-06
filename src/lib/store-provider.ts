@@ -983,6 +983,7 @@ export class PostgresStoreProvider implements StoreProvider {
           createdAt,
           statusHistory,
           comments,
+          sortOrder: _droppedSortOrder, // #1250 — typed column, do not let it bleed into the data bag overflow on this UPDATE path
           priority: _droppedPriority, // #1249 — strip stale priority off old rows so it does not bleed into the data JSON bag
           ...overflow
         } = current;

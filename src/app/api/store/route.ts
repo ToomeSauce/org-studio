@@ -681,6 +681,23 @@ export async function POST(req: NextRequest) {
           statusHistory: [{ status: initialStatus, timestamp: now }],
           initiatedBy: payload.task?.initiatedBy || 'unknown',
         };
+
+        // #1250 — bottom-of-stack default. New tickets land at the BOTTOM of
+        // their (projectId, status) column. If the caller passed an explicit
+        // sortOrder we honor it; otherwise we compute max(sort_order)+1000
+        // for the column from the in-memory store. This keeps DnD-ordered
+        // columns stable when new tickets land on them.
+        if (typeof task.sortOrder !== 'number') {
+          const cohort = (store.tasks || []).filter(
+            (t: any) => t.projectId === task.projectId && t.status === task.status,
+          );
+          let maxSort = 0;
+          for (const t of cohort) {
+            const s = typeof t.sortOrder === 'number' ? t.sortOrder : 0;
+            if (s > maxSort) maxSort = s;
+          }
+          task.sortOrder = maxSort + 1000;
+        }
         // PERF: Use targeted provider.createTask() instead of full store write
         await getStoreProvider().createTask(task);
 
