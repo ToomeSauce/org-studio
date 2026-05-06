@@ -5,7 +5,11 @@ type ComponentFixture = {
   id: string;
   name: string;
   owner: string;
-  approvedThrough: string;
+  approvedThrough?: string;
+  // #1224 — per-component approval is via approvedVersions[] (set-membership).
+  // approvedThrough remains on the type for legacy fixtures, but newer
+  // tests/fixtures express approval as an explicit version list.
+  approvedVersions?: string[];
   versions: Array<{ version: string; status: string }>;
 };
 
