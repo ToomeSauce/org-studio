@@ -610,6 +610,25 @@ export async function POST(req: NextRequest) {
           ticketNumber = getNextTicketNumberFallback(store);
         }
 
+        // #okqrk04nmou2mtsz — hard guard. Both the provider call and the
+        // fallback are expected to return a positive integer. Belt-and-braces
+        // assertion so a NaN/null/undefined slip can never silently persist a
+        // task with a missing number (the historical 6-task backfill case).
+        // If neither path produced a valid number, refuse the write — better
+        // a loud 500 than another invisible orphan.
+        if (!Number.isInteger(ticketNumber) || ticketNumber <= 0) {
+          console.error(
+            `[TicketNumber] Invalid allocation result (${ticketNumber}). Refusing addTask.`,
+          );
+          return NextResponse.json(
+            {
+              error:
+                'Internal error: ticket number allocation produced an invalid value. Task not created.',
+            },
+            { status: 500 },
+          );
+        }
+
         // #1126 PR 4: assignee defaulting from version.owner / section.owner.
         //
         // Precedence: task.assignee (explicit) > version.owner > section.owner.
