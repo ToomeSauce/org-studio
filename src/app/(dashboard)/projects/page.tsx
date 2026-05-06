@@ -317,7 +317,26 @@ function ProjectsContent() {
               {/* Needs-attention reason badges. Only render the strongest one
                   to keep the card tidy. */}
               {!showInactiveBadge && m.blocked > 0 && (
-                <span className="text-xs px-2 py-1 rounded-full font-medium bg-red-50 text-red-700 dark:bg-red-950/20 dark:text-red-400">
+                <span
+                  role="link"
+                  tabIndex={0}
+                  className="text-xs px-2 py-1 rounded-full font-medium bg-red-50 text-red-700 dark:bg-red-950/20 dark:text-red-400 cursor-pointer hover:bg-red-100 dark:hover:bg-red-950/40 transition-colors"
+                  // #1266 — deep-link to /context filtered to this project + scroll to Blocked column.
+                  // stopPropagation+preventDefault breaks out of the wrapping <Link>.
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    router.push(`/context?project=${encodeURIComponent(project.id)}&focus=blocked`);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      router.push(`/context?project=${encodeURIComponent(project.id)}&focus=blocked`);
+                    }
+                  }}
+                  title="View blocked tickets on the board"
+                >
                   🚫 {m.blocked} blocked
                 </span>
               )}

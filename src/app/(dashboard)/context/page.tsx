@@ -8,7 +8,7 @@ import { Plus, X, Circle, Bot, Activity, Eye, Pencil, Info, Target, Shield, File
 import { clsx } from 'clsx';
 import Link from 'next/link';
 import { useState, useEffect, useMemo, useCallback, Suspense, useRef } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { toast } from 'react-toastify';
 
 const BASE_COLUMNS: { key: Task['status']; label: string; color: string }[] = [
@@ -331,13 +331,34 @@ function TasksPageInner() {
     }
   }, [storeData]);
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const urlProject = searchParams.get('project');
   const urlTask = searchParams.get('task');
+  const urlFocus = searchParams.get('focus');
   const [filterProject, setFilterProject] = useState('all');
 
   useEffect(() => {
     if (urlProject) setFilterProject(urlProject);
   }, [urlProject]);
+
+  // #1266 — ?focus=blocked scrolls the Blocked column into view after the
+  // store hydrates. We retry a few frames because the column DOM may not
+  // exist on first paint while WS data is still inflight.
+  useEffect(() => {
+    if (urlFocus !== 'blocked') return;
+    let attempts = 0;
+    const tick = () => {
+      attempts++;
+      const el = document.querySelector('[data-column="blocked"]');
+      if (el) {
+        (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'end' });
+        return;
+      }
+      if (attempts < 12) setTimeout(tick, 250);
+    };
+    setTimeout(tick, 100);
+  }, [urlFocus]);
   const [filterAgent, setFilterAgent] = useState('all');
   const [filterVersion, setFilterVersion] = useState('all');
   const [filterSection, setFilterSection] = useState('all');
@@ -739,7 +760,7 @@ function TasksPageInner() {
                   {columns.map(col => {
                     const colTasks = archivedByStatus.get(col.key) || [];
                     return (
-                      <div key={col.key} className="w-[280px] sm:w-[320px] shrink-0 flex flex-col">
+                      <div key={col.key} data-column={col.key} className="w-[280px] sm:w-[320px] shrink-0 flex flex-col">
                         <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-t-[var(--radius-md)] px-3 py-2 flex items-center justify-between">
                           <div className="flex items-center gap-2">
                             <div className={clsx(col.color, 'w-2 h-2 rounded-full')} />
@@ -850,7 +871,7 @@ function TasksPageInner() {
                   return bTime - aTime;
                 });
               return (
-                <div key={col.key} className="w-[280px] sm:w-[320px] shrink-0 flex flex-col"
+                <div key={col.key} data-column={col.key} className="w-[280px] sm:w-[320px] shrink-0 flex flex-col"
                   onDragOver={e => {
                     e.preventDefault();
                     if (dragOverCol !== col.key) setDragOverCol(col.key);
@@ -1152,7 +1173,21 @@ function TasksPageInner() {
           onUpdate={handlePanelUpdate}
           onDelete={handlePanelDelete}
           onAddComment={handlePanelAddComment}
-          onClose={() => setSelectedTaskId(null)}
+          onClose={() => {
+            setSelectedTaskId(null);
+            // #1266 — strip ?task= from URL on close so back-button + share work cleanly.
+            // Using window.history.replaceState rather than router.replace because
+            // the latter doesn't actually update window.location in Next.js 16 here.
+            if (typeof window !== 'undefined') {
+              const sp = new URLSearchParams(window.location.search);
+              if (sp.has('task')) {
+                sp.delete('task');
+                const qs = sp.toString();
+                const newUrl = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
+                window.history.replaceState(window.history.state, '', newUrl);
+              }
+            }
+          }}
         />
       )}
     </div>

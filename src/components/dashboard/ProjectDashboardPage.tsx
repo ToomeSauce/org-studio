@@ -15,9 +15,9 @@
  * same Begin Work POST. Only the JSX/styling is rewritten.
  */
 
-import { useMemo, useState, Suspense, useCallback } from 'react';
+import { useMemo, useState, Suspense, useCallback, useEffect } from 'react';
 import dynamic from 'next/dynamic';
-import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import { useParams, useRouter, useSearchParams, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowUpRight, Clock, Play, Loader2, Square, AlertTriangle } from 'lucide-react';
 
@@ -440,6 +440,18 @@ function ProjectDashboardPageInner() {
   const [launching, setLaunching] = useState(false);
   const [stateBusy, setStateBusy] = useState(false);
 
+  // #1266 — ?task=<id> deep link auto-opens TaskDetailPanel.
+  // Wait until storeData is hydrated so taskById has the task.
+  const pathname = usePathname();
+  const urlTask = searchParams.get('task');
+  useEffect(() => {
+    if (!urlTask) return;
+    const t = taskById.get(urlTask);
+    if (!t) return;
+    setSelectedTask(t);
+    setShowDetailPanel(true);
+  }, [urlTask, taskById]);
+
   const onPickTask = useCallback(
     (taskId?: string) => {
       if (!taskId) return;
@@ -818,6 +830,115 @@ function ProjectDashboardPageInner() {
         {storeData && (
           <DispatchHealthBanner store={storeData} projectId={projectId} />
         )}
+
+        {/* #1266 — All blocked tickets for this project. Top-of-page banner so
+         * the count on the project list card has a real surface to click into.
+         * Each row deep-links via TaskDetailPanel. Distinct from the orphan
+         * banner below: this is the broad inventory; orphans are the subset
+         * that need rehoming.
+         *
+         * Render only when at least one non-archived blocked task exists.
+         */}
+        {(() => {
+          const blocked = (allTasks || []).filter(
+            (t: any) => t.projectId === projectId && t.status === 'blocked' && !t.isArchived
+          );
+          if (blocked.length === 0) return null;
+          const VISIBLE_LIMIT = 5;
+          const visible = blocked.slice(0, VISIBLE_LIMIT);
+          const overflow = blocked.length - visible.length;
+          return (
+            <section className="mt-6">
+              <div
+                className="rounded-md p-4 sm:p-5"
+                style={{
+                  background: 'rgba(255, 92, 92, 0.06)',
+                  border: '1px solid rgba(255, 92, 92, 0.30)',
+                }}
+              >
+                <div className="flex items-start gap-3">
+                  <span
+                    style={{ color: '#ff5c5c', marginTop: 2, flexShrink: 0, fontSize: 14 }}
+                    aria-hidden="true"
+                  >
+                    🚫
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div
+                      className="text-[11px] uppercase tracking-[0.16em] mb-1"
+                      style={{ color: '#ff5c5c', fontFamily: monoFont }}
+                    >
+                      {blocked.length} blocked
+                    </div>
+                    <div className="text-[12px] text-[var(--text-tertiary)] mb-3">
+                      Tickets parked while waiting on something. Click any row
+                      to open the task; it'll slide in from the right.
+                    </div>
+                    <ul className="flex flex-col gap-1.5">
+                      {visible.map((t: any) => (
+                        <li key={t.id}>
+                          <button
+                            type="button"
+                            onClick={() => onPickTask(t.id)}
+                            className="w-full rounded px-3 py-2 text-[13px] text-left hover:bg-[var(--card-highlight)] transition-colors"
+                            style={{
+                              background: 'var(--card)',
+                              border: '1px solid var(--border-default)',
+                              color: 'var(--text-primary)',
+                            }}
+                            title="Open task"
+                          >
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {t.ticketNumber != null && (
+                                <span
+                                  className="text-[11px]"
+                                  style={{ color: 'var(--text-tertiary)', fontFamily: monoFont }}
+                                >
+                                  #{t.ticketNumber}
+                                </span>
+                              )}
+                              <span
+                                className="truncate"
+                                style={{ color: 'var(--text-primary)' }}
+                              >
+                                {t.title || '(untitled)'}
+                              </span>
+                              {t.assignee && (
+                                <span
+                                  className="text-[11px]"
+                                  style={{ color: 'var(--text-tertiary)', fontFamily: monoFont }}
+                                >
+                                  · {t.assignee}
+                                </span>
+                              )}
+                              {t.blockedReason && (
+                                <span
+                                  className="text-[11px] truncate"
+                                  style={{ color: 'var(--text-tertiary)' }}
+                                >
+                                  — {t.blockedReason}
+                                </span>
+                              )}
+                            </div>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                    {overflow > 0 && (
+                      <Link
+                        href={`/context?project=${encodeURIComponent(projectId || '')}&focus=blocked`}
+                        className="inline-block mt-2 text-[11px] uppercase tracking-[0.1em] hover:underline"
+                        style={{ color: '#ff5c5c', fontFamily: monoFont }}
+                      >
+                        + {overflow} more on the board →
+                      </Link>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </section>
+          );
+        })()}
 
         {/* #1235 — Orphan blocked tasks. Tasks with status='blocked' that are
          * not anchored to any component (sectionId), roadmap item, or parent
@@ -1230,7 +1351,21 @@ function ProjectDashboardPageInner() {
             await deleteTask(id);
           }}
           onAddComment={async (taskId, comment) => addTaskComment(taskId, comment)}
-          onClose={() => setShowDetailPanel(false)}
+          onClose={() => {
+            setShowDetailPanel(false);
+            // #1266 — strip ?task= from URL so back-button + share work cleanly.
+            // Using window.history.replaceState rather than router.replace because
+            // the latter doesn't actually update window.location in Next.js 16 here.
+            if (typeof window !== 'undefined') {
+              const sp = new URLSearchParams(window.location.search);
+              if (sp.has('task')) {
+                sp.delete('task');
+                const qs = sp.toString();
+                const newUrl = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
+                window.history.replaceState(window.history.state, '', newUrl);
+              }
+            }
+          }}
         />
       )}
     </div>

@@ -360,6 +360,7 @@ export function TaskDetailPanel({
           </div>
           <button
             onClick={handleClose}
+            aria-label="Close task panel"
             className="p-1.5 rounded-[var(--radius-sm)] hover:bg-[var(--bg-hover)] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors shrink-0"
           >
             <X size={18} />
