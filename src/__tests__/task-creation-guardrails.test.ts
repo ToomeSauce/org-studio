@@ -78,4 +78,35 @@ describe('addTask guardrail rules', () => {
       expect(!!task.roadmapItemId).toBe(false);
     });
   });
+
+  // Mirrors the inline guardrail added to addTask after the proj-mc rename.
+  // Without this check, tasks landed with phantom projectIds and became
+  // invisible to dispatch (root cause of the 2026-05-06 'Org Studio backlog
+  // not running' incident).
+  describe('projectId existence guardrail', () => {
+    const projectExists = (projects: any[], projectId: string | undefined) => {
+      if (!projectId) return true; // no projectId is a separate concern
+      return projects.some((p) => p?.id === projectId);
+    };
+
+    it('accepts a known projectId', () => {
+      const store = { projects: [{ id: 'proj-org-studio' }, { id: 'proj-voice' }] };
+      expect(projectExists(store.projects, 'proj-org-studio')).toBe(true);
+    });
+
+    it('rejects an unknown projectId (e.g. legacy proj-mc after rename)', () => {
+      const store = { projects: [{ id: 'proj-org-studio' }] };
+      expect(projectExists(store.projects, 'proj-mc')).toBe(false);
+    });
+
+    it('rejects an entirely fictional projectId', () => {
+      const store = { projects: [{ id: 'proj-org-studio' }] };
+      expect(projectExists(store.projects, 'proj-typo')).toBe(false);
+    });
+
+    it('treats missing projectId as a separate validation concern (not this guardrail)', () => {
+      const store = { projects: [{ id: 'proj-org-studio' }] };
+      expect(projectExists(store.projects, undefined)).toBe(true);
+    });
+  });
 });

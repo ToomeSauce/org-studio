@@ -440,6 +440,31 @@ export async function POST(req: NextRequest) {
               { status: 410 }
             );
           }
+          // Guardrail: reject unknown projectId. Without this, tasks land
+          // with a phantom projectId and become silently invisible to
+          // dispatch (the dispatch gate fails the `projects.find(p.id===…)`
+          // lookup and skips the task with no warning). This was the
+          // root cause of the 2026-05-06 "Org Studio backlog not running"
+          // class of bug — agents typed the display-derived ID
+          // ("proj-org-studio") instead of the canonical ID and the
+          // store accepted it.
+          const projectExists = (store.projects || []).some(
+            (p: any) => p?.id === addTaskProjectId,
+          );
+          if (!projectExists) {
+            const knownIds = (store.projects || [])
+              .map((p: any) => p?.id)
+              .filter(Boolean)
+              .slice(0, 25);
+            return NextResponse.json(
+              {
+                error: `Unknown projectId '${addTaskProjectId}'. The project must exist in the store before tasks can be filed against it.`,
+                hint: 'Use one of the existing project IDs (see knownProjectIds) or create the project first.',
+                knownProjectIds: knownIds,
+              },
+              { status: 400 },
+            );
+          }
         }
 
         // --- #698 Task-creation guardrails ---
