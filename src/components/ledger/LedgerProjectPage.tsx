@@ -145,21 +145,9 @@ function LedgerProjectPageInner() {
     setShowDetailPanel(true);
   }, [taskById]);
 
-  const onBeginWork = useCallback(async () => {
-    if (!beginTarget || !projectId) return;
-    const draftItems = (beginTarget.items || []).filter((it: any) => !it.taskId);
-    if (draftItems.length > 0) {
-      alert(`Cannot start ${beginTarget.version}: ${draftItems.length} item(s) need planning tickets first.`);
-      return;
-    }
-    const resp = await fetch('/api/store', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'promoteVersion', projectId, targetVersion: beginTarget.version }),
-    });
-    const result = await resp.json().catch(() => ({}));
-    if (!result.ok && result.reason) alert(`Cannot start: ${result.reason}`);
-  }, [beginTarget, projectId]);
+  // #1224 / two-state pivot (2026-05-06): the legacy "Begin work →" CTA was
+  // removed. Approval-on-active = auto-launch via updateComponent handler.
+  // beginTarget is still computed for the "next up: vX" preview text.
 
   if (!storeData) {
     return <div className="flex items-center justify-center h-full ledger-mono text-sm text-[var(--ledger-ink-mute)]">Loading…</div>;
@@ -326,20 +314,14 @@ function LedgerProjectPageInner() {
                       )}
                     </div>
                   </div>
-                  {beginTarget && beginTarget.status !== 'current' && (
-                    <button
-                      onClick={onBeginWork}
-                      className="ledger-mono text-[11px] uppercase tracking-[0.18em] px-5 py-3 text-[var(--ledger-paper)] transition-all hover:scale-[1.02] active:scale-[0.99]"
-                      style={{
-                        background: 'var(--ledger-oxblood)',
-                        border: 'none',
-                        cursor: 'pointer',
-                        boxShadow: '0 2px 0 var(--ledger-oxblood-deep)',
-                      }}
-                    >
-                      Begin work →
-                    </button>
-                  )}
+                  {/* Two-state pivot (ticket roto54ammou4arq8 / 2026-05-06):
+                   * Removed the "Begin work →" button. Approval = launch on an
+                   * active project; the updateComponent handler in
+                   * src/app/api/store/route.ts auto-promotes when
+                   * approvedVersions[] changes. Inactive projects ignore
+                   * approvals until reactivated. The dashboard Active/Inactive
+                   * toggle is the single control surface now.
+                   */}
                 </div>
               ) : (
                 <div className="mt-8 mb-10 p-4 px-6 ledger-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ledger-ink-mute)] border border-dashed border-[var(--ledger-rule)]">

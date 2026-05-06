@@ -475,46 +475,64 @@ function VisionCard({
             </button>
           )}
 
-          {/* Launch / Stop Button */}
-          {canStop ? (
-            <button
-              onClick={() => {
-                console.log('[VisionCard:StopButton] clicked', { projectId: project.id, pending, isRunning });
-                onStop();
-              }}
-              className="px-4 py-2 rounded-md font-medium text-sm flex items-center gap-2 transition-all bg-red-500/10 text-red-400 border border-red-500/30 hover:bg-red-500/20"
-            >
-              <X size={16} />
-              Stop
-            </button>
-          ) : (
-            <button
-              onClick={onLaunch}
-              disabled={!canLaunch}
-              className={clsx(
-                'px-4 py-2 rounded-md font-medium text-sm flex items-center gap-2 transition-all',
-                canLaunch
-                  ? 'bg-[var(--accent)] text-white hover:opacity-90'
-                  : 'bg-[var(--bg-secondary)] text-[var(--text-muted)] cursor-not-allowed opacity-50'
-              )}
-            >
-              {launching ? (
-                <>
-                  <Loader size={16} className="animate-spin" />
-                  Launching...
-                </>
-              ) : versionInFlight ? (
-                <>
-                  <span>v{pending} Pending</span>
-                </>
-              ) : (
-                <>
-                  <Rocket size={16} />
-                  Launch
-                </>
-              )}
-            </button>
-          )}
+          {/* Active/Inactive toggle (ticket roto54ammou4arq8 / 2026-05-06).
+           * Replaces the legacy Launch / Stop split. Approval = launch when
+           * active; toggling to active also auto-promotes any pending
+           * approved version via the project-state and updateComponent
+           * server handlers.
+           */}
+          {(() => {
+            const active = canStop;
+            const disabled = launching || (!active && !canLaunch);
+            const onClick = active ? onStop : onLaunch;
+            const title = active
+              ? 'Click to deactivate — scheduler will skip this project. Approvals stay queued.'
+              : !canLaunch
+                ? 'Approve a version on the roadmap to enable activation'
+                : 'Click to activate — dispatcher will pick up backlog work and auto-launch any approved version.';
+            const accent = active
+              ? 'bg-red-500/10 text-red-400 border-red-500/30 hover:bg-red-500/20'
+              : !canLaunch
+                ? 'bg-[var(--bg-secondary)] text-[var(--text-muted)] cursor-not-allowed opacity-50'
+                : 'bg-[var(--accent)] text-white hover:opacity-90';
+            return (
+              <button
+                onClick={() => {
+                  console.log('[VisionCard:Toggle] clicked', {
+                    projectId: project.id,
+                    pending,
+                    isRunning,
+                    nextState: active ? 'inactive' : 'active',
+                  });
+                  onClick();
+                }}
+                disabled={disabled}
+                aria-pressed={active}
+                title={title}
+                className={clsx(
+                  'px-4 py-2 rounded-md font-medium text-sm flex items-center gap-2 transition-all border',
+                  accent,
+                )}
+              >
+                {launching ? (
+                  <>
+                    <Loader size={16} className="animate-spin" />
+                    Working…
+                  </>
+                ) : active ? (
+                  <>
+                    <X size={16} />
+                    Active
+                  </>
+                ) : (
+                  <>
+                    <Rocket size={16} />
+                    Inactive
+                  </>
+                )}
+              </button>
+            );
+          })()}
         </div>
       </div>
 

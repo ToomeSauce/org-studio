@@ -665,81 +665,61 @@ function ProjectDashboardPageInner() {
             )}
           </div>
           <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
-            {/* LAUNCH / START / STOP — restored from pre-cutover page (commit 838e05c).
-             * Same server interaction as legacy handleLaunch (promoteVersion +
-             * updateProject state). Visible whenever the project is in a
-             * stoppable state. */}
-            {projectStopped ? (
-              (() => {
-                const noWork = !projectCurrentVersion && !launchTarget;
-                return (
-                  <button
-                    type="button"
-                    onClick={onStartProject}
-                    disabled={noWork || launching || stateBusy}
-                    title={
-                      noWork
-                        ? 'Approve a version on a component roadmap below to enable activation'
-                        : 'Activate project'
-                    }
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-[12px] uppercase tracking-[0.1em] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    style={{
-                      fontFamily: monoFont,
-                      background: noWork ? 'var(--card-highlight)' : 'rgba(52, 211, 153, 0.14)',
-                      color: noWork ? 'var(--text-muted)' : '#34d399',
-                      border: '1px solid ' + (noWork ? 'var(--border-default)' : 'rgba(52, 211, 153, 0.45)'),
-                    }}
-                  >
-                    {launching || stateBusy ? (
-                      <Loader2 size={13} className="animate-spin" />
-                    ) : (
-                      <Play size={13} />
-                    )}
-                    {launching ? 'Activating…' : 'Activate'}
-                  </button>
-                );
-              })()
-            ) : !projectCurrentVersion ? (
-              // Running but no currentVersion — legacy flow ran handleLaunch directly.
-              <button
-                type="button"
-                onClick={handleLaunch}
-                disabled={!launchTarget || launching}
-                title={
-                  !launchTarget
-                    ? 'Approve a version on a component roadmap below to enable launch'
-                    : 'Launch v' + launchTarget.version
-                }
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-[12px] uppercase tracking-[0.1em] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                style={{
-                  fontFamily: monoFont,
-                  background: launchTarget ? 'rgba(52, 211, 153, 0.14)' : 'var(--card-highlight)',
-                  color: launchTarget ? '#34d399' : 'var(--text-muted)',
-                  border: '1px solid ' + (launchTarget ? 'rgba(52, 211, 153, 0.45)' : 'var(--border-default)'),
-                }}
-              >
-                {launching ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
-                {launching ? 'Launching…' : launchTarget ? 'Launch v' + launchTarget.version : 'Launch'}
-              </button>
-            ) : (
-              // Running with currentVersion — show Stop.
-              <button
-                type="button"
-                onClick={onStopProject}
-                disabled={stateBusy}
-                title="Deactivate project"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-[12px] uppercase tracking-[0.1em] font-medium transition-colors disabled:opacity-50"
-                style={{
-                  fontFamily: monoFont,
-                  background: 'rgba(255, 92, 92, 0.10)',
-                  color: '#ff5c5c',
-                  border: '1px solid rgba(255, 92, 92, 0.40)',
-                }}
-              >
-                {stateBusy ? <Loader2 size={13} className="animate-spin" /> : <Square size={13} />}
-                Deactivate
-              </button>
-            )}
+            {/* Two-state project toggle (ticket roto54ammou4arq8 / 2026-05-06).
+             *
+             * Replaces the legacy three-button surface (Activate / Launch vX /
+             * Deactivate). The middle "Launch vX" state was the awkward third
+             * stop — "approved but not yet launched" — and now collapses into
+             * approval itself: ticking a version into approvedVersions[] on an
+             * active project auto-promotes via the updateComponent handler in
+             * src/app/api/store/route.ts.
+             *
+             * Behavior:
+             *   - Active   → click to deactivate (scheduler skips, approvals queue)
+             *   - Inactive → click to activate (auto-promote runs on transition)
+             */}
+            {(() => {
+              const active = !projectStopped;
+              const noWork = !projectCurrentVersion && !launchTarget;
+              const disabled = stateBusy || launching || (!active && noWork);
+              const onClick = active ? onStopProject : onStartProject;
+              const label = active ? 'Active' : 'Inactive';
+              const title = active
+                ? 'Click to deactivate — scheduler will skip this project. Approvals stay queued.'
+                : noWork
+                  ? 'Approve a version on a component roadmap below to enable activation'
+                  : 'Click to activate — dispatcher will pick up backlog work and auto-launch any approved version.';
+              const accent = active
+                ? { fg: '#34d399', bg: 'rgba(52, 211, 153, 0.14)', border: 'rgba(52, 211, 153, 0.45)' }
+                : noWork
+                  ? { fg: 'var(--text-muted)', bg: 'var(--card-highlight)', border: 'var(--border-default)' }
+                  : { fg: '#94a3b8', bg: 'rgba(148, 163, 184, 0.10)', border: 'rgba(148, 163, 184, 0.40)' };
+              return (
+                <button
+                  type="button"
+                  onClick={onClick}
+                  disabled={disabled}
+                  title={title}
+                  aria-pressed={active}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-[12px] uppercase tracking-[0.1em] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={{
+                    fontFamily: monoFont,
+                    background: accent.bg,
+                    color: accent.fg,
+                    border: '1px solid ' + accent.border,
+                  }}
+                >
+                  {stateBusy || launching ? (
+                    <Loader2 size={13} className="animate-spin" />
+                  ) : active ? (
+                    <Square size={13} />
+                  ) : (
+                    <Play size={13} />
+                  )}
+                  {stateBusy || launching ? 'Working…' : label}
+                </button>
+              );
+            })()}
             <Link
               href={'/projects/' + projectId + '/ledger'}
               className="inline-flex items-center gap-1.5 text-[12px] uppercase tracking-[0.1em] text-[var(--text-tertiary)] hover:text-[var(--accent)] transition-colors whitespace-nowrap"
@@ -1168,8 +1148,12 @@ function CurrentVersionHero({
   const breakdown = doneWhenBreakdown(items, taskById);
   const kind = classifyVersion(version);
   const c = statusColor(kind);
-  const showBeginWork =
-    beginTarget && beginTarget.version === version.version && version.status !== 'current';
+  // Two-state pivot (2026-05-06): showBeginWork retired; per-version "Begin
+  // work" CTA was removed in favor of the header Active/Inactive toggle +
+  // approval-as-launch. `onBeginWork` prop kept on the contract for now to
+  // avoid touching every call site; it is no longer rendered.
+  void onBeginWork;
+  void beginTarget;
 
   // Started / ETA hints
   const startedAt = (version as any).startedAt;
@@ -1252,24 +1236,12 @@ function CurrentVersionHero({
               </a>
             </div>
 
-            {/* Begin Work CTA */}
-            {showBeginWork && (
-              <div className="mt-5">
-                <button
-                  type="button"
-                  onClick={onBeginWork}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded text-[13px] font-medium transition-all hover:opacity-90 active:scale-[0.99]"
-                  style={{
-                    background: 'var(--accent)',
-                    color: 'var(--accent-contrast)',
-                    border: 'none',
-                  }}
-                >
-                  <Play size={14} />
-                  Begin work on v{version.version}
-                </button>
-              </div>
-            )}
+            {/* Two-state pivot (ticket roto54ammou4arq8 / 2026-05-06): the
+             * per-version "Begin work on vX" CTA is gone. Approval = launch
+             * on an active project (auto-promote runs on approvedVersions[]
+             * change). The Active/Inactive toggle in the header is the single
+             * control surface for project state.
+             */}
           </div>
 
           {/* Right rail: ETA / started / vibe / owner */}
