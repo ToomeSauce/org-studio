@@ -515,11 +515,13 @@ Agents report what they're currently working on:
 # Set status
 curl -s http://localhost:4501/api/activity-status -X POST \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ORG_STUDIO_API_KEY" \
   -d '{"agent":"agent-id","status":"Working on login fix","detail":"Debugging auth flow"}'
 
 # Clear status
 curl -s http://localhost:4501/api/activity-status -X DELETE \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ORG_STUDIO_API_KEY" \
   -d '{"agent":"agent-id"}'
 ```
 

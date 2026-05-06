@@ -163,8 +163,10 @@ PLANNING COLUMN — you can both add tasks to planning AND pull tasks from it. W
 
   Report activity (update while working, clear when done):
     curl -s http://localhost:4501/api/activity-status -X POST -H "Content-Type: application/json" \\
+      -H "Authorization: Bearer \${ORG_STUDIO_API_KEY}" \\
       -d '{"agent":"\${agentId}","status":"<status>","detail":"<detail>"}'
     curl -s http://localhost:4501/api/activity-status -X DELETE -H "Content-Type: application/json" \\
+      -H "Authorization: Bearer \${ORG_STUDIO_API_KEY}" \\
       -d '{"agent":"\${agentId}"}'`,
     enabled: true,
     order: 50,
@@ -404,8 +406,10 @@ PLANNING COLUMN — you can both add QA-related tasks to planning AND pull tasks
 
   Report activity (update while working, clear when done):
     curl -s http://localhost:4501/api/activity-status -X POST -H "Content-Type: application/json" \\
+      -H "Authorization: Bearer \${ORG_STUDIO_API_KEY}" \\
       -d '{"agent":"\${agentId}","status":"<status>","detail":"<detail>"}'
     curl -s http://localhost:4501/api/activity-status -X DELETE -H "Content-Type: application/json" \\
+      -H "Authorization: Bearer \${ORG_STUDIO_API_KEY}" \\
       -d '{"agent":"\${agentId}"}'`,
     enabled: true,
     order: 50,
