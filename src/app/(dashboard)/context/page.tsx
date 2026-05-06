@@ -834,7 +834,16 @@ function TasksPageInner() {
               const colTasks = filteredTasks
                 .filter(t => t.status === col.key)
                 .sort((a, b) => {
-                  // Most recent activity on top
+                  // #1250: manual drag order wins. sortOrder is set when the
+                  // user drops a card; tasks without it fall through to the
+                  // activity-time tiebreaker so brand-new / never-reordered
+                  // items still surface near the top.
+                  const aHas = typeof a.sortOrder === 'number';
+                  const bHas = typeof b.sortOrder === 'number';
+                  if (aHas && bHas) return (a.sortOrder as number) - (b.sortOrder as number);
+                  if (aHas) return -1;
+                  if (bHas) return 1;
+                  // Fallback: most recent activity on top.
                   const aTime = a.lastActivityAt || (a.statusHistory?.length ? a.statusHistory[a.statusHistory.length - 1]?.timestamp : 0) || a.createdAt || 0;
                   const bTime = b.lastActivityAt || (b.statusHistory?.length ? b.statusHistory[b.statusHistory.length - 1]?.timestamp : 0) || b.createdAt || 0;
                   return bTime - aTime;
