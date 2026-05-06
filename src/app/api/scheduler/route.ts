@@ -287,7 +287,7 @@ function hasActionableWork(store: StoreData, agentId: string): boolean {
 // Semantics (recap; details in that module):
 //   Rule 1: project.state === 'active' (#1185)
 //   Rule 2: task has sectionId + version
-//   Rule 3: task.version <= component.approvedThrough
+//   Rule 3: task.version is in component.approvedVersions[] (#1224 set-membership)
 //   Rule 4: component-version waitsFor satisfied
 //   Rule 5: status=backlog + assignee (checked at this call site)
 //

@@ -16,7 +16,9 @@
  *     type during transition; helpers normalize.)
  *   - `currentVersion` is purely "which version is in flight right now".
  *     It's never used as a pause flag anymore.
- *   - `autonomy.enabled` is removed. `autonomy.approvedThrough` stays.
+ *   - `autonomy.enabled` is removed. `autonomy.approvedThrough` is also
+ *     gone (#1224); approval is set membership against
+ *     primary-component `approvedVersions[]`.
  */
 
 // #1224: version-utils helpers no longer needed here — horizon is set

@@ -5,16 +5,16 @@
  *
  * When the current version's items are all done:
  *   1. Mark it shipped.
- *   2. If the next planned version is still within the approval horizon
- *      (`autonomy.approvedThrough`), promote it to `current` and move its
- *      linked planning tasks into backlog. The horizon itself is never
- *      modified here — only humans move it.
- *   3. If the next planned version is ABOVE the horizon, stop. Agent's
- *      work is done until a human bumps `approvedThrough`.
+ *   2. If the next planned version is in the primary component's
+ *      `approvedVersions[]` (#1224), promote it to `current` and move its
+ *      linked planning tasks into backlog. The approval list itself is
+ *      never modified here — only humans tick checkboxes.
+ *   3. If the next planned version is NOT in `approvedVersions[]`, stop.
+ *      Agent's work is done until a human approves it.
  *
  * Per docs/decisions/2026-04-19-version-numbering-convention.md:
- *   "Horizon = permission ceiling. Auto-advance within the horizon is safe;
- *    crossing the horizon is never automatic."
+ *   "Approval is permission. Auto-advance through approved versions is
+ *    safe; crossing into unapproved territory is never automatic."
  *
  * Non-fatal: every public function wraps in try/catch so it never
  * breaks the task-update path.  Gracefully no-ops when DATABASE_URL
@@ -267,8 +267,8 @@ export async function syncRoadmapItemForTask(
  *     and move its planning tasks to backlog.
  *   • Otherwise stop — horizon is the hard ceiling.
  *
- * The horizon (`autonomy.approvedThrough`) is NEVER written by this
- * function. Only humans move the horizon.
+ * The approval list (`primary.approvedVersions[]`) is NEVER written by this
+ * function. Only humans tick checkboxes.
  *
  * @param projectId - the project to check
  * @param existingClient - optional pg client to reuse (avoids extra checkout)

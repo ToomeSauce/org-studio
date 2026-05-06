@@ -69,15 +69,6 @@ export interface ComponentLike {
    */
   waitsFor?: ComponentWaitsFor[];
   /**
-   * #1224: legacy scalar approval banner, fully removed in favor of
-   * `approvedVersions[]`. Field kept on the type as an optional read-only
-   * relic so older snapshots/backups still parse, but the API no longer
-   * writes it and no production code consumes it.
-   *
-   * @deprecated removed by #1224 — use `approvedVersions` instead.
-   */
-  approvedThrough?: string;
-  /**
    * #1186 / #1224: explicit list of approved versions for this component.
    * The single source of truth for dispatch eligibility. The vision owner
    * approves any subset (including non-contiguous picks) by ticking
@@ -107,8 +98,6 @@ export interface ProjectLike {
   autonomy?: {
     cadence?: string;
     approvalMode?: string;
-    /** @deprecated #1224 — removed; kept for backup-file parsing only. */
-    approvedThrough?: string | null;
   };
 }
 
@@ -244,8 +233,8 @@ export function getEffectiveComponents(project: ProjectLike): ComponentLike[] {
  *   1. Legacy fallback during the PR 3 → PR 6 transition: untagged tasks and
  *      the project-level roadmap / approvedThrough are considered to belong
  *      to the primary component.
- *   2. The migration target in PR 6 (project.versions[] → primary.versions[],
- *      project.autonomy.approvedThrough → primary.approvedThrough).
+ *   2. The migration target in PR 6 (project.versions[] → primary.versions[]).
+ *      Project-level autonomy.approvedThrough was retired by #1224.
  *
  * Returns undefined when no component qualifies (project has no components,
  * or every component has role === 'qa' | 'support').
@@ -277,22 +266,14 @@ export function getComponentVersions(
 }
 
 /**
- * Return the effective approval banner ("approvedThrough" version string)
- * for a given component.
- *
- * #1186 transitional: derives from `approvedVersions[]` (max) when present,
- * falling back to legacy `approvedThrough` field. Existing callers see
- * unchanged semantics. Ticket E refactors callers to use
- * `getComponentApprovedVersions()` directly and includes/contains-checks.
- *
- * Returns `undefined` when the component has no banner — nothing is
- * dispatch-eligible for that component until one is set.
- */
-/**
  * #1224: max-of-approvedVersions[] convenience reader. Returns `undefined`
  * when nothing is approved. Used in UI surfaces that still want a single
- * "banner string" to render; gating logic should use
+ * "banner" string to render; gating logic should use
  * `getComponentApprovedVersions()` + set membership instead.
+ *
+ * Function name retains "ApprovedThrough" for call-site stability — the
+ * scalar field of that name is gone (#1224); this helper only ever
+ * derives from `approvedVersions[]`.
  */
 export function getComponentApprovedThrough(
   project: ProjectLike,
@@ -309,12 +290,13 @@ export function getComponentApprovedThrough(
 
 /**
  * #1186: return the explicit set of approved versions for a component.
- * If only the legacy `approvedThrough` field is set, returns an empty array
- * (callers either fall back to `getComponentApprovedThrough` for legacy
- * range semantics, or trigger the migration to backfill).
+ * Returns an empty array when none are approved — the empty list is the
+ * only "no approvals yet" signal post-#1224 (the legacy `approvedThrough`
+ * scalar fallback is gone).
  *
- * Use this in ticket E for per-version eligibility checks:
- * `getComponentApprovedVersions(project, componentId).includes(taskVersion)`.
+ * Per-version eligibility checks should call:
+ *   `getComponentApprovedVersions(project, componentId).includes(taskVersion)`
+ * or use `isVersionApproved` directly.
  */
 export function getComponentApprovedVersions(
   project: ProjectLike,

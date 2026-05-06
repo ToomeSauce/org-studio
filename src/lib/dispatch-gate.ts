@@ -7,7 +7,7 @@
  * Rule summary (all must hold for an eligible backlog task):
  *   1. project.state === 'active'                                   — master switch (#1185)
  *   2. task has a component (sectionId) AND a version               — scoped work only
- *   3. task.version <= component.approvedThrough                    — within approval banner
+ *   3. task.version is in component.approvedVersions[]            — set-membership approval (#1224)
  *   4. component-version waitsFor (if present) is satisfied         — dependency met
  *   (Rule 5 — backlog + assignee — is checked at the scheduler call site.)
  */
