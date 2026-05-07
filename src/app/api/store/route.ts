@@ -472,6 +472,36 @@ export async function POST(req: NextRequest) {
               { status: 400 },
             );
           }
+
+          // #1269 — auto-resolve sectionId when caller passed only projectId.
+          // Without this, a task with projectId set but sectionId missing is
+          // silently invisible to the dispatch gate (which keys on
+          // projectId && sectionId && version). Symmetric with the projectId
+          // existence check above.
+          {
+            const project = (store.projects || []).find(
+              (p: any) => p?.id === addTaskProjectId,
+            );
+            const { resolveSectionId } = await import('@/lib/resolve-section-id');
+            const result = resolveSectionId(
+              project,
+              addTaskProjectId,
+              payload.task?.sectionId,
+            );
+            if (!result.ok) {
+              return NextResponse.json(
+                {
+                  error: result.error,
+                  ...(result.validSectionIds ? { validSectionIds: result.validSectionIds } : {}),
+                },
+                { status: result.status },
+              );
+            }
+            if (result.resolved) {
+              payload.task.sectionId = result.sectionId;
+              console.info(`[addTask #1269] Auto-resolved sectionId=${result.sectionId} for project ${addTaskProjectId}`);
+            }
+          }
         }
 
         // --- #698 Task-creation guardrails ---
@@ -821,6 +851,39 @@ export async function POST(req: NextRequest) {
               { error: `Adhoc task (taskType=${effectiveType}) cannot have a version. Clear the version field or change taskType to 'feature'.` },
               { status: 400 }
             );
+          }
+        }
+        // #1269 — auto-resolve sectionId on updateTask when caller is changing
+        // projectId without supplying a matching sectionId. Mirrors the addTask
+        // path. Out of scope per #1269 (5): existing tasks with missing
+        // sectionId are NOT touched here — only acts when updates.projectId
+        // is being set in this patch.
+        if (
+          payload.updates &&
+          'projectId' in payload.updates &&
+          !('sectionId' in payload.updates)
+        ) {
+          const newProjectId = payload.updates.projectId;
+          if (newProjectId) {
+            const project = (store.projects || []).find(
+              (p: any) => p?.id === newProjectId,
+            );
+            const { resolveSectionId } = await import('@/lib/resolve-section-id');
+            // Pass undefined for providedSectionId so the helper resolves.
+            const result = resolveSectionId(project, newProjectId, undefined);
+            if (!result.ok) {
+              return NextResponse.json(
+                {
+                  error: result.error,
+                  ...(result.validSectionIds ? { validSectionIds: result.validSectionIds } : {}),
+                },
+                { status: result.status },
+              );
+            }
+            if (result.resolved) {
+              payload.updates.sectionId = result.sectionId;
+              console.info(`[updateTask #1269] Auto-resolved sectionId=${result.sectionId} for project ${newProjectId}`);
+            }
           }
         }
         let triggeredAssignee: string | null = null;
