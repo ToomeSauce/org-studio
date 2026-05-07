@@ -26,6 +26,7 @@ Works with [OpenClaw](https://github.com/openclaw/openclaw) and [Hermes Agent](h
 - **Agent comparison** — Sortable table with SVG sparklines and CSV export
 - **Kudos & Flags** — Value-tagged feedback that shapes agent behavior via Operating Principles
 - **Vision cycles** — Agent proposes roadmap, tasks auto-create, work executes. Humans set direction; agents deliver.
+- **Outcome-bound versions** — Optionally gate a version on a measurable goal. The version stays open until the metric is hit, even when every child ticket is done. Built-in caps (open experiments, daily spike-ticket limit) keep the loop sane; backward-compatible — versions without success criteria behave exactly as before.
 - **Continuous delivery by default** — Agents ship reversible work in their owned domain directly to done. Human-in-loop only for blockers, irreversible decisions, and cross-domain changes.
 - **Start/Stop** — One toggle per project controls run-gating. Agents only get dispatched for `started` projects.
 - **Pure event-driven** — Zero polling, zero crons. Tasks trigger agents instantly. No idle cost.

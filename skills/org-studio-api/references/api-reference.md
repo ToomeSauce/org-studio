@@ -145,6 +145,35 @@ Response: `{ "action": "upserted", "version": "1.6", "id": "rv-proj-mc-1-6" }`
 
 Valid `status` values: `planned`, `current`, `shipped`
 
+**Outcome-bound version fields** (all optional, additive — absence = no metric gate):
+
+```json
+{
+  "action": "upsert",
+  "version": "0.5",
+  "title": "Cut p95 dispatch latency in half",
+  "successCriteria": "p95 dispatch latency under 300ms over a 24h window",
+  "metricTarget": 300,
+  "metricCurrent": 420,
+  "metricComparator": "lte",
+  "loopPaused": false
+}
+```
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `successCriteria` | string | unset | Sets the gate. Empty/unset = no gate (behaves as before). |
+| `metricTarget` | number | unset | Target value. |
+| `metricCurrent` | number | unset | Most recent measurement. |
+| `metricComparator` | `'gte' \| 'lte' \| 'eq'` | `'gte'` | How to compare. |
+| `loopPaused` | boolean | `false` | Human kill-switch — dispatch stops when `true`. |
+
+When `successCriteria` is set, the version will NOT auto-complete or auto-advance until `metricCurrent` satisfies `metricComparator` vs `metricTarget`, even if every child ticket is `done`. A one-shot `📊 Outcome-bound: metric not met` system comment is posted on the version (idempotent across reruns). Defense-in-depth: project promotion also re-checks the metric after the approval-horizon gate.
+
+**Caps that come with an outcome-bound version:**
+- Up to `5` concurrent in-progress tasks per outcome-bound version (`MAX_OPEN_EXPERIMENTS`).
+- Up to `3` agent-created versioned spike tickets per UTC day per version (`MAX_AUTO_TASKS_PER_VERSION_PER_DAY` — `POST /api/store {action:"addTask"}` returns `429` past this cap).
+
 ### POST /api/roadmap/{projectId} — delete
 
 ```json

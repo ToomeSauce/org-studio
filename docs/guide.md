@@ -260,6 +260,33 @@ When autonomy is enabled for a project, Org Studio runs a version improvement cy
    - Completion summary posts to the sprint topic (if configured)
    - The next version cycle begins automatically (if auto-advance is enabled)
 
+### Outcome-Bound Versions
+
+A version is **outcome-bound** when its `successCriteria` field is set on the roadmap entry. Outcome-bound versions stay open — won't auto-complete and won't auto-advance — until a measurable goal is hit, **even when every child ticket is `done`**. The vision owner defines the *what* (success criteria + target metric); the dev-owner agent figures out the *how* by filing experiment tickets until the metric is reached.
+
+**Schema (additive on `roadmap_versions`, all optional):**
+
+| Field | Meaning |
+|---|---|
+| `successCriteria` | Free-text statement of the goal. Setting this turns on the gate. |
+| `metricTarget` | Target value. |
+| `metricCurrent` | Most recent measurement (manual entry in v1). |
+| `metricComparator` | `gte` (default) / `lte` / `eq`. |
+| `loopPaused` | Human kill-switch — when `true`, dispatch on this version stops. |
+
+**Gates:**
+- Auto-advance refuses to ship the version when `metricCurrent` doesn't satisfy `metricComparator` vs `metricTarget`. A one-shot system comment (📊 *Outcome-bound: metric not met*) is posted on the version, idempotent across reruns.
+- Project promotion re-checks the metric after the approval horizon (defense-in-depth).
+- Dispatch is blocked when `loopPaused === true`.
+- Up to **5** concurrent in-progress tasks per outcome-bound version (open-experiments cap).
+- Up to **3** versioned experiment tickets per UTC day per version (agent-created tasks past the cap return `429`).
+
+**Edit through the UI** on the project Roadmap card: every version edit form has a Success Criteria editor, target/current metric inputs, comparator dropdown, and a pause toggle. The roadmap pill shows a metric badge when criteria are set.
+
+**Backward compat:** versions without `successCriteria` are completely unaffected. Today's behavior — ship when all tickets are done — is the default.
+
+For the API surface (upsert payload + caps + response codes), see the `org-studio-api` skill (`skills/org-studio-api/SKILL.md` → "Outcome-Bound Versions").
+
 ### Lifecycle Stages
 
 Projects move through four lifecycle stages, which affect the version cycle:

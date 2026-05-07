@@ -222,6 +222,36 @@ Read `references/api-reference.md` for full roadmap API (upsert versions, items,
 
 **Default is `outcome`.** If you don't specify, it's an outcome.
 
+### Outcome-Bound Versions (#1263)
+
+A version is **outcome-bound** when its `successCriteria` field is set. An outcome-bound version stays open — won't auto-complete and won't auto-advance — until a measurable goal is hit, even when every child ticket is done. The human/vision owner defines the *what*; the dev-owner agent figures out the *how* by filing experiment tickets until the metric is reached.
+
+**Schema (all optional, additive on `roadmap_versions`):**
+
+| Field | Type | Meaning |
+|---|---|---|
+| `successCriteria` | string | Free-text statement of the goal (sets the gate). Empty = no gate, behaves as today. |
+| `metricCurrent` | number | Most recent measurement (manual entry in v1). |
+| `metricTarget` | number | Target value to satisfy the gate. |
+| `metricComparator` | `'gte' \| 'lte' \| 'eq'` | How to compare current vs target. Default `gte`. |
+| `loopPaused` | boolean | Human kill-switch: when `true`, dispatch on this version stops. |
+
+**Gates the agent will hit:**
+- **Auto-advance refuses** to ship the version if `successCriteria` is set and `metricCurrent` doesn't satisfy `metricComparator vs metricTarget`. A one-shot `📊 Outcome-bound: metric not met` system comment is posted on the version (idempotent).
+- **Project promotion** double-checks the metric after the approval-horizon gate.
+- **Dispatch** is blocked when `loopPaused === true` on the task's version.
+- **Open-experiments cap:** at most `5` in-progress tasks per outcome-bound version (`MAX_OPEN_EXPERIMENTS`).
+- **Experiment-ticket cap:** at most `3` versioned spike tickets created per UTC day per version (`MAX_AUTO_TASKS_PER_VERSION_PER_DAY` — `addTask` returns `429` past this cap).
+
+**How to work with it as the dev owner:**
+1. Read the version's `successCriteria` + `metricTarget`. If they're not set yet, ping the vision owner instead of guessing.
+2. File experiment / spike tickets normally (`taskType: "spike"`, `version` set, `roadmapItemId` set). Stay under the daily cap; if you hit `429`, the message you need is in the response body.
+3. After each experiment ships, **update `metricCurrent` on the version** via `POST /api/roadmap/{projectId}` `{action:"upsert", version, metricCurrent: <new measurement>, ...}`.
+4. Don't try to flip `status: "shipped"` manually to bypass the gate — the auto-advance + promote checks both refuse and the system comment lands. Move the metric instead.
+5. If you need to stop the loop (e.g. waiting on humans), set `loopPaused: true` via the same upsert. Clear it with `loopPaused: false` to resume.
+
+**Backward compat:** versions without `successCriteria` are completely unaffected. The gate only engages when criteria are set.
+
 ### Key rules:
 - **One version = one outcome.** An outcome-type version title must describe exactly one user-facing result. If it covers two, split it into two versions.
 - **Outcome completion is automatic.** When all tasks in an outcome-type version ship → the outcome is done. No manual toggling needed.
@@ -245,6 +275,23 @@ curl -s http://localhost:4501/api/roadmap/{projectId} -X POST \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $ORG_STUDIO_API_KEY" \
   -d '{"action":"upsert","version":"0.1","title":"Agents can generate podcast audio","status":"planned","versionType":"outcome","items":[...]}'
+```
+
+Make an outcome **outcome-bound** by including the metric fields:
+```bash
+curl -s http://localhost:4501/api/roadmap/{projectId} -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ORG_STUDIO_API_KEY" \
+  -d '{"action":"upsert","version":"0.1","title":"Cut p95 dispatch latency in half",
+       "status":"planned","versionType":"outcome",
+       "successCriteria":"p95 dispatch latency under 300ms over a 24h window",
+       "metricTarget":300,"metricComparator":"lte","items":[...]}'
+
+# Update the measurement after each experiment ships:
+curl -s http://localhost:4501/api/roadmap/{projectId} -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ORG_STUDIO_API_KEY" \
+  -d '{"action":"upsert","version":"0.1","metricCurrent":420}'
 ```
 
 ### Multi-part outcomes:
