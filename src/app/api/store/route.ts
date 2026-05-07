@@ -477,6 +477,41 @@ export async function POST(req: NextRequest) {
         // --- #698 Task-creation guardrails ---
         const taskVersion = (payload.task?.version || '').trim();
 
+        // #1263 — per-version daily cap on auto-filed experiment
+        // (spike) tickets. Spec: at most MAX_AUTO_TASKS_PER_VERSION_PER_DAY
+        // (3) spike tasks per (project, version) per UTC day. Normal
+        // feature/bug/chore tickets are NOT capped here. Runs BEFORE the
+        // existing roadmap-item / adhoc-vs-version guardrails so an
+        // automated dispatcher hammering spike tickets gets a clean 429
+        // instead of a misleading downstream error.
+        if (
+          taskVersion &&
+          payload.task?.projectId &&
+          payload.task?.taskType === 'spike'
+        ) {
+          const { MAX_AUTO_TASKS_PER_VERSION_PER_DAY } = await import('@/lib/version-metric');
+          const startOfUtcDay = (() => {
+            const d = new Date();
+            return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+          })();
+          const sameDayCount = (store.tasks || []).filter((t: any) => {
+            if (t.projectId !== payload.task.projectId) return false;
+            if (t.version !== taskVersion) return false;
+            if (t.taskType !== 'spike') return false;
+            const created = typeof t.createdAt === 'number' ? t.createdAt : 0;
+            return created >= startOfUtcDay;
+          }).length;
+          if (sameDayCount >= MAX_AUTO_TASKS_PER_VERSION_PER_DAY) {
+            return NextResponse.json(
+              {
+                error: 'experiment_cap_exceeded',
+                message: `At most ${MAX_AUTO_TASKS_PER_VERSION_PER_DAY} experiment tickets per version per day`,
+              },
+              { status: 429 },
+            );
+          }
+        }
+
         {
           if (taskVersion) {
             // Roadmap task flow: version set → require roadmapItemId + validate

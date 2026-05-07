@@ -113,6 +113,12 @@ interface RoadmapVersion {
   // component-level owner for dispatch + UI display. When unset/empty, owner
   // falls back to component.owner.
   owner?: string | null;
+  // #1263 — outcome-bound version fields. All optional; absence = no gate.
+  successCriteria?: string;
+  metricCurrent?: number;
+  metricTarget?: number;
+  metricComparator?: 'gte' | 'lte' | 'eq';
+  loopPaused?: boolean;
 }
 
 interface Project {
@@ -201,6 +207,14 @@ export function RoadmapWithApprovalHorizon({
     items: RoadmapItem[];
     version_type: 'outcome' | 'foundation' | 'chore';
     originalVersion: string;
+    // #1263 — outcome-bound metric fields. All optional; the API only
+    // persists them when present (and treats null as "clear").
+    successCriteria: string;
+    metricCurrent: string; // kept as string in form state so the input is
+                            // controlled cleanly; coerced to number on save.
+    metricTarget: string;
+    metricComparator: 'gte' | 'lte' | 'eq';
+    loopPaused: boolean;
   }>({
     version: '',
     title: '',
@@ -208,6 +222,11 @@ export function RoadmapWithApprovalHorizon({
     items: [],
     version_type: 'outcome',
     originalVersion: '',
+    successCriteria: '',
+    metricCurrent: '',
+    metricTarget: '',
+    metricComparator: 'gte',
+    loopPaused: false,
   });
 
   const [newForm, setNewForm] = useState({
@@ -304,7 +323,25 @@ export function RoadmapWithApprovalHorizon({
   const currentIdx = sortedVersions.findIndex(v => v.version === currentVersion);
   const currentVersionObj = currentIdx !== -1 ? sortedVersions[currentIdx] : null;
 
-  const saveVersion = async (version: string, title: string, status: string, items: RoadmapItem[], versionType?: string, owner?: string | null, originalVersion?: string) => {
+  const saveVersion = async (
+    version: string,
+    title: string,
+    status: string,
+    items: RoadmapItem[],
+    versionType?: string,
+    owner?: string | null,
+    originalVersion?: string,
+    // #1263 — outcome-bound metric fields. All optional. Pass `null` to
+    // explicitly clear a previously-set value; omit (undefined) to leave
+    // the existing value alone.
+    metricFields?: Partial<{
+      successCriteria: string | null;
+      metricCurrent: number | null;
+      metricTarget: number | null;
+      metricComparator: 'gte' | 'lte' | 'eq' | null;
+      loopPaused: boolean | null;
+    }>,
+  ) => {
     setLoading(true);
     try {
       const isRename =
@@ -327,6 +364,8 @@ export function RoadmapWithApprovalHorizon({
           // #1267: include originalVersion only when actually renaming
           // so the backward-compat upsert path stays untouched.
           ...(isRename ? { originalVersion } : {}),
+          // #1263: only include metric fields the caller actually passed.
+          ...(metricFields || {}),
         }),
       });
 
@@ -357,6 +396,83 @@ export function RoadmapWithApprovalHorizon({
       setEditingVersionId(null);
       setAddingNew(false);
     }
+  };
+
+  // #1263 — partial upsert for outcome-bound fields. Used by both the
+  // "Update measurement" inline button and the success-criteria editor.
+  // Sends only the fields the caller wants to change; the route preserves
+  // unset meta keys via the merge in #1263.
+  const saveVersionMeta = async (
+    version: string,
+    title: string,
+    status: string,
+    items: RoadmapItem[],
+    versionType: string,
+    metaPatch: {
+      successCriteria?: string;
+      metricCurrent?: number | null;
+      metricTarget?: number | null;
+      metricComparator?: 'gte' | 'lte' | 'eq';
+      loopPaused?: boolean;
+    },
+  ) => {
+    setLoading(true);
+    try {
+      const response = await fetch(`/api/roadmap/${projectId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'upsert',
+          version,
+          title,
+          status,
+          items,
+          versionType,
+          ...metaPatch,
+        }),
+      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `API error: ${response.status}`);
+      }
+      const getRoadmap = await fetch(`/api/roadmap/${projectId}`);
+      if (getRoadmap.ok) {
+        const data = await getRoadmap.json();
+        onVersionsChange?.(data.versions || []);
+      }
+    } catch (err) {
+      console.error('Error saving version metric:', err);
+      alert(`Failed to save: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Inline measurement-update prompt. Tiny by design — no modal, no form.
+  const promptUpdateMeasurement = async (v: RoadmapVersion) => {
+    const cur = typeof v.metricCurrent === 'number' ? v.metricCurrent : '';
+    const next = window.prompt(
+      `Update measurement for ${v.version}` +
+        (typeof v.metricTarget === 'number' ? ` (target ${v.metricComparator || 'gte'} ${v.metricTarget})` : '') +
+        ':',
+      String(cur),
+    );
+    if (next === null) return;
+    const trimmed = next.trim();
+    if (trimmed === '') return;
+    const num = Number(trimmed);
+    if (!Number.isFinite(num)) {
+      alert('Measurement must be a number');
+      return;
+    }
+    await saveVersionMeta(
+      v.version,
+      v.title,
+      v.status,
+      v.items || [],
+      v.version_type || 'outcome',
+      { metricCurrent: num },
+    );
   };
 
   const deleteVersion = async (version: string) => {
@@ -468,6 +584,13 @@ export function RoadmapWithApprovalHorizon({
       // #1267: stash the pre-edit version so saveVersion can request a
       // server-side rename instead of an insert-or-update.
       originalVersion: v.version || '',
+      // #1263: hydrate metric fields from the version (lifted by the API
+      // GET response from `meta` jsonb).
+      successCriteria: ((v as any).successCriteria as string) || '',
+      metricCurrent: typeof (v as any).metricCurrent === 'number' ? String((v as any).metricCurrent) : '',
+      metricTarget: typeof (v as any).metricTarget === 'number' ? String((v as any).metricTarget) : '',
+      metricComparator: ((v as any).metricComparator as any) || 'gte',
+      loopPaused: !!(v as any).loopPaused,
     });
     setEditingVersionId(v.id);
     // Ensure the version is expanded so the edit form is visible
@@ -480,7 +603,11 @@ export function RoadmapWithApprovalHorizon({
 
   const cancelEdit = () => {
     setEditingVersionId(null);
-    setEditForm({ version: '', title: '', status: 'planned', items: [], version_type: 'outcome', originalVersion: '' });
+    setEditForm({
+      version: '', title: '', status: 'planned', items: [], version_type: 'outcome',
+      originalVersion: '',
+      successCriteria: '', metricCurrent: '', metricTarget: '', metricComparator: 'gte', loopPaused: false,
+    });
   };
 
   // #1215: extracted from renderVersionRow so Zone B's hero card can render the
@@ -610,9 +737,44 @@ export function RoadmapWithApprovalHorizon({
             </span>
           )}
 
+          {/* #1263 — outcome-bound metric pill. Renders only when criteria
+           * are set on this version. Greyed when loopPaused. */}
+          {!isEditing && (version.successCriteria || '').trim() && (
+            <span
+              title={`Success criteria: ${version.successCriteria}` + (version.loopPaused ? ' (loop paused)' : '')}
+              className={
+                'ml-2 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium border ' +
+                (version.loopPaused
+                  ? 'border-[var(--border-color)] text-[var(--text-muted)] bg-[var(--bg-tertiary)] opacity-60'
+                  : 'border-[var(--border-color)] text-[var(--text-secondary)] bg-[var(--bg-secondary)]')
+              }
+            >
+              metric:&nbsp;
+              {typeof version.metricCurrent === 'number' ? version.metricCurrent : '?'}
+              /
+              {typeof version.metricTarget === 'number' ? version.metricTarget : '?'}
+              {version.loopPaused ? ' · paused' : ''}
+            </span>
+          )}
+
           {/* Edit/Delete buttons */}
           {!isEditing && (
             <div className="flex gap-1 ml-3 flex-shrink-0">
+              {/* #1263 — inline measurement update. Renders only when
+               * criteria are set on this version. */}
+              {(version.successCriteria || '').trim() && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    promptUpdateMeasurement(version);
+                  }}
+                  disabled={loading}
+                  className="px-1.5 py-0.5 text-[10px] hover:bg-[var(--bg-tertiary)] rounded transition-colors text-[var(--text-secondary)] border border-[var(--border-color)]"
+                  title="Update measurement"
+                >
+                  +·
+                </button>
+              )}
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -733,6 +895,59 @@ export function RoadmapWithApprovalHorizon({
                   </button>
                 </div>
 
+                {/* #1263 — Outcome-bound success criteria.
+                    Minimal v1 UI: a flat block (not collapsible — keeps the
+                    diff small). Empty `successCriteria` means "no metric
+                    gate", matching isVersionMetricMet's no-gate path. */}
+                <div className="space-y-2 pt-3 border-t border-[var(--border-color)]">
+                  <label className="text-sm font-medium text-[var(--text-secondary)]">
+                    Success Criteria <span className="text-[var(--text-muted)] font-normal">(optional — gates auto-ship on a measurable outcome)</span>
+                  </label>
+                  <textarea
+                    value={editForm.successCriteria}
+                    onChange={(e) => setEditForm({ ...editForm, successCriteria: e.target.value })}
+                    placeholder="e.g. ‘onboarding completion rate hits 60%’"
+                    rows={2}
+                    className="w-full px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)]"
+                  />
+                  <div className="grid grid-cols-3 gap-2">
+                    <input
+                      type="number"
+                      step="any"
+                      value={editForm.metricCurrent}
+                      onChange={(e) => setEditForm({ ...editForm, metricCurrent: e.target.value })}
+                      placeholder="current"
+                      className="px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)]"
+                    />
+                    <select
+                      value={editForm.metricComparator}
+                      onChange={(e) => setEditForm({ ...editForm, metricComparator: e.target.value as any })}
+                      className="px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
+                    >
+                      <option value="gte">≥ (at least)</option>
+                      <option value="lte">≤ (at most)</option>
+                      <option value="eq">= (exactly)</option>
+                    </select>
+                    <input
+                      type="number"
+                      step="any"
+                      value={editForm.metricTarget}
+                      onChange={(e) => setEditForm({ ...editForm, metricTarget: e.target.value })}
+                      placeholder="target"
+                      className="px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)]"
+                    />
+                  </div>
+                  <label className="flex items-center gap-2 text-sm text-[var(--text-secondary)] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={editForm.loopPaused}
+                      onChange={(e) => setEditForm({ ...editForm, loopPaused: e.target.checked })}
+                      className="w-4 h-4 rounded"
+                    />
+                    Pause this version (kill-switch — dispatcher will skip its tickets)
+                  </label>
+                </div>
+
                 {/* Save/Cancel Buttons */}
                 <div className="flex gap-2 pt-3 border-t border-[var(--border-color)]">
                   <button
@@ -761,8 +976,20 @@ export function RoadmapWithApprovalHorizon({
                         editForm.status,
                         editForm.items.filter((i) => typeof i.title === 'string' && i.title.trim()),
                         editForm.version_type,
+                        // owner: not edited from this form
                         undefined,
                         editForm.originalVersion,
+                        // #1263: pass metric fields. Empty string → null
+                        // (clear), non-empty number string → number, blank
+                        // numeric → null. successCriteria empty string →
+                        // null so the gate is fully removed.
+                        {
+                          successCriteria: editForm.successCriteria.trim() ? editForm.successCriteria.trim() : null,
+                          metricCurrent: editForm.metricCurrent.trim() === '' ? null : Number(editForm.metricCurrent),
+                          metricTarget: editForm.metricTarget.trim() === '' ? null : Number(editForm.metricTarget),
+                          metricComparator: editForm.metricComparator,
+                          loopPaused: editForm.loopPaused,
+                        },
                       )
                     }}
                     disabled={!(editForm.title || '').trim() || loading}

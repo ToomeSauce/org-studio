@@ -19,6 +19,7 @@ import {
   type ProjectLike,
 } from '@/lib/component-helpers';
 import { compareVersions } from '@/lib/version-utils';
+import { MAX_OPEN_EXPERIMENTS } from '@/lib/version-metric';
 
 interface TaskLike {
   id: string;
@@ -208,6 +209,27 @@ export function isTaskDispatchEligible(store: StoreLike, task: TaskLike): boolea
   // through the same gate.
   if (!priorVersionsComplete(store, task.projectId!, task.sectionId!, task.version!)) {
     return false;
+  }
+
+  // #1263 — outcome-bound version gates.
+  // Look up the task's component-version row.
+  const cmpVersions = getComponentVersions(proj, task.sectionId);
+  const taskVer = cmpVersions.find((v) => v.version === task.version);
+  // (a) human kill-switch: if the version is loopPaused, do not dispatch.
+  if (taskVer && (taskVer as any).loopPaused === true) return false;
+  // (b) per-version open-experiments cap. Count tasks in this version with
+  //     status === 'in-progress'. If we're already at or above the cap,
+  //     gate further dispatch from this version. The cap is hard-coded
+  //     (no config) per spec.
+  {
+    const inProgress = (store.tasks || []).filter(
+      (t) =>
+        t.projectId === task.projectId &&
+        t.sectionId === task.sectionId &&
+        t.version === task.version &&
+        t.status === 'in-progress',
+    ).length;
+    if (inProgress >= MAX_OPEN_EXPERIMENTS) return false;
   }
 
   return true;

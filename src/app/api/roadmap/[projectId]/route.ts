@@ -25,6 +25,14 @@ interface RoadmapVersion {
   sort_order?: number;
   version_type?: 'outcome' | 'foundation' | 'chore';
   owner?: string | null;
+  // #1263 — outcome-bound fields lifted from `meta` jsonb on read.
+  successCriteria?: string;
+  metricCurrent?: number;
+  metricTarget?: number;
+  metricComparator?: 'gte' | 'lte' | 'eq';
+  loopPaused?: boolean;
+  systemComments?: Array<{ at: number; text: string }>;
+  metricNotMetCommentedAt?: number;
 }
 
 export async function GET(
@@ -55,25 +63,37 @@ export async function GET(
 
       try {
         const result = await client.query(
-          `SELECT id, version, title, status, items, shipped_at, sort_order, version_type, owner
+          `SELECT id, version, title, status, items, shipped_at, sort_order, version_type, owner, meta
            FROM org_studio_roadmap_versions
            WHERE project_id = $1 AND workspace_id = $2
            ORDER BY sort_order ASC, version ASC`,
           [projectId, 'default-workspace'] // TODO(v0.17-multi-workspace): resolve from request context
         );
 
-        const versions: RoadmapVersion[] = result.rows.map((row: any) => ({
-          id: row.id,
-          version: row.version,
-          title: row.title,
-          status: row.status,
-          items: row.items || [],
-          shipped_at: row.shipped_at,
-          sort_order: row.sort_order,
-          version_type: row.version_type || 'outcome',
-          owner: row.owner ?? null,
-          progress: calculateProgress(row.items || []),
-        }));
+        const versions: RoadmapVersion[] = result.rows.map((row: any) => {
+          const meta = (row.meta && typeof row.meta === 'object') ? row.meta : {};
+          return {
+            id: row.id,
+            version: row.version,
+            title: row.title,
+            status: row.status,
+            items: row.items || [],
+            shipped_at: row.shipped_at,
+            sort_order: row.sort_order,
+            version_type: row.version_type || 'outcome',
+            owner: row.owner ?? null,
+            progress: calculateProgress(row.items || []),
+            // #1263 — lift outcome-bound fields from meta jsonb so callers
+            // (UI + auto-advance code paths that read the GET response) see
+            // them on the version object directly.
+            ...(meta.successCriteria !== undefined ? { successCriteria: meta.successCriteria } : {}),
+            ...(meta.metricCurrent !== undefined ? { metricCurrent: meta.metricCurrent } : {}),
+            ...(meta.metricTarget !== undefined ? { metricTarget: meta.metricTarget } : {}),
+            ...(meta.metricComparator !== undefined ? { metricComparator: meta.metricComparator } : {}),
+            ...(meta.loopPaused !== undefined ? { loopPaused: meta.loopPaused } : {}),
+            ...(Array.isArray(meta.systemComments) ? { systemComments: meta.systemComments } : {}),
+          };
+        });
 
         // Derive item.done from linked task status (don't trust stored done flag)
         let allTasks: any[] = [];
@@ -128,6 +148,36 @@ export async function POST(
     const ownerValue: string | null = ownerProvided
       ? (typeof body.owner === 'string' && body.owner.trim().length > 0 ? body.owner : null)
       : null;
+
+    // #1263 — outcome-bound version fields. All optional; validated when
+    // present so bad payloads return 400 instead of corrupting `meta` jsonb.
+    // We track which keys the caller actually sent so we can do a partial
+    // merge (preserving existing meta keys the caller didn't touch).
+    const META_KEYS = ['successCriteria', 'metricCurrent', 'metricTarget', 'metricComparator', 'loopPaused'] as const;
+    const metaProvided: Record<string, boolean> = {};
+    const metaInput: Record<string, any> = {};
+    for (const k of META_KEYS) {
+      if (Object.prototype.hasOwnProperty.call(body, k)) {
+        metaProvided[k] = true;
+        metaInput[k] = (body as any)[k];
+      }
+    }
+    if (action === 'upsert') {
+      if (metaProvided.successCriteria && metaInput.successCriteria != null && typeof metaInput.successCriteria !== 'string') {
+        return NextResponse.json({ error: 'successCriteria must be a string' }, { status: 400 });
+      }
+      for (const numKey of ['metricCurrent', 'metricTarget'] as const) {
+        if (metaProvided[numKey] && metaInput[numKey] != null && (typeof metaInput[numKey] !== 'number' || !Number.isFinite(metaInput[numKey]))) {
+          return NextResponse.json({ error: `${numKey} must be a finite number` }, { status: 400 });
+        }
+      }
+      if (metaProvided.metricComparator && metaInput.metricComparator != null && !['gte', 'lte', 'eq'].includes(metaInput.metricComparator)) {
+        return NextResponse.json({ error: "metricComparator must be one of 'gte','lte','eq'" }, { status: 400 });
+      }
+      if (metaProvided.loopPaused && metaInput.loopPaused != null && typeof metaInput.loopPaused !== 'boolean') {
+        return NextResponse.json({ error: 'loopPaused must be a boolean' }, { status: 400 });
+      }
+    }
 
     // Validate version on any action that takes one (upsert/delete).
     // Accepts CalVer (YYYY.MM.DD or YYYY.MM.DD.N) and SemVer (MAJOR.MINOR.PATCH).
@@ -391,20 +441,78 @@ export async function POST(
           });
 
           const resolvedVersionType = versionType || 'outcome';
+
+          // #1263: read existing meta so we can do a partial merge AND emit
+          // a measurement-update system comment when only metricCurrent changed.
+          const existingMetaRes = await client.query(
+            `SELECT meta FROM org_studio_roadmap_versions WHERE project_id = $1 AND version = $2 AND workspace_id = $3 LIMIT 1`,
+            [projectId, version, 'default-workspace'],
+          );
+          const existingMeta: any = (existingMetaRes.rows[0]?.meta && typeof existingMetaRes.rows[0].meta === 'object')
+            ? existingMetaRes.rows[0].meta
+            : {};
+          const mergedMeta: any = { ...existingMeta };
+          for (const k of META_KEYS) {
+            if (metaProvided[k]) {
+              if (metaInput[k] === null || metaInput[k] === undefined) {
+                delete mergedMeta[k];
+              } else {
+                mergedMeta[k] = metaInput[k];
+              }
+            }
+          }
+
+          // Auto system comment when metricCurrent was the only thing
+          // updated (or when it was updated alongside criteria fields). The
+          // "only metricCurrent changed" detection is best-effort: if the
+          // caller sent a different value for metricCurrent than what was
+          // stored, we log a system comment.
+          const prevCurrent = existingMeta.metricCurrent;
+          const newCurrent = mergedMeta.metricCurrent;
+          if (
+            metaProvided.metricCurrent &&
+            typeof newCurrent === 'number' &&
+            prevCurrent !== newCurrent
+          ) {
+            const target = mergedMeta.metricTarget;
+            const comp = mergedMeta.metricComparator || 'gte';
+            // Inline metric check (avoid importing test-only helpers).
+            let met = false;
+            if (typeof target === 'number') {
+              met = comp === 'lte' ? newCurrent <= target
+                  : comp === 'eq' ? newCurrent === target
+                  : newCurrent >= target;
+            }
+            const txt = `Measurement updated: ${newCurrent}` +
+              (typeof prevCurrent === 'number' ? ` (was ${prevCurrent})` : '') +
+              (typeof target === 'number' ? ` — metric ${met ? 'met' : 'not met'} (target ${comp} ${target})` : '');
+            const list = Array.isArray(mergedMeta.systemComments) ? mergedMeta.systemComments : [];
+            list.push({ at: Date.now(), text: txt });
+            mergedMeta.systemComments = list;
+          }
+
+          // Whether to write the meta column at all. If caller didn't touch
+          // any meta keys AND no existing meta exists, leave the column NULL
+          // so we don't churn the row. Otherwise pass the merged value.
+          const anyProvided = META_KEYS.some((k) => metaProvided[k]);
+          const writeMeta = anyProvided || existingMetaRes.rows.length > 0;
+          const metaJson = writeMeta && Object.keys(mergedMeta).length > 0 ? JSON.stringify(mergedMeta) : null;
+
           await client.query(
             `INSERT INTO org_studio_roadmap_versions 
-              (id, project_id, version, title, status, items, sort_order, created_at, version_type, workspace_id, owner)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+              (id, project_id, version, title, status, items, sort_order, created_at, version_type, workspace_id, owner, meta)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)
              ON CONFLICT (project_id, version) DO UPDATE SET
               title = EXCLUDED.title,
               status = EXCLUDED.status,
               items = EXCLUDED.items,
               sort_order = EXCLUDED.sort_order,
               version_type = EXCLUDED.version_type,
-              -- #1214: only overwrite owner when caller explicitly provided it.
-              -- COALESCE(EXCLUDED.owner, existing) preserves owner across
-              -- partial updates that omit the field.
-              owner = COALESCE(EXCLUDED.owner, org_studio_roadmap_versions.owner)`,
+              owner = COALESCE(EXCLUDED.owner, org_studio_roadmap_versions.owner),
+              -- #1263: meta is replaced with the (already-merged) value when
+              -- any meta key was sent, otherwise left as-is. Sentinel: NULL
+              -- here means "don't change".
+              meta = COALESCE(EXCLUDED.meta, org_studio_roadmap_versions.meta)`,
             [
               versionId,
               projectId,
@@ -415,10 +523,9 @@ export async function POST(
               sortOrder,
               Date.now(),
               resolvedVersionType,
-              'default-workspace', // TODO(v0.17-multi-workspace): resolve from request context
-              // EXCLUDED.owner becomes this value; it's NULL when omitted so
-              // COALESCE falls through to the existing column.
+              'default-workspace',
               ownerProvided ? ownerValue : null,
+              anyProvided ? metaJson : null,
             ]
           );
 

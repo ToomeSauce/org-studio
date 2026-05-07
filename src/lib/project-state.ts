@@ -180,6 +180,68 @@ export async function promoteProjectToNextVersion(
     return noop(`not approved (${targetVersion} not in approvedVersions)`);
   }
 
+  // #1263 — defense-in-depth outcome-bound gate. If we have a `from` version
+  // (i.e. we're advancing past one that was previously current), check its
+  // metric. If criteria are set and metric is unmet, refuse to advance even
+  // if all child tickets are done — checkAndAutoAdvance is the primary
+  // gate, but a Launch-button promote could otherwise sneak past it.
+  if (fromVersion) {
+    const fromMetaRes = await client.query(
+      `SELECT meta FROM org_studio_roadmap_versions WHERE project_id = $1 AND version = $2 AND workspace_id = $3 LIMIT 1`,
+      [projectId, fromVersion, wsId],
+    );
+    const fromMeta: any = (fromMetaRes.rows[0]?.meta && typeof fromMetaRes.rows[0].meta === 'object')
+      ? fromMetaRes.rows[0].meta
+      : {};
+    const criteria = (fromMeta.successCriteria || '').toString().trim();
+    if (criteria) {
+      const target = fromMeta.metricTarget;
+      const cur = fromMeta.metricCurrent;
+      const comp = fromMeta.metricComparator || 'gte';
+      let met = false;
+      if (typeof target === 'number' && typeof cur === 'number') {
+        met = comp === 'lte' ? cur <= target
+            : comp === 'eq' ? cur === target
+            : cur >= target;
+      }
+      if (!met) {
+        console.log(`[Promote] ${projectId}: current version ${fromVersion} metric not met — refusing to advance`);
+        return noop('current version metric not met');
+      }
+    }
+  }
+
+  // #1263 — defense-in-depth: do not promote PAST a version whose metric
+  // gate is unmet. checkAndAutoAdvance already refuses to ship in that
+  // case, but this guards the explicit promote path (Launch button, intent
+  // handler) so an outcome-bound `current` version can't be skipped over.
+  if (fromVersion) {
+    const fromRes = await client.query(
+      `SELECT meta FROM org_studio_roadmap_versions
+         WHERE project_id = $1 AND version = $2 AND workspace_id = $3 LIMIT 1`,
+      [projectId, fromVersion, wsId],
+    );
+    const meta: any = (fromRes.rows[0]?.meta && typeof fromRes.rows[0].meta === 'object')
+      ? fromRes.rows[0].meta
+      : {};
+    const criteria = (meta.successCriteria || '').toString().trim();
+    if (criteria) {
+      const target = meta.metricTarget;
+      const cur = meta.metricCurrent;
+      const comp = meta.metricComparator || 'gte';
+      let met = false;
+      if (typeof target === 'number' && typeof cur === 'number') {
+        met = comp === 'lte' ? cur <= target
+            : comp === 'eq' ? cur === target
+            : cur >= target;
+      }
+      if (!met) {
+        console.log(`[Promote] ${projectId}: current ${fromVersion} metric not met — refusing to promote`);
+        return noop('current version metric not met');
+      }
+    }
+  }
+
   // 5. All roadmap items must have taskIds
   let versionRes = await client.query(
     `SELECT id, items FROM org_studio_roadmap_versions

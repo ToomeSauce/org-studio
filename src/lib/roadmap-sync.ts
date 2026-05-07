@@ -286,7 +286,7 @@ export async function checkAndAutoAdvance(
   try {
     // 1. Find the current version
     const versionResult = await client.query(
-      `SELECT id, version, status, items, sort_order
+      `SELECT id, version, status, items, sort_order, meta
        FROM org_studio_roadmap_versions
        WHERE project_id = $1 AND status = 'current' AND workspace_id = $2
        ORDER BY sort_order ASC
@@ -301,6 +301,60 @@ export async function checkAndAutoAdvance(
 
     // All items must be done (zero-item versions are auto-shipped)
     if (items.length > 0 && !items.every((i: any) => i.done === true)) return;
+
+    // #1263 — outcome-bound gate. If `successCriteria` is set on this
+    // version, ship is gated on `metricCurrent` satisfying the comparator
+    // vs `metricTarget`. When the gate fails, post a one-shot system
+    // comment on the rv-row's `meta.systemComments[]` and return without
+    // shipping. The flag `meta.metricNotMetCommentedAt` makes the comment
+    // idempotent across repeated calls; it's cleared once the metric IS
+    // met (so future regressions get a fresh comment).
+    {
+      const meta: any = (current.meta && typeof current.meta === 'object') ? current.meta : {};
+      const criteria = (meta.successCriteria || '').toString().trim();
+      if (criteria) {
+        const target = meta.metricTarget;
+        const cur = meta.metricCurrent;
+        const comp = meta.metricComparator || 'gte';
+        let met = false;
+        if (typeof target === 'number' && typeof cur === 'number') {
+          met = comp === 'lte' ? cur <= target
+              : comp === 'eq' ? cur === target
+              : cur >= target;
+        }
+        if (!met) {
+          // Post system comment once per transition into the not-met state.
+          if (!meta.metricNotMetCommentedAt) {
+            const xy = `${typeof cur === 'number' ? cur : '?'}/${typeof target === 'number' ? target : '?'}`;
+            const list = Array.isArray(meta.systemComments) ? meta.systemComments : [];
+            list.push({
+              at: Date.now(),
+              text: `All tickets complete; metric not met (${xy}). Propose next experiment.`,
+            });
+            const nextMeta = { ...meta, systemComments: list, metricNotMetCommentedAt: Date.now() };
+            await client.query(
+              `UPDATE org_studio_roadmap_versions SET meta = $1::jsonb WHERE id = $2 AND workspace_id = $3`,
+              [JSON.stringify(nextMeta), current.id, 'default-workspace'],
+            );
+            console.log(`[AutoAdvance] ${projectId}: ${current.version} — metric not met (${xy}); system comment posted, NOT shipping`);
+          } else {
+            console.log(`[AutoAdvance] ${projectId}: ${current.version} — metric still not met; comment already posted, NOT shipping`);
+          }
+          (checkAndAutoAdvance as any)._lastSkipReason = 'metric_not_met';
+          return;
+        }
+        // Metric met — clear the not-met flag if it was set so a future
+        // regression gets a fresh comment.
+        if (meta.metricNotMetCommentedAt) {
+          const nextMeta = { ...meta };
+          delete nextMeta.metricNotMetCommentedAt;
+          await client.query(
+            `UPDATE org_studio_roadmap_versions SET meta = $1::jsonb WHERE id = $2 AND workspace_id = $3`,
+            [JSON.stringify(nextMeta), current.id, 'default-workspace'],
+          );
+        }
+      }
+    }
 
     // 2. Ship the current version
     const shippedAt = Date.now();
