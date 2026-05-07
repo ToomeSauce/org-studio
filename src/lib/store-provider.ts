@@ -572,6 +572,7 @@ export class PostgresStoreProvider implements StoreProvider {
    */
   private async hydrateComponentVersions(client: any, projects: any[]): Promise<void> {
     if (projects.length === 0) return;
+    const escapeForRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const projectIds = projects.map(p => p.id);
     const rvResult = await client.query(
       `SELECT project_id, id, version, title, status, items, sort_order, version_type, owner, shipped_at, created_at
@@ -624,11 +625,21 @@ export class PostgresStoreProvider implements StoreProvider {
 
       const existing = Array.isArray(primary.versions) ? primary.versions : [];
       const rvVersions = new Set(rvRows.map(r => r.version));
-      // Union: rv rows are the source of truth for overlapping versions;
-      // existing-only entries (no matching rv row) are preserved.
+      // #1267: drop orphan shadow entries whose `id` matches the rv-derived
+      // shape (`rv-<projectId>-...`) but whose version isn't in the rv-table.
+      // These are stranded copies left behind by buggy rename writes.
+      // Custom-id entries (e.g. `legacy-x`) MUST still be preserved — the
+      // older test `preserves existing component.versions entries that
+      // have no rv-table row` covers that. We use the simpler id-shape
+      // heuristic (no task-table check) for clarity; the convention is that
+      // rv-shaped ids only ever exist when paired with an rv-table row.
+      const rvShapedRe = new RegExp(`^rv-${escapeForRegExp(project.id)}-`);
       const merged: any[] = [...rvRows];
       for (const ex of existing) {
-        if (!rvVersions.has(ex.version)) merged.push(ex);
+        if (rvVersions.has(ex.version)) continue; // canonical row already in merged
+        const isRvShaped = typeof ex.id === 'string' && rvShapedRe.test(ex.id);
+        if (isRvShaped) continue; // orphan
+        merged.push(ex); // preserve legacy/custom-id entry
       }
       primary.versions = merged;
 

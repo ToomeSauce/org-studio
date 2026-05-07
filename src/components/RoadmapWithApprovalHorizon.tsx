@@ -200,12 +200,14 @@ export function RoadmapWithApprovalHorizon({
     status: 'planned' | 'current' | 'shipped';
     items: RoadmapItem[];
     version_type: 'outcome' | 'foundation' | 'chore';
+    originalVersion: string;
   }>({
     version: '',
     title: '',
     status: 'planned',
     items: [],
     version_type: 'outcome',
+    originalVersion: '',
   });
 
   const [newForm, setNewForm] = useState({
@@ -302,9 +304,13 @@ export function RoadmapWithApprovalHorizon({
   const currentIdx = sortedVersions.findIndex(v => v.version === currentVersion);
   const currentVersionObj = currentIdx !== -1 ? sortedVersions[currentIdx] : null;
 
-  const saveVersion = async (version: string, title: string, status: string, items: RoadmapItem[], versionType?: string, owner?: string | null) => {
+  const saveVersion = async (version: string, title: string, status: string, items: RoadmapItem[], versionType?: string, owner?: string | null, originalVersion?: string) => {
     setLoading(true);
     try {
+      const isRename =
+        typeof originalVersion === 'string' &&
+        originalVersion.length > 0 &&
+        originalVersion !== version;
       const response = await fetch(`/api/roadmap/${projectId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -318,6 +324,9 @@ export function RoadmapWithApprovalHorizon({
           // #1216: only include owner when caller passed it. The API
           // preserves existing owner when the field is absent (COALESCE).
           ...(owner !== undefined ? { owner } : {}),
+          // #1267: include originalVersion only when actually renaming
+          // so the backward-compat upsert path stays untouched.
+          ...(isRename ? { originalVersion } : {}),
         }),
       });
 
@@ -326,11 +335,19 @@ export function RoadmapWithApprovalHorizon({
         throw new Error(errorData.error || `API error: ${response.status}`);
       }
 
+      const responseData = await response.json().catch(() => ({}));
+
       // Refetch roadmap
       const getRoadmap = await fetch(`/api/roadmap/${projectId}`);
       if (getRoadmap.ok) {
         const data = await getRoadmap.json();
         onVersionsChange?.(data.versions || []);
+      }
+
+      // #1267: surface rename outcome so the user sees the task migration count.
+      if (responseData?.action === 'renamed') {
+        const migrated = Number(responseData.tasksMigrated || 0);
+        alert(`Renamed → ${version} (migrated ${migrated} task(s))`);
       }
     } catch (err) {
       console.error('Error saving version:', err);
@@ -448,6 +465,9 @@ export function RoadmapWithApprovalHorizon({
         done: !!it?.done,
       })),
       version_type: v.version_type || 'outcome',
+      // #1267: stash the pre-edit version so saveVersion can request a
+      // server-side rename instead of an insert-or-update.
+      originalVersion: v.version || '',
     });
     setEditingVersionId(v.id);
     // Ensure the version is expanded so the edit form is visible
@@ -460,7 +480,7 @@ export function RoadmapWithApprovalHorizon({
 
   const cancelEdit = () => {
     setEditingVersionId(null);
-    setEditForm({ version: '', title: '', status: 'planned', items: [], version_type: 'outcome' });
+    setEditForm({ version: '', title: '', status: 'planned', items: [], version_type: 'outcome', originalVersion: '' });
   };
 
   // #1215: extracted from renderVersionRow so Zone B's hero card can render the
@@ -718,12 +738,31 @@ export function RoadmapWithApprovalHorizon({
                   <button
                     onClick={() => {
                       const cleanVersion = (editForm.version || '').replace(/^v/i, '').trim();
+                      const isRename =
+                        editForm.originalVersion &&
+                        editForm.originalVersion !== cleanVersion;
+                      if (isRename) {
+                        // UI-side approximation: count items with a linked
+                        // task on the version being edited. Real count
+                        // comes back in the response.
+                        const linkedCount = (editForm.items || []).filter(
+                          (it: any) => it && it.taskId,
+                        ).length;
+                        if (linkedCount > 0) {
+                          const ok = confirm(
+                            `This will rename ${linkedCount} task(s) tagged with version ${editForm.originalVersion} to ${cleanVersion}. Proceed?`,
+                          );
+                          if (!ok) return;
+                        }
+                      }
                       saveVersion(
                         cleanVersion,
                         editForm.title,
                         editForm.status,
                         editForm.items.filter((i) => typeof i.title === 'string' && i.title.trim()),
-                        editForm.version_type
+                        editForm.version_type,
+                        undefined,
+                        editForm.originalVersion,
                       )
                     }}
                     disabled={!(editForm.title || '').trim() || loading}
