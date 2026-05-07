@@ -656,6 +656,216 @@ export function RoadmapWithApprovalHorizon({
     );
   };
 
+  // #1276 — Shared edit-form JSX. Used by both renderVersionRow (planned
+  // / shipped versions) AND the inline current-version editor below.
+  // Closes over editForm/setEditForm/saveVersion/cancelEdit/loading from
+  // component scope. Caller is responsible for rendering only when
+  // editingVersionId === version.id.
+  const renderEditForm = () => (
+    <>
+      <div className="space-y-2">
+        <input
+          type="text"
+          value={editForm.version}
+          onChange={(e) => setEditForm({ ...editForm, version: e.target.value.replace(/^v/i, '') })}
+          placeholder="Version number"
+          className="w-24 px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
+        />
+        <input
+          type="text"
+          value={editForm.title}
+          onChange={(e) => setEditForm({ ...editForm, title: e.target.value })}
+          placeholder="Version title"
+          className="w-full px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
+        />
+        <select
+          value={editForm.status}
+          onChange={(e) => setEditForm({ ...editForm, status: e.target.value as any })}
+          className="w-full px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
+        >
+          <option value="planned">⚪ Planned</option>
+          <option value="current">🔵 Current</option>
+          <option value="shipped">🟢 Shipped</option>
+        </select>
+        <select
+          value={editForm.version_type}
+          onChange={(e) => setEditForm({ ...editForm, version_type: e.target.value as any })}
+          className="w-full px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
+        >
+          <option value="outcome">🎯 Outcome (user-facing result)</option>
+          <option value="foundation">🏗️ Foundation (scaffolding/plumbing)</option>
+          <option value="chore">🧹 Chore (refactor/tech debt)</option>
+        </select>
+      </div>
+
+      {/* Items Editor */}
+      <div className="space-y-2">
+        <label className="text-sm font-medium text-[var(--text-secondary)]">Items</label>
+        <div className="space-y-2">
+          {editForm.items.map((item, idx) => (
+            <div key={idx} className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={item.done}
+                onChange={(e) => {
+                  const newItems = [...editForm.items];
+                  newItems[idx].done = e.target.checked;
+                  setEditForm({ ...editForm, items: newItems });
+                }}
+                className="w-4 h-4 rounded"
+              />
+              <input
+                type="text"
+                value={item.title}
+                onChange={(e) => {
+                  const newItems = [...editForm.items];
+                  newItems[idx].title = e.target.value;
+                  setEditForm({ ...editForm, items: newItems });
+                }}
+                placeholder="Item text"
+                className="flex-1 px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)]"
+              />
+              <button
+                onClick={() => {
+                  const newItems = editForm.items.filter((_, i) => i !== idx);
+                  setEditForm({ ...editForm, items: newItems });
+                }}
+                className="p-1.5 hover:bg-red-100 dark:hover:bg-red-950/30 rounded transition-colors"
+              >
+                <X className="w-3 h-3 text-red-600 dark:text-red-400" />
+              </button>
+            </div>
+          ))}
+        </div>
+
+        {/* Add Item Button */}
+        <button
+          onClick={() =>
+            setEditForm({
+              ...editForm,
+              items: [...editForm.items, { title: '', done: false }],
+            })
+          }
+          className="flex items-center gap-2 w-full px-3 py-2 text-sm border border-dashed border-[var(--border-color)] rounded-lg text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors"
+        >
+          <Plus className="w-4 h-4" />
+          Add Item
+        </button>
+      </div>
+
+      {/* #1263 — Outcome-bound success criteria. */}
+      <div className="space-y-2 pt-3 border-t border-[var(--border-color)]">
+        <label className="text-sm font-medium text-[var(--text-secondary)]">
+          Success Criteria <span className="text-[var(--text-muted)] font-normal">(optional — gates auto-ship on a measurable outcome)</span>
+        </label>
+        <textarea
+          value={editForm.successCriteria}
+          onChange={(e) => setEditForm({ ...editForm, successCriteria: e.target.value })}
+          placeholder="e.g. ‘onboarding completion rate hits 60%’"
+          rows={2}
+          className="w-full px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)]"
+        />
+        <div className="grid grid-cols-3 gap-2">
+          <input
+            type="number"
+            step="any"
+            value={editForm.metricCurrent}
+            onChange={(e) => setEditForm({ ...editForm, metricCurrent: e.target.value })}
+            placeholder="current"
+            className="px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)]"
+          />
+          <select
+            value={editForm.metricComparator}
+            onChange={(e) => setEditForm({ ...editForm, metricComparator: e.target.value as any })}
+            className="px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
+          >
+            <option value="gte">≥ (at least)</option>
+            <option value="lte">≤ (at most)</option>
+            <option value="eq">= (exactly)</option>
+          </select>
+          <input
+            type="number"
+            step="any"
+            value={editForm.metricTarget}
+            onChange={(e) => setEditForm({ ...editForm, metricTarget: e.target.value })}
+            placeholder="target"
+            className="px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)]"
+          />
+        </div>
+        <label className="flex items-center gap-2 text-sm text-[var(--text-secondary)] cursor-pointer">
+          <input
+            type="checkbox"
+            checked={editForm.loopPaused}
+            onChange={(e) => setEditForm({ ...editForm, loopPaused: e.target.checked })}
+            className="w-4 h-4 rounded"
+          />
+          Pause this version (kill-switch — dispatcher will skip its tickets)
+        </label>
+      </div>
+
+      {/* Save/Cancel Buttons */}
+      <div className="flex gap-2 pt-3 border-t border-[var(--border-color)]">
+        <button
+          onClick={() => {
+            const cleanVersion = (editForm.version || '').replace(/^v/i, '').trim();
+            const isRename =
+              editForm.originalVersion &&
+              editForm.originalVersion !== cleanVersion;
+            if (isRename) {
+              const linkedCount = (editForm.items || []).filter(
+                (it: any) => it && it.taskId,
+              ).length;
+              if (linkedCount > 0) {
+                const ok = confirm(
+                  `This will rename ${linkedCount} task(s) tagged with version ${editForm.originalVersion} to ${cleanVersion}. Proceed?`,
+                );
+                if (!ok) return;
+              }
+            }
+            saveVersion(
+              cleanVersion,
+              editForm.title,
+              editForm.status,
+              editForm.items.filter((i) => typeof i.title === 'string' && i.title.trim()),
+              editForm.version_type,
+              undefined,
+              editForm.originalVersion,
+              {
+                successCriteria: editForm.successCriteria.trim() ? editForm.successCriteria.trim() : null,
+                metricCurrent: editForm.metricCurrent.trim() === '' ? null : Number(editForm.metricCurrent),
+                metricTarget: editForm.metricTarget.trim() === '' ? null : Number(editForm.metricTarget),
+                metricComparator: editForm.metricComparator,
+                loopPaused: editForm.loopPaused,
+              },
+            )
+          }}
+          disabled={!(editForm.title || '').trim() || loading}
+          className="flex-1 px-4 py-2 bg-[var(--accent-primary)] text-white rounded-lg font-medium hover:opacity-90 transition-opacity disabled:opacity-50 flex items-center justify-center gap-2"
+        >
+          <Check className="w-4 h-4" />
+          {loading ? 'Saving...' : 'Save'}
+        </button>
+        <button
+          onClick={cancelEdit}
+          className="flex-1 px-4 py-2 bg-[var(--bg-tertiary)] text-[var(--text-secondary)] rounded-lg font-medium hover:bg-[var(--bg-hover)] transition-colors"
+        >
+          Cancel
+        </button>
+      </div>
+    </>
+  );
+
+  // #1276 — Loud-confirm wrapper around deleteVersion for the current-version
+  // block. Two-step: standard confirm, then a typed-string confirm so a
+  // misclick can't nuke the active version.
+  const deleteCurrentVersion = async (versionStr: string) => {
+    const typed = window.prompt(
+      `⚠️ You are about to delete v${versionStr} — the project's CURRENT (active) version.\n\nThis will detach all linked tasks from the version and the project will have no current version until you launch the next one.\n\nType DELETE to confirm.`
+    );
+    if (typed !== 'DELETE') return;
+    await deleteVersion(versionStr);
+  };
+
   const renderVersionRow = (
     version: RoadmapVersion,
     isApproved: boolean = false,
@@ -804,208 +1014,7 @@ export function RoadmapWithApprovalHorizon({
         {isExpanded && (
           <div className="border-t border-[var(--border-color)] px-4 py-3 bg-[var(--bg-primary)] space-y-3">
             {isEditing ? (
-              <>
-                <div className="space-y-2">
-                  <input
-                    type="text"
-                    value={editForm.version}
-                    onChange={(e) => setEditForm({ ...editForm, version: e.target.value.replace(/^v/i, '') })}
-                    placeholder="Version number"
-                    className="w-24 px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
-                  />
-                  <input
-                    type="text"
-                    value={editForm.title}
-                    onChange={(e) => setEditForm({ ...editForm, title: e.target.value })}
-                    placeholder="Version title"
-                    className="w-full px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
-                  />
-                  <select
-                    value={editForm.status}
-                    onChange={(e) => setEditForm({ ...editForm, status: e.target.value as any })}
-                    className="w-full px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
-                  >
-                    <option value="planned">⚪ Planned</option>
-                    <option value="current">🔵 Current</option>
-                    <option value="shipped">🟢 Shipped</option>
-                  </select>
-                  <select
-                    value={editForm.version_type}
-                    onChange={(e) => setEditForm({ ...editForm, version_type: e.target.value as any })}
-                    className="w-full px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
-                  >
-                    <option value="outcome">🎯 Outcome (user-facing result)</option>
-                    <option value="foundation">🏗️ Foundation (scaffolding/plumbing)</option>
-                    <option value="chore">🧹 Chore (refactor/tech debt)</option>
-                  </select>
-                </div>
-
-                {/* Items Editor */}
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-[var(--text-secondary)]">Items</label>
-                  <div className="space-y-2">
-                    {editForm.items.map((item, idx) => (
-                      <div key={idx} className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={item.done}
-                          onChange={(e) => {
-                            const newItems = [...editForm.items];
-                            newItems[idx].done = e.target.checked;
-                            setEditForm({ ...editForm, items: newItems });
-                          }}
-                          className="w-4 h-4 rounded"
-                        />
-                        <input
-                          type="text"
-                          value={item.title}
-                          onChange={(e) => {
-                            const newItems = [...editForm.items];
-                            newItems[idx].title = e.target.value;
-                            setEditForm({ ...editForm, items: newItems });
-                          }}
-                          placeholder="Item text"
-                          className="flex-1 px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)]"
-                        />
-                        <button
-                          onClick={() => {
-                            const newItems = editForm.items.filter((_, i) => i !== idx);
-                            setEditForm({ ...editForm, items: newItems });
-                          }}
-                          className="p-1.5 hover:bg-red-100 dark:hover:bg-red-950/30 rounded transition-colors"
-                        >
-                          <X className="w-3 h-3 text-red-600 dark:text-red-400" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Add Item Button */}
-                  <button
-                    onClick={() =>
-                      setEditForm({
-                        ...editForm,
-                        items: [...editForm.items, { title: '', done: false }],
-                      })
-                    }
-                    className="flex items-center gap-2 w-full px-3 py-2 text-sm border border-dashed border-[var(--border-color)] rounded-lg text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors"
-                  >
-                    <Plus className="w-4 h-4" />
-                    Add Item
-                  </button>
-                </div>
-
-                {/* #1263 — Outcome-bound success criteria.
-                    Minimal v1 UI: a flat block (not collapsible — keeps the
-                    diff small). Empty `successCriteria` means "no metric
-                    gate", matching isVersionMetricMet's no-gate path. */}
-                <div className="space-y-2 pt-3 border-t border-[var(--border-color)]">
-                  <label className="text-sm font-medium text-[var(--text-secondary)]">
-                    Success Criteria <span className="text-[var(--text-muted)] font-normal">(optional — gates auto-ship on a measurable outcome)</span>
-                  </label>
-                  <textarea
-                    value={editForm.successCriteria}
-                    onChange={(e) => setEditForm({ ...editForm, successCriteria: e.target.value })}
-                    placeholder="e.g. ‘onboarding completion rate hits 60%’"
-                    rows={2}
-                    className="w-full px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)]"
-                  />
-                  <div className="grid grid-cols-3 gap-2">
-                    <input
-                      type="number"
-                      step="any"
-                      value={editForm.metricCurrent}
-                      onChange={(e) => setEditForm({ ...editForm, metricCurrent: e.target.value })}
-                      placeholder="current"
-                      className="px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)]"
-                    />
-                    <select
-                      value={editForm.metricComparator}
-                      onChange={(e) => setEditForm({ ...editForm, metricComparator: e.target.value as any })}
-                      className="px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
-                    >
-                      <option value="gte">≥ (at least)</option>
-                      <option value="lte">≤ (at most)</option>
-                      <option value="eq">= (exactly)</option>
-                    </select>
-                    <input
-                      type="number"
-                      step="any"
-                      value={editForm.metricTarget}
-                      onChange={(e) => setEditForm({ ...editForm, metricTarget: e.target.value })}
-                      placeholder="target"
-                      className="px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)]"
-                    />
-                  </div>
-                  <label className="flex items-center gap-2 text-sm text-[var(--text-secondary)] cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={editForm.loopPaused}
-                      onChange={(e) => setEditForm({ ...editForm, loopPaused: e.target.checked })}
-                      className="w-4 h-4 rounded"
-                    />
-                    Pause this version (kill-switch — dispatcher will skip its tickets)
-                  </label>
-                </div>
-
-                {/* Save/Cancel Buttons */}
-                <div className="flex gap-2 pt-3 border-t border-[var(--border-color)]">
-                  <button
-                    onClick={() => {
-                      const cleanVersion = (editForm.version || '').replace(/^v/i, '').trim();
-                      const isRename =
-                        editForm.originalVersion &&
-                        editForm.originalVersion !== cleanVersion;
-                      if (isRename) {
-                        // UI-side approximation: count items with a linked
-                        // task on the version being edited. Real count
-                        // comes back in the response.
-                        const linkedCount = (editForm.items || []).filter(
-                          (it: any) => it && it.taskId,
-                        ).length;
-                        if (linkedCount > 0) {
-                          const ok = confirm(
-                            `This will rename ${linkedCount} task(s) tagged with version ${editForm.originalVersion} to ${cleanVersion}. Proceed?`,
-                          );
-                          if (!ok) return;
-                        }
-                      }
-                      saveVersion(
-                        cleanVersion,
-                        editForm.title,
-                        editForm.status,
-                        editForm.items.filter((i) => typeof i.title === 'string' && i.title.trim()),
-                        editForm.version_type,
-                        // owner: not edited from this form
-                        undefined,
-                        editForm.originalVersion,
-                        // #1263: pass metric fields. Empty string → null
-                        // (clear), non-empty number string → number, blank
-                        // numeric → null. successCriteria empty string →
-                        // null so the gate is fully removed.
-                        {
-                          successCriteria: editForm.successCriteria.trim() ? editForm.successCriteria.trim() : null,
-                          metricCurrent: editForm.metricCurrent.trim() === '' ? null : Number(editForm.metricCurrent),
-                          metricTarget: editForm.metricTarget.trim() === '' ? null : Number(editForm.metricTarget),
-                          metricComparator: editForm.metricComparator,
-                          loopPaused: editForm.loopPaused,
-                        },
-                      )
-                    }}
-                    disabled={!(editForm.title || '').trim() || loading}
-                    className="flex-1 px-4 py-2 bg-[var(--accent-primary)] text-white rounded-lg font-medium hover:opacity-90 transition-opacity disabled:opacity-50 flex items-center justify-center gap-2"
-                  >
-                    <Check className="w-4 h-4" />
-                    {loading ? 'Saving...' : 'Save'}
-                  </button>
-                  <button
-                    onClick={cancelEdit}
-                    className="flex-1 px-4 py-2 bg-[var(--bg-tertiary)] text-[var(--text-secondary)] rounded-lg font-medium hover:bg-[var(--bg-hover)] transition-colors"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </>
+              renderEditForm()
             ) : (
               <>
                 {/* Items View */}
@@ -1142,6 +1151,9 @@ export function RoadmapWithApprovalHorizon({
           const reviewTasks = versionTasks.filter((t: any) => t.status === 'review');
           const blockedTasks = versionTasks.filter((t: any) => t.status === 'blocked');
           const hasStall = reviewTasks.length > 0 || blockedTasks.length > 0;
+          // #1276 — surface edit / delete / measurement-update on current version
+          const isEditingCurrent = editingVersionId === currentVersionObj.id;
+          const hasCriteria = ((currentVersionObj as any).successCriteria || '').trim();
 
           return (
           <div className={clsx(
@@ -1160,11 +1172,70 @@ export function RoadmapWithApprovalHorizon({
                     <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
                   </span>
                 </span>
+                {/* #1263 — metric pill, mirroring renderVersionRow */}
+                {hasCriteria && (
+                  <span
+                    title={`Success criteria: ${(currentVersionObj as any).successCriteria}` + ((currentVersionObj as any).loopPaused ? ' (loop paused)' : '')}
+                    className={
+                      'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium border ' +
+                      ((currentVersionObj as any).loopPaused
+                        ? 'border-[var(--border-color)] text-[var(--text-muted)] bg-[var(--bg-tertiary)] opacity-60'
+                        : 'border-[var(--border-color)] text-[var(--text-secondary)] bg-[var(--bg-secondary)]')
+                    }
+                  >
+                    metric:&nbsp;
+                    {typeof (currentVersionObj as any).metricCurrent === 'number' ? (currentVersionObj as any).metricCurrent : '?'}
+                    /
+                    {typeof (currentVersionObj as any).metricTarget === 'number' ? (currentVersionObj as any).metricTarget : '?'}
+                    {(currentVersionObj as any).loopPaused ? ' · paused' : ''}
+                  </span>
+                )}
               </div>
-              <span className="text-sm font-medium">
-                {(currentVersionObj.items || []).filter(i => i.done).length}/{(currentVersionObj.items || []).length}
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium">
+                  {(currentVersionObj.items || []).filter(i => i.done).length}/{(currentVersionObj.items || []).length}
+                </span>
+                {/* #1276 — edit / delete / update-measurement buttons. Hidden
+                 * while editing to mirror renderVersionRow behavior. */}
+                {!isEditingCurrent && (
+                  <div className="flex gap-1 ml-2">
+                    {hasCriteria && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); promptUpdateMeasurement(currentVersionObj); }}
+                        disabled={loading}
+                        className="px-1.5 py-0.5 text-[10px] hover:bg-[var(--bg-tertiary)] rounded transition-colors text-[var(--text-secondary)] border border-[var(--border-color)]"
+                        title="Update measurement"
+                      >
+                        +·
+                      </button>
+                    )}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); startEdit(currentVersionObj); }}
+                      className="p-1.5 hover:bg-[var(--bg-tertiary)] rounded transition-colors"
+                      title="Edit version"
+                    >
+                      <Pencil className="w-3 h-3 text-[var(--text-muted)]" />
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); deleteCurrentVersion(currentVersionObj.version); }}
+                      disabled={loading}
+                      className="p-1.5 hover:bg-red-100 dark:hover:bg-red-950/30 rounded transition-colors disabled:opacity-50"
+                      title="Delete current version (extra confirm)"
+                    >
+                      <Trash2 className="w-3 h-3 text-red-600 dark:text-red-400" />
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
+
+            {/* #1276 — inline editor on current version. Renders the same
+             * form as renderVersionRow via the shared helper. */}
+            {isEditingCurrent ? (
+              <div className="border-t border-[var(--border-color)] pt-4 space-y-3">
+                {renderEditForm()}
+              </div>
+            ) : (<>
 
             {/* Stall banner */}
             {hasStall && (
@@ -1243,6 +1314,7 @@ export function RoadmapWithApprovalHorizon({
                 })}
               </div>
             )}
+            </>)}
           </div>
           );
         })()}
