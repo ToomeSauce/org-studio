@@ -53,6 +53,20 @@ export interface ComponentVersionLike {
    * unaffected. See `getEffectiveOwner()`.
    */
   owner?: string;
+
+  /**
+   * #1263 — outcome-bound versions. All optional; absence = no gate (zero
+   * behavior change for existing versions). When `successCriteria` is set,
+   * the version stays open until `metricCurrent` satisfies
+   * `metricComparator` vs `metricTarget`, even when all child tickets are
+   * done. See src/lib/version-metric.ts.
+   */
+  successCriteria?: string;
+  metricCurrent?: number;
+  metricTarget?: number;
+  metricComparator?: 'gte' | 'lte' | 'eq';
+  /** Human kill-switch — when true, dispatch is suppressed for this version. */
+  loopPaused?: boolean;
 }
 
 export interface ComponentLike {

@@ -575,7 +575,7 @@ export class PostgresStoreProvider implements StoreProvider {
     const escapeForRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const projectIds = projects.map(p => p.id);
     const rvResult = await client.query(
-      `SELECT project_id, id, version, title, status, items, sort_order, version_type, owner, shipped_at, created_at
+      `SELECT project_id, id, version, title, status, items, sort_order, version_type, owner, shipped_at, created_at, meta
          FROM org_studio_roadmap_versions
         WHERE project_id = ANY($1::text[]) AND workspace_id = $2`,
       [projectIds, this.workspaceId]
@@ -587,6 +587,7 @@ export class PostgresStoreProvider implements StoreProvider {
     const byProject = new Map<string, any[]>();
     for (const r of rvResult.rows) {
       if (!byProject.has(r.project_id)) byProject.set(r.project_id, []);
+      const meta = (r.meta && typeof r.meta === 'object') ? r.meta : {};
       byProject.get(r.project_id)!.push({
         id: r.id,
         version: r.version,
@@ -598,6 +599,14 @@ export class PostgresStoreProvider implements StoreProvider {
         title: r.title,
         shipped_at: r.shipped_at ?? undefined,
         createdAt: r.created_at ?? undefined,
+        // #1263 — lift outcome-bound metric fields from `meta` jsonb so
+        // helpers reading ComponentVersionLike (e.g. dispatch-gate, version-
+        // metric helpers) see them at the top level.
+        ...(meta.successCriteria !== undefined ? { successCriteria: meta.successCriteria } : {}),
+        ...(meta.metricCurrent !== undefined ? { metricCurrent: meta.metricCurrent } : {}),
+        ...(meta.metricTarget !== undefined ? { metricTarget: meta.metricTarget } : {}),
+        ...(meta.metricComparator !== undefined ? { metricComparator: meta.metricComparator } : {}),
+        ...(meta.loopPaused !== undefined ? { loopPaused: meta.loopPaused } : {}),
       });
     }
     for (const [, list] of byProject) {
