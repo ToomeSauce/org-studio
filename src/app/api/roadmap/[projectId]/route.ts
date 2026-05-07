@@ -3,6 +3,7 @@ import { getStoreProvider } from '@/lib/store-provider';
 import { authenticateRequest } from '@/lib/auth';
 import { checkArchivedProject } from '@/lib/archived-project-compat';
 import { versionSortKey, compareVersions, isValidVersion } from '@/lib/version-utils';
+import { renameVersionInProjectData, rvDerivedId } from '@/lib/roadmap-rename';
 
 export const dynamic = 'force-dynamic';
 
@@ -120,7 +121,7 @@ export async function POST(
   try {
     const { projectId } = await params;
     const body = await req.json();
-    const { action, version, title, status, items, order, versionType } = body;
+    const { action, version, title, status, items, order, versionType, originalVersion } = body;
     // #1214: owner is OPTIONAL on the wire. When omitted, we preserve the
     // existing row's owner (COALESCE on update) and persist NULL on insert.
     const ownerProvided = Object.prototype.hasOwnProperty.call(body, 'owner');
@@ -171,6 +172,209 @@ export async function POST(
 
       try {
         if (action === 'upsert') {
+          // #1267: rename path — a version-string change should rename
+          // the existing rv-row + retag tasks + rewrite the project's
+          // shadow refs, NOT insert a new row alongside the old one.
+          const isRename =
+            typeof originalVersion === 'string' &&
+            originalVersion.length > 0 &&
+            originalVersion !== version;
+          if (isRename) {
+            const ws = 'default-workspace';
+            const oldId = rvDerivedId(projectId, originalVersion);
+            const newId = rvDerivedId(projectId, version);
+            const newSortOrder = versionSortKey(version);
+
+            try {
+              await client.query('BEGIN');
+
+              // Source must exist.
+              const srcRes = await client.query(
+                `SELECT id, title, status, items, version_type, owner
+                   FROM org_studio_roadmap_versions
+                  WHERE project_id = $1 AND version = $2 AND workspace_id = $3
+                  FOR UPDATE`,
+                [projectId, originalVersion, ws],
+              );
+              if (srcRes.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return NextResponse.json(
+                  {
+                    error: 'rename_source_missing',
+                    message: `Version "${originalVersion}" not found for project ${projectId}.`,
+                  },
+                  { status: 404 },
+                );
+              }
+
+              // Target must NOT exist.
+              const tgtRes = await client.query(
+                `SELECT 1 FROM org_studio_roadmap_versions
+                  WHERE project_id = $1 AND version = $2 AND workspace_id = $3`,
+                [projectId, version, ws],
+              );
+              if (tgtRes.rows.length > 0) {
+                await client.query('ROLLBACK');
+                return NextResponse.json(
+                  {
+                    error: 'rename_target_exists',
+                    message: `Version "${version}" already exists. Cannot rename onto an existing version.`,
+                  },
+                  { status: 409 },
+                );
+              }
+
+              // Auto-mint item ids — same convention as the upsert path.
+              const itemsWithIds = (items || []).map((it: any) => {
+                if (it && typeof it === 'object' && !it.id) {
+                  const newItemId = `item-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`;
+                  return { ...it, id: newItemId };
+                }
+                return it;
+              });
+
+              const resolvedVersionType = versionType || 'outcome';
+
+              // Rewrite the rv row (id + version + content). We key on the
+              // OLD id so we update the existing row in place.
+              await client.query(
+                `UPDATE org_studio_roadmap_versions
+                    SET id = $1,
+                        version = $2,
+                        title = $3,
+                        status = $4,
+                        items = $5,
+                        sort_order = $6,
+                        version_type = $7,
+                        owner = COALESCE($8, owner)
+                  WHERE id = $9 AND workspace_id = $10`,
+                [
+                  newId,
+                  version,
+                  title,
+                  status,
+                  JSON.stringify(itemsWithIds),
+                  newSortOrder,
+                  resolvedVersionType,
+                  ownerProvided ? ownerValue : null,
+                  oldId,
+                  ws,
+                ],
+              );
+
+              // Retag tasks.
+              const tasksRes = await client.query(
+                `UPDATE org_studio_tasks
+                    SET version = $1
+                  WHERE project_id = $2 AND version = $3 AND workspace_id = $4`,
+                [version, projectId, originalVersion, ws],
+              );
+              const tasksMigrated = tasksRes.rowCount ?? 0;
+
+              // Rewrite the project jsonb (components/sections/etc).
+              const projRes = await client.query(
+                `SELECT data FROM org_studio_projects
+                  WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
+                [projectId, ws],
+              );
+              let projectFieldsRewritten = {
+                components: 0,
+                sections: 0,
+                approvedVersionsHits: 0,
+                autonomyApprovedThrough: false,
+                currentVersion: false,
+              };
+              if (projRes.rows.length > 0) {
+                const raw = projRes.rows[0].data;
+                const dataObj =
+                  raw == null
+                    ? {}
+                    : typeof raw === 'string'
+                      ? JSON.parse(raw)
+                      : raw;
+                const result = renameVersionInProjectData(
+                  dataObj,
+                  projectId,
+                  originalVersion,
+                  version,
+                );
+                await client.query(
+                  `UPDATE org_studio_projects SET data = $1 WHERE id = $2 AND workspace_id = $3`,
+                  [JSON.stringify(result.data), projectId, ws],
+                );
+                projectFieldsRewritten = {
+                  components: result.componentsHits,
+                  sections: result.sectionsHits,
+                  approvedVersionsHits: result.approvedVersionsHits,
+                  autonomyApprovedThrough: result.autonomyApprovedThrough,
+                  currentVersion: result.currentVersion,
+                };
+              }
+
+              await client.query('COMMIT');
+
+              // Sync currentVersion AFTER the rename so the new string is
+              // what gets written to the project record.
+              if (status === 'current') {
+                try {
+                  const storeRes = await fetch(
+                    `http://localhost:${process.env.PORT || 4501}/api/store`,
+                    {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        ...(process.env.ORG_STUDIO_API_KEY
+                          ? { Authorization: `Bearer ${process.env.ORG_STUDIO_API_KEY}` }
+                          : {}),
+                      },
+                      body: JSON.stringify({
+                        action: 'updateProject',
+                        id: projectId,
+                        updates: { currentVersion: version },
+                      }),
+                    },
+                  );
+                  if (!storeRes.ok)
+                    console.warn(
+                      `[Roadmap] Failed to sync currentVersion to project after rename: ${storeRes.status}`,
+                    );
+                } catch (e) {
+                  console.warn(
+                    '[Roadmap] Failed to sync currentVersion to project after rename:',
+                    e,
+                  );
+                }
+              }
+
+              // NOTIFY: roadmap_update with action:'rename' (extra
+              // originalVersion field for listeners that care) plus a
+              // project_update so cached store refreshes pick up the
+              // jsonb rewrite.
+              await notifyRoadmapChange(
+                client,
+                projectId,
+                'rename',
+                version,
+                originalVersion,
+              );
+              await notifyProjectChange(client, projectId);
+
+              return NextResponse.json({
+                action: 'renamed',
+                originalVersion,
+                version,
+                id: newId,
+                tasksMigrated,
+                projectFieldsRewritten,
+              });
+            } catch (e) {
+              try {
+                await client.query('ROLLBACK');
+              } catch {}
+              throw e;
+            }
+          }
+
           const versionId = `rv-${projectId}-${version.replace(/\./g, '-')}`;
           const sortOrder = versionSortKey(version);
 
@@ -277,7 +481,7 @@ export async function POST(
       }
     } else {
       // Fallback: use JSON file
-      return handleFileBasedRoadmap(projectId, action, { version, title, status, items, order });
+      return handleFileBasedRoadmap(projectId, action, { version, title, status, items, order, originalVersion, versionType, owner: ownerProvided ? ownerValue : undefined });
     }
   } catch (err: any) {
     console.error('[Roadmap POST]', err);
@@ -303,6 +507,7 @@ async function notifyRoadmapChange(
   projectId: string,
   action: string,
   version?: string,
+  originalVersion?: string,
 ): Promise<void> {
   try {
     const payload = JSON.stringify({
@@ -310,6 +515,9 @@ async function notifyRoadmapChange(
       action,
       projectId,
       ...(version ? { version } : {}),
+      // #1267: rename listeners can compare original→new without breaking
+      // existing consumers that ignore unknown fields.
+      ...(originalVersion ? { originalVersion } : {}),
       timestamp: Date.now(),
       source: 'roadmap-route',
       workspace_id: 'default-workspace',
@@ -319,6 +527,31 @@ async function notifyRoadmapChange(
     );
   } catch {
     // best-effort — don't fail the user-facing write on a NOTIFY hiccup
+  }
+}
+
+/**
+ * #1267: ping listeners that the project jsonb changed (rename rewrites
+ * components/sections/approvedVersions). Mirrors the roadmap_update
+ * payload shape.
+ */
+async function notifyProjectChange(
+  client: any,
+  projectId: string,
+): Promise<void> {
+  try {
+    const payload = JSON.stringify({
+      type: 'project_update',
+      projectId,
+      timestamp: Date.now(),
+      source: 'roadmap-route',
+      workspace_id: 'default-workspace',
+    });
+    await client.query(
+      `NOTIFY org_studio_change, '${payload.replace(/'/g, "''")}'`,
+    );
+  } catch {
+    // best-effort
   }
 }
 
@@ -374,7 +607,78 @@ function handleFileBasedRoadmap(
     }
 
     if (action === 'upsert') {
-      const { version, title, status, items, versionType } = payload;
+      const { version, title, status, items, versionType, originalVersion } = payload;
+
+      // #1267: file-mode rename support. Tasks are Postgres-only in
+      // practice, so tasksMigrated is always 0 here.
+      const isRename =
+        typeof originalVersion === 'string' &&
+        originalVersion.length > 0 &&
+        originalVersion !== version;
+      if (isRename) {
+        const tgtIdx = data.versions.findIndex((v: any) => v.version === version);
+        if (tgtIdx >= 0) {
+          return NextResponse.json(
+            {
+              error: 'rename_target_exists',
+              message: `Version "${version}" already exists. Cannot rename onto an existing version.`,
+            },
+            { status: 409 },
+          );
+        }
+        const srcIdx = data.versions.findIndex((v: any) => v.version === originalVersion);
+        if (srcIdx < 0) {
+          return NextResponse.json(
+            {
+              error: 'rename_source_missing',
+              message: `Version "${originalVersion}" not found for project ${projectId}.`,
+            },
+            { status: 404 },
+          );
+        }
+        const itemsWithIds = (items || []).map((it: any) => {
+          if (it && typeof it === 'object' && !it.id) {
+            const newItemId = `item-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`;
+            return { ...it, id: newItemId };
+          }
+          return it;
+        });
+        const ownerProvidedFs2 = Object.prototype.hasOwnProperty.call(payload, 'owner') && payload.owner !== undefined;
+        const existing = data.versions[srcIdx] || {};
+        data.versions[srcIdx] = {
+          ...existing,
+          id: `rv-${projectId}-${version.replace(/\./g, '-')}`,
+          version,
+          title,
+          status,
+          items: itemsWithIds,
+          sort_order: versionSortKey(version),
+          version_type: versionType || existing.version_type || 'outcome',
+          owner: ownerProvidedFs2 ? payload.owner : (existing.owner ?? null),
+        };
+        data.versions.sort((a: any, b: any) => {
+          if (a.sort_order != null && b.sort_order != null) return a.sort_order - b.sort_order;
+          if (a.sort_order != null) return -1;
+          if (b.sort_order != null) return 1;
+          return compareVersions(a.version, b.version);
+        });
+        fs.writeFileSync(roadmapPath, JSON.stringify(data, null, 2));
+        return NextResponse.json({
+          action: 'renamed',
+          originalVersion,
+          version,
+          id: `rv-${projectId}-${version.replace(/\./g, '-')}`,
+          tasksMigrated: 0,
+          projectFieldsRewritten: {
+            components: 0,
+            sections: 0,
+            approvedVersionsHits: 0,
+            autonomyApprovedThrough: false,
+            currentVersion: false,
+          },
+        });
+      }
+
       const idx = data.versions.findIndex((v: any) => v.version === version);
 
       // Mirror the Postgres path: auto-mint ids for items that don't have one.

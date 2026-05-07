@@ -233,4 +233,34 @@ describe('#1125 hydrateComponentVersions on read()', () => {
     // null in DB → undefined on the model (per hydration)
     expect(v11.owner).toBeUndefined();
   });
+
+  // #1267: orphan rv-shaped shadow entries (left behind by buggy rename
+  // writes) get cleaned up on read.
+  test('drops orphan rv-shaped shadow entry whose version is not in rv-table', async () => {
+    const projects = [
+      projectRow('p8', [
+        {
+          id: 'c1',
+          name: 'Main',
+          versions: [
+            // Orphan: rv-shaped id, version no longer in rv-table.
+            { id: 'rv-p8-1-0', version: '1.0', status: 'planned', items: [] },
+            // Legit custom-id entry must still survive.
+            { id: 'legacy-x', version: 'legacy-x', status: 'shipped', items: [] },
+          ],
+        },
+      ]),
+    ];
+    const rvRows = [
+      // No row for '1.0' — only '2.0' exists, so the '1.0' shadow is an orphan.
+      rvRow('p8', '2.0', { sort_order: 1, status: 'planned' }),
+    ];
+    const provider = new TestProvider(makeFakePool({ projects, rvRows }));
+    const store = await provider.read();
+    const primary = store.projects.find((x: any) => x.id === 'p8').components[0];
+    const versionStrings = primary.versions.map((v: any) => v.version).sort();
+    expect(versionStrings).toEqual(['2.0', 'legacy-x']);
+    expect(primary.versions.find((v: any) => v.id === 'rv-p8-1-0')).toBeUndefined();
+    expect(primary.versions.find((v: any) => v.id === 'legacy-x')).toBeDefined();
+  });
 });
