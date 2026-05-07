@@ -1014,6 +1014,41 @@ async function initializePostgresListener() {
           // Process @mentions from comments added via remote (staging) UI
           if (changeEvent.type === 'comment_added' && changeEvent.taskId) {
             console.log(`[LISTEN] comment_added taskId=${changeEvent.taskId} commentId=${changeEvent.commentId || 'none'}`);
+
+            // #1268 — Bridge to unified notification router so comments inserted
+            // by OTHER processes (notably the staging Next.js instance) still page
+            // the task assignee + dev/qa owners, not just explicit @mentions.
+            // Router has its own LRU dedup keyed on (agentId, commentId) so this
+            // is safe to fire alongside the legacy @mention block below.
+            // System comments are filtered inside the router itself.
+            try {
+              const apiKey = process.env.ORG_STUDIO_API_KEY || '';
+              const headers = { 'Content-Type': 'application/json' };
+              if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+              fetch(`http://127.0.0.1:${port}/api/notify/comment`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                  taskId: changeEvent.taskId,
+                  commentId: changeEvent.commentId,
+                  scope: { kind: 'task', taskId: changeEvent.taskId },
+                }),
+              })
+                .then(async (r) => {
+                  if (!r.ok) {
+                    const txt = await r.text().catch(() => '');
+                    console.warn(`[LISTEN] notify-comment bridge failed: HTTP ${r.status} ${txt.slice(0, 120)}`);
+                  } else {
+                    const j = await r.json().catch(() => ({}));
+                    if (Array.isArray(j.notified) && j.notified.length > 0) {
+                      console.log(`[LISTEN] notify-comment delivered: ${j.notified.map(n => `${n.agentId}(${n.reason})`).join(', ')} commentId=${changeEvent.commentId || 'none'}`);
+                    }
+                  }
+                })
+                .catch((e) => console.warn('[LISTEN] notify-comment bridge threw:', e?.message || e));
+            } catch (e) {
+              console.warn('[LISTEN] notify-comment bridge sync error:', e?.message || e);
+            }
             try {
               const freshStore = await refreshCachedStore();
               if (freshStore) {

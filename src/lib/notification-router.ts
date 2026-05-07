@@ -24,6 +24,14 @@ export interface RouterComment {
   author: string;
   content: string;
   mentions?: string[];
+  /**
+   * Comment kind. 'system' = auto-generated (e.g. backward-move reasons,
+   * reopen notes); these MUST NOT trigger agent notifications. Anything
+   * else (undefined / 'comment' / 'handoff' / etc.) is treated as a
+   * human/agent comment that follows the normal recipient-resolution path.
+   * #1268 — done-when #2.
+   */
+  type?: string;
 }
 
 export interface RouterTask {
@@ -332,6 +340,13 @@ export async function routeCommentNotifications(params: RouteParams): Promise<Ro
   const { comment, scope, teammates } = params;
   const commentId = comment.id || String(Date.now());
   const result: RouteResult = { notified: [], skipped: [] };
+
+  // #1268 — system comments are auto-generated (status-rewind reasons,
+  // reopen notes, etc.). They must not page anyone; the change they record
+  // already produced its own notification (status-change ping, etc.).
+  if (comment.type === 'system') {
+    return result;
+  }
 
   // Resolve all candidate recipients (with reason → template)
   const recipientReasons = resolveRecipients(params);

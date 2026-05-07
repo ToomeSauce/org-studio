@@ -1718,7 +1718,7 @@ export async function POST(req: NextRequest) {
 
         // Single unified call replaces all per-scope branchy dispatch
         routeCommentNotifications({
-          comment: { id: comment.id, author: comment.author, content: comment.content },
+          comment: { id: comment.id, author: comment.author, content: comment.content, type: comment.type },
           scope: commentScope,
           teammates,
           context: {

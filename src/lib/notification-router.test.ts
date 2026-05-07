@@ -186,3 +186,65 @@ describe('#1246 — auto-notify ticket owner on every comment', () => {
     expect(second.notified).toContain('mikey');
   });
 });
+
+/**
+ * #1268 — cross-process auto-notify (the cousin of #1246).
+ *
+ * The router-level contract was already covered by #1246 tests above; this
+ * block locks in the two NEW behaviors added in #1268:
+ *   1. System comments (auto-generated, e.g. status-rewind reasons) MUST
+ *      NOT trigger any agent notifications.
+ *   2. Done-when #5: addComment with no @mention results in a chat.send
+ *      call to the assignee — reasserted at the unit-test layer because
+ *      the bridge endpoint /api/notify/comment is just a thin wrapper
+ *      around the same `routeCommentNotifications` call.
+ */
+describe('#1268 — auto-notify dev owner on every (non-system) ticket comment', () => {
+  it('done-when #5: addComment with no @mention triggers chat.send to the assignee', async () => {
+    sentMessages.length = 0;
+    const res = await routeCommentNotifications({
+      comment: { id: '1268-a', author: 'Basil', content: 'how is this coming along?' },
+      scope: { kind: 'task', taskId: baseTask.id },
+      teammates,
+      context: { task: baseTask },
+    });
+    expect(res.notified).toEqual(['mikey']);
+    expect(sentMessages.filter((m) => m.agentId === 'mikey').length).toBe(1);
+    // Same envelope shape Basil already gets for @mention notifications.
+    expect(sentMessages[0].message).toMatch(/Reply on the task, not in chat/);
+  });
+
+  it('done-when #2: system comments do NOT trigger any notification', async () => {
+    sentMessages.length = 0;
+    const res = await routeCommentNotifications({
+      comment: {
+        id: '1268-sys',
+        author: 'system',
+        content: 'Reopened by Basil: scope changed',
+        type: 'system',
+      },
+      scope: { kind: 'task', taskId: baseTask.id },
+      teammates,
+      context: { task: baseTask },
+    });
+    expect(res.notified).toEqual([]);
+    expect(res.skipped).toEqual([]);
+    expect(sentMessages).toEqual([]);
+  });
+
+  it('done-when #2 (regression): non-system comments still notify when type is explicit "comment"', async () => {
+    sentMessages.length = 0;
+    const res = await routeCommentNotifications({
+      comment: {
+        id: '1268-explicit',
+        author: 'Basil',
+        content: 'ping',
+        type: 'comment',
+      },
+      scope: { kind: 'task', taskId: baseTask.id },
+      teammates,
+      context: { task: baseTask },
+    });
+    expect(res.notified).toContain('mikey');
+  });
+});
