@@ -21,7 +21,6 @@ interface ProjectMeta {
   name?: string;
   description?: string;
   devOwner?: string;
-  qaOwner?: string;
   visionOwner?: string;
   repoUrl?: string;
 }
@@ -40,7 +39,6 @@ export default function ProjectSettingsPanel({ open, project, teammates, onClose
   const [name, setName] = useState(project.name || '');
   const [description, setDescription] = useState(project.description || '');
   const [devOwner, setDevOwner] = useState(project.devOwner || '');
-  const [qaOwner, setQaOwner] = useState(project.qaOwner || '');
   const [visionOwner, setVisionOwner] = useState(project.visionOwner || '');
   const [repoUrl, setRepoUrl] = useState(project.repoUrl || '');
   const [saving, setSaving] = useState(false);
@@ -53,13 +51,12 @@ export default function ProjectSettingsPanel({ open, project, teammates, onClose
     setName(project.name || '');
     setDescription(project.description || '');
     setDevOwner(project.devOwner || '');
-    setQaOwner(project.qaOwner || '');
     setVisionOwner(project.visionOwner || '');
     setRepoUrl(project.repoUrl || '');
     setError(null);
     // Focus the name field on open for quick edits.
     setTimeout(() => firstFieldRef.current?.focus(), 50);
-  }, [open, project.id, project.name, project.description, project.devOwner, project.qaOwner, project.visionOwner, project.repoUrl]);
+  }, [open, project.id, project.name, project.description, project.devOwner, project.visionOwner, project.repoUrl]);
 
   // Esc to close.
   useEffect(() => {
@@ -82,7 +79,6 @@ export default function ProjectSettingsPanel({ open, project, teammates, onClose
     if (trimmedName !== (project.name || '')) patch.name = trimmedName;
     if (description !== (project.description || '')) patch.description = description;
     if (devOwner !== (project.devOwner || '')) patch.devOwner = devOwner;
-    if (qaOwner !== (project.qaOwner || '')) patch.qaOwner = qaOwner;
     if (visionOwner !== (project.visionOwner || '')) patch.visionOwner = visionOwner;
     if (repoUrl !== (project.repoUrl || '')) patch.repoUrl = repoUrl;
     return patch;
@@ -197,8 +193,7 @@ export default function ProjectSettingsPanel({ open, project, teammates, onClose
 
           <div className="pt-2 border-t border-[var(--border-color)]" />
 
-          {ownerSelect(devOwner, setDevOwner, 'Default dev owner (component fallback)')}
-          {ownerSelect(qaOwner, setQaOwner, 'QA owner')}
+          {ownerSelect(devOwner, setDevOwner, 'Default owner (component fallback)')}
           {ownerSelect(visionOwner, setVisionOwner, 'Vision owner')}
 
           <div className="pt-2 border-t border-[var(--border-color)]" />

@@ -1389,7 +1389,6 @@ function ProjectDashboardPageInner() {
           name: project?.name,
           description: (project as any)?.description,
           devOwner: project?.devOwner,
-          qaOwner: (project as any)?.qaOwner,
           visionOwner: (project as any)?.visionOwner,
           repoUrl: (project as any)?.repoUrl,
         }}
