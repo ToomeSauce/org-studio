@@ -1190,6 +1190,27 @@ export function RoadmapWithApprovalHorizon({
                     {(currentVersionObj as any).loopPaused ? ' · paused' : ''}
                   </span>
                 )}
+                {/* #1280 — owner picker, mirroring renderVersionRow.
+                 * Hidden while editing because the inline editor handles
+                 * status/items but version owner intentionally lives outside
+                 * the form (matches non-current behavior). */}
+                {!isEditingCurrent && teammates && teammates.length > 0 && (
+                  <span
+                    className="ml-2 flex-shrink-0"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <OwnerSelectInline
+                      value={
+                        optimisticVersionOwners[currentVersionObj.version] !== undefined
+                          ? optimisticVersionOwners[currentVersionObj.version]
+                          : (currentVersionObj.owner || '')
+                      }
+                      fallback={component?.owner || ''}
+                      teammates={teammates}
+                      onSave={(next) => saveVersionOwner(currentVersionObj, next)}
+                    />
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium">
