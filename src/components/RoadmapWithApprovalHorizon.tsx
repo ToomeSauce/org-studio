@@ -1202,13 +1202,20 @@ export function RoadmapWithApprovalHorizon({
                 {/* #1280 — owner picker on the right cluster, before the
                  * progress count + action buttons. Reliably visible because
                  * justify-between guarantees this cluster sits at the far
-                 * right of the row. Hidden while editing. */}
+                 * right of the row. Hidden while editing.
+                 *
+                 * Wraps OwnerSelectInline in a labeled, bordered chip so it
+                 * reads unambiguously as a control rather than blending in
+                 * with the surrounding metric/count text. The wrapping span
+                 * is purely visual; click forwarding still goes through
+                 * OwnerSelectInline's own button. */}
                 {!isEditingCurrent && teammates && teammates.length > 0 && (
                   <span
-                    className="flex-shrink-0"
+                    className="flex-shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded border border-[var(--border-color)] bg-[var(--bg-tertiary)] text-[10px] uppercase tracking-wider text-[var(--text-muted)]"
                     onClick={(e) => e.stopPropagation()}
                     title="Version owner — click to reassign"
                   >
+                    <span>owner</span>
                     <OwnerSelectInline
                       value={
                         optimisticVersionOwners[currentVersionObj.version] !== undefined
@@ -1219,6 +1226,7 @@ export function RoadmapWithApprovalHorizon({
                       teammates={teammates}
                       onSave={(next) => saveVersionOwner(currentVersionObj, next)}
                     />
+                    <span className="text-[var(--text-muted)]">▾</span>
                   </span>
                 )}
                 <span className="text-sm font-medium">
