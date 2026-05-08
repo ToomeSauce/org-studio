@@ -1190,14 +1190,24 @@ export function RoadmapWithApprovalHorizon({
                     {(currentVersionObj as any).loopPaused ? ' · paused' : ''}
                   </span>
                 )}
-                {/* #1280 — owner picker, mirroring renderVersionRow.
-                 * Hidden while editing because the inline editor handles
-                 * status/items but version owner intentionally lives outside
-                 * the form (matches non-current behavior). */}
+                {/* #1280 — placeholder removed; picker now lives in the
+                 * right-side action cluster below for reliable visibility.
+                 * Earlier iteration placed it in the left cluster after the
+                 * metric pill, but with the approval checkbox + version
+                 * label + title + Current pill + metric pill all crowding
+                 * the same flex row, the picker either wrapped weird or
+                 * got squeezed out of view depending on viewport. */}
+              </div>
+              <div className="flex items-center gap-2">
+                {/* #1280 — owner picker on the right cluster, before the
+                 * progress count + action buttons. Reliably visible because
+                 * justify-between guarantees this cluster sits at the far
+                 * right of the row. Hidden while editing. */}
                 {!isEditingCurrent && teammates && teammates.length > 0 && (
                   <span
-                    className="ml-2 flex-shrink-0"
+                    className="flex-shrink-0"
                     onClick={(e) => e.stopPropagation()}
+                    title="Version owner — click to reassign"
                   >
                     <OwnerSelectInline
                       value={
@@ -1211,8 +1221,6 @@ export function RoadmapWithApprovalHorizon({
                     />
                   </span>
                 )}
-              </div>
-              <div className="flex items-center gap-2">
                 <span className="text-sm font-medium">
                   {(currentVersionObj.items || []).filter(i => i.done).length}/{(currentVersionObj.items || []).length}
                 </span>
