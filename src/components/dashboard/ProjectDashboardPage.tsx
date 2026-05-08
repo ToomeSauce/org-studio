@@ -19,7 +19,7 @@ import { useMemo, useState, Suspense, useCallback, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import { useParams, useRouter, useSearchParams, usePathname } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowUpRight, Clock, Play, Loader2, Square, AlertTriangle } from 'lucide-react';
+import { ArrowUpRight, Clock, Play, Loader2, Square, AlertTriangle, Settings } from 'lucide-react';
 
 // Lazy-loaded — heavy editor with optimistic write logic. Keeps the dashboard
 // shell snappy and matches the dynamic() pattern used by the legacy page.
@@ -40,6 +40,7 @@ import { isVersionInHorizon, compareVersions } from '@/lib/version-utils';
 import { TaskDetailPanel } from '@/components/TaskDetailPanel';
 import { ActivityTimeline } from '@/components/ActivityTimeline';
 import DispatchHealthBanner from '@/components/dashboard/DispatchHealthBanner';
+import ProjectSettingsPanel from '@/components/dashboard/ProjectSettingsPanel';
 import { updateTask, addComment as addTaskComment, deleteTask } from '@/lib/store';
 
 /* -------------------------------------------------------------------------- */
@@ -439,6 +440,8 @@ function ProjectDashboardPageInner() {
   const [showDetailPanel, setShowDetailPanel] = useState(false);
   const [launching, setLaunching] = useState(false);
   const [stateBusy, setStateBusy] = useState(false);
+  // #1281: project metadata edit panel
+  const [showSettings, setShowSettings] = useState(false);
 
   // #1266 — ?task=<id> deep link auto-opens TaskDetailPanel.
   // Wait until storeData is hydrated so taskById has the task.
@@ -758,6 +761,16 @@ function ProjectDashboardPageInner() {
             )}
           </div>
           <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
+            {/* #1281 — project settings (name, description, owners, repo URL) */}
+            <button
+              type="button"
+              onClick={() => setShowSettings(true)}
+              title="Project settings"
+              aria-label="Project settings"
+              className="p-1.5 rounded text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
+            >
+              <Settings size={16} />
+            </button>
             {/* Two-state project toggle (ticket roto54ammou4arq8 / 2026-05-06).
              *
              * Replaces the legacy three-button surface (Activate / Launch vX /
@@ -1368,6 +1381,34 @@ function ProjectDashboardPageInner() {
           }}
         />
       )}
+      {/* #1281 — project metadata edit panel */}
+      <ProjectSettingsPanel
+        open={showSettings}
+        project={{
+          id: projectId,
+          name: project?.name,
+          description: (project as any)?.description,
+          devOwner: project?.devOwner,
+          qaOwner: (project as any)?.qaOwner,
+          visionOwner: (project as any)?.visionOwner,
+          repoUrl: (project as any)?.repoUrl,
+        }}
+        teammates={teammates}
+        onClose={() => setShowSettings(false)}
+        onSaved={(patch) => {
+          // Optimistic merge into the local store cache; the WS push will
+          // overwrite shortly with authoritative data.
+          pushOptimisticUpdate('store', (s: any) => {
+            if (!s?.projects) return s;
+            return {
+              ...s,
+              projects: s.projects.map((p: any) =>
+                p.id === projectId ? { ...p, ...patch } : p
+              ),
+            };
+          });
+        }}
+      />
     </div>
   );
 }
