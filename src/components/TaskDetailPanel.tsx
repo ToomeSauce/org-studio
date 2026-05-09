@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import type { Task, Project, TaskComment } from '@/lib/store';
-import { extractMentions, listComments, countComments } from '@/lib/store';
+import { extractMentions } from '@/lib/store';
 import { toast } from 'react-toastify';
 
 // #1184 — per-ticket dispatch-fizzle badge. Pure helper over task+project
@@ -273,84 +273,12 @@ export function TaskDetailPanel({
 
   const [commentSending, setCommentSending] = useState(false);
 
-  // ---- #1289: paginated comments via listComments API ----
-  // Default page size for the panel. Configurable here — keep it small
-  // enough that a 100-comment ticket renders ≤ 25 nodes on open.
-  const COMMENTS_PAGE_SIZE = 25;
-
-  const [pagedComments, setPagedComments] = useState<TaskComment[]>([]);
-  const [commentTotal, setCommentTotal] = useState<number | null>(null);
-  const [commentsInitialLoaded, setCommentsInitialLoaded] = useState(false);
-  const [commentsLoadingMore, setCommentsLoadingMore] = useState(false);
-  const [commentsError, setCommentsError] = useState<string | null>(null);
-
-  // Refresh full state from the server: count + newest page. Used on open
-  // and after the user posts a new comment (since posts go via onAddComment
-  // which still hits /api/store?action=addComment, the server-side
-  // commit goes to the normalized table; we just re-fetch for truth).
-  const refreshComments = useCallback(async () => {
-    if (!task.id) return;
-    try {
-      setCommentsError(null);
-      const scope = { kind: 'task' as const, taskId: task.id };
-      const [list, total] = await Promise.all([
-        listComments(scope, { limit: COMMENTS_PAGE_SIZE }),
-        countComments(scope),
-      ]);
-      setPagedComments(list);
-      setCommentTotal(total);
-      setCommentsInitialLoaded(true);
-    } catch (err: any) {
-      console.warn('[TaskDetailPanel] listComments failed', err);
-      setCommentsError(err?.message || 'Failed to load comments');
-      setCommentsInitialLoaded(true);
-    }
-  }, [task.id]);
-
-  // Load older page using the cursor: createdAt of the oldest currently
-  // loaded comment. Server returns the next page in ASC order — prepend.
-  const loadOlderComments = useCallback(async () => {
-    if (commentsLoadingMore) return;
-    if (pagedComments.length === 0) return;
-    const oldestLoaded = pagedComments[0]?.createdAt;
-    if (!oldestLoaded) return;
-    setCommentsLoadingMore(true);
-    try {
-      const next = await listComments(
-        { kind: 'task', taskId: task.id },
-        { limit: COMMENTS_PAGE_SIZE, before: oldestLoaded },
-      );
-      if (next.length > 0) {
-        // Server returns ASC; prepend before current page.
-        setPagedComments(prev => [...next, ...prev]);
-      }
-    } catch (err: any) {
-      console.warn('[TaskDetailPanel] loadOlderComments failed', err);
-      setCommentsError(err?.message || 'Failed to load more');
-    } finally {
-      setCommentsLoadingMore(false);
-    }
-  }, [task.id, pagedComments, commentsLoadingMore]);
-
-  // Initial fetch on task open / task swap.
-  useEffect(() => {
-    setPagedComments([]);
-    setCommentTotal(null);
-    setCommentsInitialLoaded(false);
-    setCommentsError(null);
-    refreshComments();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [task.id]);
-
-  const hasMoreOlder =
-    commentTotal !== null && pagedComments.length < commentTotal;
-
   const handleAddComment = useCallback(async () => {
     if (!commentText.trim() || commentSending) return;
     setCommentSending(true);
     try {
       const mentions = extractMentions(commentText);
-      const created = await onAddComment(task.id, {
+      await onAddComment(task.id, {
         // Send undefined; server will fill in the authenticated user's display
         // name. Using a literal like 'You' produced mention envelopes such as
         // "💬 **You** mentioned you" which agents misread as self-tests.
@@ -363,23 +291,10 @@ export function TaskDetailPanel({
       if (mentions.length > 0) {
         toast.info(`Mentioned ${mentions.length} agent${mentions.length > 1 ? 's' : ''}: ${mentions.join(', ')}`);
       }
-      // #1289 — optimistic-append the new comment to the visible page so
-      // the user sees their own comment instantly, then refresh from the
-      // server for canonical truth (mention attribution, model badge, etc.).
-      if (created) {
-        setPagedComments(prev => {
-          // de-dupe in case the user double-fires
-          if (prev.some(c => c.id === created.id)) return prev;
-          return [...prev, created];
-        });
-        setCommentTotal(prev => (prev === null ? null : prev + 1));
-      }
-      // Background refresh — don't block the UI on it.
-      refreshComments();
     } finally {
       setCommentSending(false);
     }
-  }, [commentText, commentSending, task.id, onAddComment, refreshComments]);
+  }, [commentText, commentSending, task.id, onAddComment]);
 
   const handleDeleteConfirm = useCallback(async () => {
     handleClose();
@@ -387,13 +302,11 @@ export function TaskDetailPanel({
     setTimeout(() => onDelete(task.id), 250);
   }, [task.id, onDelete, handleClose]);
 
-  // #1289 — comments now come from the paged listComments fetch instead
-  // of task.comments[]. The inline blob is left in place per the migration
-  // plan (#1288 phase 1 will retire it later); reading from it here would
-  // re-introduce the 100-comment-on-render problem we're fixing.
-  // The same #1217 empty-body filter still applies — a handful of demo
-  // seeds + comments lost to the empty-body bug should not render.
-  const comments: TaskComment[] = pagedComments.filter((c: any) => {
+  // #1217: skip rendering rows where all three text fields are empty/whitespace.
+  // ~49 such rows existed at the time of the fix — demo seeds + a few real
+  // comments lost to the empty-body bug. Leaving the rows in place but
+  // hiding them in the UI avoids destructive cleanup.
+  const comments: TaskComment[] = (task.comments || []).filter((c: any) => {
     const text = ((c?.content ?? '') + (c?.body ?? '') + (c?.text ?? '')).trim();
     return text.length > 0;
   });
@@ -731,39 +644,9 @@ export function TaskDetailPanel({
             <div className="flex items-center gap-2 mb-3">
               <MessageSquare size={14} className="text-[var(--text-muted)]" />
               <span className="text-[10px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">
-                {/* #1289 — header shows total count, not just visible. */}
-                Comments {commentTotal !== null && `(${commentTotal})`}
+                Comments {comments.length > 0 && `(${comments.length})`}
               </span>
-              {commentTotal !== null && comments.length < commentTotal && (
-                <span className="text-[10px] text-[var(--text-muted)]">
-                  showing {comments.length} of {commentTotal}
-                </span>
-              )}
             </div>
-
-            {/* Show-more button at the TOP — the page renders ASC (oldest of
-                the visible page on top, newest on bottom), so loading older
-                comments prepends to the top. */}
-            {hasMoreOlder && (
-              <div className="mb-3 flex justify-center">
-                <button
-                  type="button"
-                  onClick={loadOlderComments}
-                  disabled={commentsLoadingMore}
-                  className="text-[11px] px-3 py-1.5 rounded-[var(--radius-sm)] border border-[var(--border-default)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors disabled:opacity-60 disabled:cursor-wait"
-                >
-                  {commentsLoadingMore ? 'Loading…' : `Show ${COMMENTS_PAGE_SIZE} more`}
-                </button>
-              </div>
-            )}
-
-            {commentsError && (
-              <div className="text-[11px] text-[var(--danger)] mb-2">{commentsError}</div>
-            )}
-
-            {!commentsInitialLoaded && (
-              <div className="text-[11px] text-[var(--text-muted)] mb-2">Loading comments…</div>
-            )}
 
             {comments.length > 0 && (
               <div className="space-y-2.5 mb-3">
