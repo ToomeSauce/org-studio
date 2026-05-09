@@ -132,6 +132,7 @@ export async function postTaskUpdateToTopic(
   const topic = await getProjectTopic(task.projectId);
   if (!topic) return;
 
+  // #1290: 'review' kept here so legacy status='review' history entries still emojified, but new tasks won't produce them.
   const statusEmoji: Record<string, string> = {
     'in-progress': '⚙️',
     'review': '👀',

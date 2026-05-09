@@ -196,7 +196,8 @@ export function getComponentCounts(
 
   return {
     backlog: filtered.filter(t => t.status === 'backlog' || t.status === 'planning').length,
-    inProgress: filtered.filter(t => t.status === 'in-progress' || t.status === 'review' || t.status === 'blocked').length,
+    // #1290: 'review' removed; legacy data may still match but column is killed forward-going.
+    inProgress: filtered.filter(t => t.status === 'in-progress' || (t.status as string) === 'review' || t.status === 'blocked').length,
     done: filtered.filter(t => t.status === 'done').length,
   };
 }

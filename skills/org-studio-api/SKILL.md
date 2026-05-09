@@ -63,38 +63,31 @@ For detailed API schemas and examples, read `references/api-reference.md` in thi
 
 ## Columns
 
-Org Studio's context board has **five columns**. Each has a specific contract.
+Org Studio's context board has **four columns** plus a **Blocked** status. Each has a specific contract.
 
 | Column | Who owns it | What it means |
 |---|---|---|
 | **Planning** | Humans + agents | Scoping column. Tasks here are being refined. **Agents ARE encouraged to pull from planning**, flesh out acceptance criteria / constraints / context, and move to backlog when ready for execution. If a task lacks enough context to scope, post a comment asking instead of guessing. |
 | **Backlog** | Agents | Ready-for-work queue. Pull from the top (highest priority first). |
 | **In Progress** | Agents | Actively being worked. Move here only AFTER work starts — do not claim speculatively. |
-| **Review** | Humans | OPT-IN ONLY. For **irreversible** or **security-sensitive** work. Agent sets `needsReview: true` + writes `reviewNotes`. |
 | **Done** | — | Complete and verified. **DEFAULT destination** for finished work. |
 
+Plus a **Blocked** status (also rendered as a column on the board for visibility) for tasks that cannot proceed without external input — see below.
+
 **Default agent path: backlog → in-progress → done.**
-Review is opt-in. Ship directly to done for reversible work in your owned domain.
+Ship directly to done for any reversible work in your owned domain. There is no Review column — it was killed in #1290 (2026-05-08) because it kept getting misused as a generic sanity-check shelf.
 
 ### QA is a component, not a column
 
 Projects may have a **QA component** with its own owner. QA tickets follow the **same default path** as every other ticket: backlog → in-progress → done, owned by the QA component owner (the ticket's `assignee`). Do not route QA work to a separate column — it runs as an independent workflow within the project, same columns, different owner. If a dev ticket needs cross-checking by the QA owner, coordinate via comment pings, not column hops.
 
-### When to use Review (opt-in)
+### Default = Done. Use Blocked only when you genuinely can't proceed alone.
 
-**☠️ Default = `done`. Review is the EXCEPTION, not the safety net.**
+**☠️ Default destination for finished work is `done`.** If you own the version/component, you're empowered to ship reversible work without a human checkpoint. The revert button is the safety net.
 
-If you find yourself reaching for Review because you want a sanity check, you're using it wrong. The owner of the work is the agent who did it; if you own the version/component, you're empowered to ship it. Ship to **done** and trust the revert button if anything's off.
+#### ✅ Ship straight to `done`
 
-Move to **review** instead of **done** ONLY when one of these is true:
-- **(a) Irreversible** — DB schema migrations, data deletions, money/billing changes, external API writes with cost (Twilio sends, Azure resource creation, etc.)
-- **(b) Security-sensitive** — auth flows, secrets handling, permissions, newly-exposed endpoints, anything that changes the attack surface
-
-**That's the entire list.** Set `needsReview: true` and `reviewReason: "<why>"` at task start (or mid-work if scope changes), then move to **review** when complete.
-
-#### ✅ Ship straight to `done` (do NOT send to Review)
-
-These are reversible UI/code changes — if something's wrong you can revert in one commit:
+These are reversible — if something's wrong you can revert in one commit:
 - React/UI component refactors, layout tweaks, copy changes, styling
 - API route additions/changes that aren't security-sensitive
 - Routing logic, notification routing, scheduler tweaks
@@ -103,36 +96,47 @@ These are reversible UI/code changes — if something's wrong you can revert in 
 - Documentation, ORG.md, vision doc edits
 - New tasks/projects/components in Org Studio (data is just JSON — reversible)
 - Backfill scripts that only WRITE NEW rows (not destructive)
-- Performance optimizations
-- Refactors
+- Performance optimizations, refactors
 - Anything where the diff is recoverable with `git revert`
 
-#### 🛑 Send to Review (the actual narrow set)
+#### Self-check before moving to Blocked
+
+Ask yourself: *"If this is wrong, can I revert with `git revert <sha>` and one redeploy?"*
+- **Yes → done.** Ship it.
+- **No → blocked + reason.** See the next section for what to write.
+
+**"Want a teammate to look at it"** is not a reason to block — ship to done and @-ping in a comment if you want eyes.
+
+### Blocked: cannot proceed without external input
+
+Use `status: "blocked"` for two cases. The status is the same; the `blockedReason` and comment context distinguishes them.
+
+#### Case (a) — Waiting on a teammate, dependency, or another task
+
+The original meaning. Use `blockedBy: [<ticket-numbers>]` to declare the structured edge so auto-unblock fires when the blocker finishes. Add a comment explaining what you're waiting on. Example: "Blocked by #1288 — need org_studio_comments table to exist before I can switch the panel to listComments."
+
+#### Case (b) — Awaiting human sign-off on irreversible / security-sensitive work
+
+New meaning (#1290). For the rare cases where revert+redeploy is NOT a sufficient safety net:
 
 - DROP TABLE, ALTER TABLE that loses columns/data, destructive backfills
-- Deleting tasks/projects/users/comments at scale (anything you can't undo with one click)
+- Deleting tasks/projects/users/comments at scale
 - Adding/changing auth middleware, JWT verification, session handling
 - Rotating or changing how secrets are loaded
-- Public launch toggles (feature flag flipping a feature ON for end users at scale)
+- Public launch toggles (flipping a feature ON for end users at scale)
 - New publicly-exposed endpoints (CORS, public-facing API surface)
 - Money/billing flows (Stripe, Azure spend, Twilio outbound to real customers)
 - Domain/DNS changes, certificate rotation
 
-**Cross-domain work** is handled via comment @-pings to the relevant owner — no column change needed. **Direction changes** (mission/vision/roadmap) happen in the vision doc / roadmap, not via board review. **"Want a teammate to look at it"** is not a Review reason — ship to done and @-ping in a comment if you want eyes.
+Workflow: stage the work (commit, deploy to staging, get the migration SQL ready, etc.), then move the task to **blocked** with `blockedReason: "awaiting human sign-off — <why irreversible>"` and a comment summarizing what's been staged. Human approves → they (or you) move it to Done. Human rejects → moves back to In Progress with feedback.
 
-#### Self-check before moving to Review
+#### Don't conflate the two cases in the same field
 
-Ask yourself: *"If this is wrong, can I revert with `git revert <sha>` and one redeploy?"*
-- **Yes → done.** No Review needed.
-- **No → review.** Add `reviewNotes` explaining why it's irreversible or security-sensitive.
+`blockedBy` is for inter-task dependencies (case a). `blockedReason` is human-readable text for either case but should make clear which one. A `blocked` task with neither `blockedBy` nor a reason comment is a bug — always say what you're waiting on.
 
-When in doubt: it's probably reversible, ship to done.
+#### Structured `blockedBy` (auto-unblock)
 
-### Blocked is a separate status, not Review
-
-If a task is stuck waiting on an external answer or dependency, move it to **blocked** (dedicated status) with a comment explaining what's needed. Blocked ≠ Review. Review is for human sign-off on finished work; blocked is for work that can't proceed.
-
-**Structured `blockedBy` (auto-unblock):** When you flip a task to `blocked` _because of another Org Studio task_, **declare the structured edge** in the `blockedBy` field. Pass an array of the blocker ticket numbers:
+When you flip a task to `blocked` _because of another Org Studio task_, **declare the structured edge** in the `blockedBy` field. Pass an array of the blocker ticket numbers:
 
 ```bash
 curl -sX POST http://localhost:4501/api/store -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" -d '{
@@ -190,12 +194,12 @@ This is the canonical work loop for every agent session. Follow it exactly.
 4. **Self-test before moving out of in-progress:**
    - Write a test plan, execute it yourself (curl, build check, DB verify), document results in a comment or `reviewNotes`.
    - If this is a QA-component ticket (your domain as QA owner), the testing IS the work — run it and move to done.
-5. **When complete:** move to done (default) or review (if `needsReview: true` per the opt-in rules above). Include `reviewNotes` when moving to review. Clear activity status.
+5. **When complete:** move to done (default destination). For irreversible/security-sensitive work that needs human sign-off, move to blocked + `blockedReason: "awaiting human sign-off — <why>"` instead. Include completion notes in `reviewNotes` (legacy field name). Clear activity status.
 6. **If more backlog tasks remain**, continue with the next one (only after the current in-progress is closed out — see SINGLE-WIP RULE).
 7. **If you run out of time mid-task**, leave it where it is. Status must reflect reality.
 8. **If you discover a follow-up task**, create it as adhoc (no `version`), do NOT expand scope of current task.
 
-**Task lifecycle:** `planning → backlog → in-progress → done` (default) or `→ review → done` (opt-in for irreversible / security-sensitive)
+**Task lifecycle:** `planning → backlog → in-progress → done` (default), or `→ blocked` for irreversible / security-sensitive work awaiting human sign-off (#1290).
 
 ## Testing — Every Task Gets Tested
 
@@ -211,7 +215,7 @@ Every task must be tested before leaving in-progress. Self-test, document result
 2. **Move to in-progress** when starting actual work (not to "claim")
 3. **One in-progress at a time.** Finish it before pulling another. If you have multiple, bounce all but one back to backlog.
 4. **Post comments** documenting decisions, progress, blockers
-5. **Move to done** (default) or review (if `needsReview: true`) with a final comment summarizing what was done
+5. **Move to done** (default destination). For irreversible/security-sensitive work needing human sign-off, move to blocked + reason instead.
 6. System auto-triggers next task dispatch — do NOT pull multiple tasks
 
 ### Status Update Example
@@ -400,7 +404,7 @@ The approval horizon card on the roadmap controls which versions are approved fo
 | 📝 | Draft — no planning ticket linked yet |
 | ⬜ | Ready — has planning ticket, not started |
 | 👀 | In progress |
-| 🟡 | In review |
+| 🟡 | In review (legacy — column removed in #1290) |
 | 🔴 | Blocked |
 | 🧪 | In QA |
 | ✅ | Done |

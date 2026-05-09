@@ -113,15 +113,15 @@ A task needs:
 
 ## Step 6: Watch It Move
 
-The **task board** shows your kanban workflow (5 columns):
+The **task board** shows your kanban workflow (4 columns plus Blocked):
 
 | Column | Meaning |
 |--------|---------|
 | **Planning** | Being scoped / refined (optional) |
 | **Backlog** | Ready to start, waiting for someone to pull it |
 | **In Progress** | Being actively worked |
-| **Review** | Opt-in: waiting for human approval on irreversible or security-sensitive work |
 | **Done** | Shipped and verified |
+| **Blocked** | Cannot proceed: waiting on a teammate / dependency, or awaiting human sign-off on irreversible/security-sensitive work |
 
 As you (or agents) work, drag tasks left-to-right. Each move is tracked with a timestamp and who moved it.
 

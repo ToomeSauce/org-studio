@@ -81,14 +81,17 @@ function classifyTaskBlocker(
 
 // --- Status config ---
 // #862: 5-column board (QA is a component, not a column). Keeping both constants for backward compat;
-// both now resolve to the same order.
-const ALL_STATUS_ORDER: Task['status'][] = ['planning', 'backlog', 'in-progress', 'review', 'done'];
-const NO_QA_STATUS_ORDER: Task['status'][] = ['planning', 'backlog', 'in-progress', 'review', 'done'];
-const STATUS_LABELS: Record<Task['status'], string> = {
+//   both resolve to the same order.
+// #1290 (2026-05-08): Review column removed. Both constants now resolve to the
+//   4-column order: planning → backlog → in-progress → done. Blocked is a
+//   status indicator, not a position in the order.
+const ALL_STATUS_ORDER: Task['status'][] = ['planning', 'backlog', 'in-progress', 'done'];
+const NO_QA_STATUS_ORDER: Task['status'][] = ['planning', 'backlog', 'in-progress', 'done'];
+const STATUS_LABELS: Record<string, string> = {
   'planning': 'Planning',
   'backlog': 'Backlog',
   'in-progress': 'In Progress',
-  'review': 'Review',
+  'review': 'Review',  // legacy — kept so historical statusHistory entries render correctly
   'done': 'Done',
   'blocked': 'Blocked',
 };
@@ -245,7 +248,8 @@ export function TaskDetailPanel({
     if (newStatus === status) return;
 
     // Soft gate: warn if testType is set but testPlan is empty
-    if ((newStatus === 'review' || newStatus === 'done') && testType) {
+    // #1290: 'review' branch removed; column killed.
+    if (newStatus === 'done' && testType) {
       const currentTestPlan = task.testPlan?.trim();
       if (!currentTestPlan) {
         toast.warn('⚠️ This task has no test plan. A test plan ensures proper verification before completion.', { autoClose: 5000 });
@@ -663,7 +667,8 @@ export function TaskDetailPanel({
                 <div className="flex items-center gap-1.5 mb-1">
                   <MessageSquare size={11} className="text-[var(--accent-primary)]" />
                   <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--accent-primary)]">
-                    {task.status === 'review' ? 'Review Notes' : 'Completion Notes'}
+                    {/* #1290: review column removed; this branch is unreachable for new tasks but legacy statusHistory may have status='review'. */}
+                    {(task.status as string) === 'review' ? 'Review Notes' : 'Completion Notes'}
                   </span>
                 </div>
                 <p className="text-[var(--text-sm)] text-[var(--text-secondary)] leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{task.reviewNotes}</p>

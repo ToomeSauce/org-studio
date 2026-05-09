@@ -80,7 +80,7 @@ Key pages:
 - `/` — Home dashboard with live activity
 - `/team` — Team topology, org chart, teammate cards with metrics
 - `/projects` — Project list, vision cards, **Start/Stop** control
-- `/tasks` — Kanban board (5 columns: planning → backlog → in-progress → review → done; default path is backlog → in-progress → done)
+- `/tasks` — Kanban board (4 columns: planning → backlog → in-progress → done; plus Blocked status. Default path is backlog → in-progress → done.)
 - `/context` — Agent task backlog and work in progress
 - `/vision` — Vision roadmap view and approval interface
 - `/performance` — Performance dashboard with team health, quality scorecard, cultural alignment, agent comparison, coaching, weekly digest
@@ -331,7 +331,7 @@ GET  /api/vision/{projectId}/doc   — read project vision doc
 POST /api/roadmap/{projectId}      — create/update roadmap versions
 GET  /api/stats/{agentId}          — your delivery metrics
 
-Task lifecycle: backlog → in-progress → done (default), or → review → done (opt-in for irreversible / security-sensitive work)
+Task lifecycle: backlog → in-progress → done (default). For irreversible/security-sensitive work needing human sign-off, use blocked + `blockedReason` instead of done. Review column was removed in #1290 (2026-05-08).
 ```
 
 ### Performance Injection

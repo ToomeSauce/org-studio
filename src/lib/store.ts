@@ -162,12 +162,12 @@ export interface Task {
   testPlan?: string;     // Test plan — dev writes it, self-executes or QA-executes depending on testType
   testType?: 'self' | 'qa';   // DEPRECATED post-#862: tasks route by assignee only. Field retained for historical tasks.
   testAssignee?: string;       // DEPRECATED post-#862: QA-component owner uses standard assignee field. Retained for history.
-  reviewNotes?: string;   // Agent writes summary when moving to review/done
+  reviewNotes?: string;   // Completion notes — written when moving to done. (Field name is legacy from when there was a Review column; it now serves as completion notes for done tasks. #1290.)
   outcomeIds?: string[];  // Which outcomes this task serves
   isArchived?: boolean;   // Archive flag — tasks are archived instead of deleted
   archivedAt?: number;    // When task was archived
   archivedBy?: string;    // Who archived it
-  status: 'planning' | 'backlog' | 'in-progress' | 'review' | 'done' | 'blocked';
+  status: 'planning' | 'backlog' | 'in-progress' | 'done' | 'blocked';
   projectId: string;
   assignee: string;
   // priority field removed (#1249, 2026-05-06). Ordering is via sortOrder /
@@ -198,8 +198,10 @@ export interface Task {
   // to awaitingResponseFrom: 'basil'. Either field surfaces on the home view.
   needsUserResponse?: boolean;
   inFlightRunId?: string;   // Subagent runId working on this task (observable, not enforced)
-  needsReview?: boolean;    // Agent self-flags: true = must go through review column, false/absent = direct to done
-  reviewReason?: string;    // Why review is needed (e.g. 'irreversible DB migration', 'cross-domain change')
+  /** @deprecated #1290 (2026-05-08): Review column removed. Field kept on the type for legacy data; agents should not set it on new tasks. Use status='blocked' + blockedReason for irreversible/security-sensitive work. */
+  needsReview?: boolean;
+  /** @deprecated #1290 (2026-05-08): see needsReview above. */
+  reviewReason?: string;
   devHandoff?: {            // Context injection: dev attaches notes when resolving a blocker
     message: string;          // The context/instructions for the agent
     author: string;           // Who wrote it
@@ -431,16 +433,19 @@ export function getProjectCompletion(projectId: string): number {
 
 export type TaskActivityStatus = 'active' | 'idle' | 'stalled';
 
+// #1290 (2026-05-08): 'review' status removed from the type union. Stall
+// threshold for review kept here only for historical statusHistory entries
+// that still carry status='review' — unreachable for new tasks.
 const STALL_THRESHOLDS = {
   'in-progress': 4 * 60 * 60 * 1000,  // 4 hours for in-progress
-  'review': 8 * 60 * 60 * 1000,        // 8 hours for review
 };
 
 const IDLE_THRESHOLD = 2 * 60 * 60 * 1000;  // 2 hours = idle, 4+ = stalled
 
 export function getTaskActivityStatus(task: Task): TaskActivityStatus {
-  if (!['in-progress', 'review'].includes(task.status)) {
-    return 'active';  // Only track these statuses
+  // #1290: 'review' is gone; only 'in-progress' is tracked for activity.
+  if (task.status !== 'in-progress') {
+    return 'active';
   }
 
   const lastActivity = task.lastActivityAt || task.createdAt;

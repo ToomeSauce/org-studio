@@ -10,12 +10,16 @@ import OrgRefreshSection from './OrgRefreshSection';
 import BootstrapDriftSection from './BootstrapDriftSection';
 
 // --- Status badge colors (matches context board) ---
+// #1290 (2026-05-08): Review column removed. 'review' kept here so legacy
+// statusHistory entries that still carry status='review' render with the
+// historical badge instead of an unstyled fallback.
 const STATUS_STYLES: Record<string, { bg: string; text: string; label: string }> = {
   'planning': { bg: 'bg-indigo-500/15', text: 'text-indigo-400', label: 'Planning' },
   'backlog': { bg: 'bg-zinc-500/15', text: 'text-zinc-400', label: 'Backlog' },
   'in-progress': { bg: 'bg-[var(--warning-subtle)]', text: 'text-[var(--warning)]', label: 'In Progress' },
-  'review': { bg: 'bg-purple-500/15', text: 'text-purple-400', label: 'Review' },
+  'review': { bg: 'bg-purple-500/15', text: 'text-purple-400', label: 'Review (legacy)' },
   'done': { bg: 'bg-[var(--success-subtle)]', text: 'text-[var(--success)]', label: 'Done' },
+  'blocked': { bg: 'bg-red-500/15', text: 'text-red-400', label: 'Blocked' },
 };
 
 function StatusBadge({ status }: { status: string }) {
@@ -144,7 +148,8 @@ export default function TeammateDetailPanel({
 
   // Group by status in display order, limit 5 per group
   const taskGroups = useMemo(() => {
-    const order = ['in-progress', 'backlog', 'review', 'done', 'planning'] as const;
+    // #1290: 'review' removed from this priority order — column killed.
+    const order = ['in-progress', 'backlog', 'done', 'planning'] as const;
     const groups: { status: string; label: string; tasks: any[] }[] = [];
     for (const s of order) {
       const style = STATUS_STYLES[s];

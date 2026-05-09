@@ -1148,6 +1148,8 @@ export function RoadmapWithApprovalHorizon({
           const versionTasks = (allTasks || []).filter((t: any) => 
             t.projectId === projectId && t.version === currentVersion && !t.isArchived
           );
+          // #1290: review status removed; this filter will always be empty for new tasks.
+          // Kept defensively in case any legacy data still has status='review'.
           const reviewTasks = versionTasks.filter((t: any) => t.status === 'review');
           const blockedTasks = versionTasks.filter((t: any) => t.status === 'blocked');
           const hasStall = reviewTasks.length > 0 || blockedTasks.length > 0;
@@ -1309,7 +1311,7 @@ export function RoadmapWithApprovalHorizon({
                   });
                   const taskStatus = matchedTask?.status;
                   const statusIndicator = taskStatus === 'blocked' ? '🔴'
-                    : taskStatus === 'review' ? '🟡'
+                    : (taskStatus as string) === 'review' ? '🟡'
                     : taskStatus === 'in-progress' ? '👀'
                     : taskStatus === 'qa' ? '🧪'
                     : item.done ? '✅'
@@ -1329,7 +1331,7 @@ export function RoadmapWithApprovalHorizon({
                           className={clsx(
                             'font-medium hover:underline',
                             taskStatus === 'blocked' ? 'text-red-600 dark:text-red-400'
-                            : taskStatus === 'review' ? 'text-amber-600 dark:text-amber-400'
+                            : (taskStatus as string) === 'review' ? 'text-amber-600 dark:text-amber-400'
                             : taskStatus === 'in-progress' ? 'text-[var(--text-primary)]'
                             : taskStatus === 'qa' ? 'text-teal-600 dark:text-teal-400'
                             : item.done ? 'text-[var(--text-muted)]'

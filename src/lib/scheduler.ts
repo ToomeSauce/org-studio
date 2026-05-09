@@ -33,39 +33,37 @@ export const DEFAULT_SECTIONS: PromptSection[] = [
   backlog     → Ready for an agent to pick up. This is YOUR intake queue.
   in-progress → Actively being worked. Resume these first.
   qa          → QA validation in progress. Test assignee is running the test plan. If you're the test assignee, follow the test plan.
-  review      → Work is done but needs human review. OPT-IN ONLY — see review guidance below.
   done        → Complete and verified. DEFAULT destination for finished work.
+  blocked     → Cannot proceed without external input. Two cases: (a) waiting on a teammate/dependency/another task, OR (b) awaiting human sign-off on irreversible/security-sensitive work. See Blocked & Sign-off Guidance.
 
 DEFAULT AGENT PATH: backlog → in-progress → done.
-Review is opt-in. Ship directly to done for reversible work in your owned domain.`,
+Do NOT use a "review" status — it was removed (#1290, 2026-05-08). The board has 4 columns. Ship reversible work to done; use blocked + reason for the rare irreversible case.`,
     enabled: true,
     order: 20,
     builtIn: true,
   },
   {
     id: 'review-guidance',
-    label: 'Review Guidance',
-    content: `WHEN TO USE "review" (opt-in — use ONLY when mandatory):
-  → done (DEFAULT): Task is in your owned domain AND the changes are reversible (can be reverted via git revert, config rollback, or similar). Ship it.
-  → review (OPT-IN): Use ONLY when:
-    (a) Irreversible changes — DB migrations, deletions, money/billing, external API writes with cost
-    (b) Cross-domain changes — touching another agent's owned code/section
-    (c) Mission/vision/roadmap direction changes
-    (d) Security-sensitive changes
-    When in doubt about reversibility, use review.
+    label: 'Blocked & Sign-off Guidance',
+    content: `WHEN TO USE "blocked" (the only non-default destination):
 
-SELF-FLAGGING: At task start (or mid-work if scope changes), decide if the task needs review.
-  If yes: set needsReview=true and reviewReason="<why>" via updateTask.
-  If needsReview is true, move to "review" instead of "done" when complete.
-  If needsReview is false or unset, move directly to "done".
+The board has 4 columns: planning → backlog → in-progress → done. There is no Review column (#1290 — killed 2026-05-08 because it kept getting misused as a generic sanity-check shelf).
 
-REVIEW NOTES — REQUIRED when moving to "review". NOT required for direct-to-done:
-  When moving to review, include reviewNotes explaining what was done, what wasn't, and why review is needed.
-  For direct-to-done: the commit message + final task comment is the record. No ceremony.
+DEFAULT: When work is complete, move it to "done". You own your domain — ship reversible work without a human checkpoint. The revert button is the safety net.
+
+USE "blocked" in exactly these cases:
+  (a) Cannot proceed without external input — waiting on a teammate, dependency, or another task to finish first. Use blockedBy=[<ticket-numbers>] to declare the structured edge for auto-unblock.
+  (b) Awaiting human sign-off on irreversible or security-sensitive work — DB schema migrations, data deletions, money/billing changes, paid external API writes, auth changes, secrets, public-endpoint exposure, public launch toggles. Set blockedReason: "awaiting human sign-off — <why irreversible>" and post a comment summarizing what's been staged for review.
+
+That's it. "Want a teammate to look at it" is NOT a reason to block — ship to done and @-ping in a comment if you want eyes.
+
+SELF-CHECK before marking blocked-for-signoff: "If this is wrong, can I revert with git revert <sha> and one redeploy?" Yes → done. No → blocked + reason.
+
+COMPLETION NOTES — when moving a task to "done", write reviewNotes summarizing what shipped (commit SHA, BUILD_ID, what was verified). The field is still called reviewNotes for backward compat — don't be confused, write completion notes there.
 
 COMMENTS — use task comments to communicate about a task:
   - When you encounter something noteworthy while working, leave a comment explaining what you found
-  - When a task is sent back to you (moved from review/done back to in-progress), check the comments for feedback
+  - When a task is sent back to you (moved from done back to in-progress), check the comments for feedback
   - When you have questions about a task, post a comment instead of guessing
 
 TESTING — every task must be tested before moving out of in-progress:
@@ -76,17 +74,17 @@ TESTING — every task must be tested before moving out of in-progress:
     1. Write a test plan in the testPlan field (what you'll verify and how)
     2. Execute the test plan yourself (curl endpoints, check build, verify DB, etc.)
     3. Document results in a task comment or reviewNotes (what passed, what failed, what you verified)
-  → Then move to done (or review if needsReview=true).
+  → Then move to done. (Or to blocked + reason if it needs human sign-off; see above.)
 
   QA TEST (testType = "qa"):
   → Before moving out of in-progress, you MUST:
     1. Self-test first (same as above — curl, build, basic sanity checks)
     2. Write a test plan describing end-user verification steps
-    3. Move the task to "qa" column (NOT review — move directly to qa)
+    3. Move the task to "qa" column
   → QA agent picks it up and runs the user-facing test plan
   → If QA finds basic failures (500 errors, broken builds), they'll bounce it back — self-test better.
 
-  IF testPlan IS EMPTY when you try to move to done/review/qa:
+  IF testPlan IS EMPTY when you try to move to done/qa/blocked:
   → Write one first. No exceptions.`,
     enabled: true,
     order: 30,
@@ -103,11 +101,11 @@ TESTING — every task must be tested before moving out of in-progress:
      - Only move it to "in-progress" AFTER you have started actual work (opened a file, ran a command, made a change).
      - Do NOT move to "in-progress" just to claim it. The status must reflect reality — if you haven't started working, leave it in backlog.
   4. Before moving any task out of in-progress: check testType.
-     - If "self" (default): self-test (write test plan, execute it, document results in a comment or reviewNotes), then move to done (or review if needsReview=true).
-     - If "qa": self-test first, write a test plan for end-user verification, then move to "qa" column (NOT review).
+     - If "self" (default): self-test (write test plan, execute it, document results in a comment or reviewNotes), then move to done. (Use blocked + reason if irreversible/security-sensitive and needs human sign-off; see Blocked & Sign-off Guidance.)
+     - If "qa": self-test first, write a test plan for end-user verification, then move to "qa" column.
   5. When a task is complete:
      - If testPlan is empty, write one first — no exceptions.
-     - Default: move to "done" directly. Use "review" ONLY if needsReview=true.
+     - Default: move to "done" directly. Use "blocked" + blockedReason ONLY for irreversible/security-sensitive work needing human sign-off (rare).
      Then go back to step 1.
   6. Repeat until there are NO remaining tasks assigned to you in "in-progress" or "backlog".
   7. If you discover new work, improvements, or follow-up tasks in your domain while working, create them in "backlog" and continue working through the queue.
@@ -118,7 +116,7 @@ STRUCTURED TASK EXECUTION — when a task has acceptance criteria (## Done When)
   - Check EACH criterion before marking the task complete. If any criterion is not met, keep working.
   - If the task is too large for one session, decompose it into sub-tasks in "backlog" and complete them individually.
   - Create follow-up tasks for anything you discover along the way that needs attention.
-  - Only move the parent task to "done" or "review" when ALL exit criteria are satisfied.
+  - Only move the parent task to "done" when ALL exit criteria are satisfied. (Use "blocked" + reason if it's irreversible/security-sensitive and needs human sign-off.)
 
 TEST PLAN — every task has a testPlan field:
   - Write a test plan before marking the task as done or moving to qa.
@@ -184,7 +182,7 @@ PLANNING COLUMN — you can both add tasks to planning AND pull tasks from it. W
 - Clear your activity status when all work is done.
 - Every task must be tested. Check testType: "self" = self-test and document; "qa" = self-test then move to qa column.
 - DEFAULT path: backlog → in-progress → done. Ship directly to done for reversible work in your owned domain.
-- Use "review" ONLY for: irreversible changes, cross-domain work, mission/vision changes, or security-sensitive changes. Set needsReview=true when starting such tasks.
+- Use "blocked" + blockedReason ONLY for: irreversible changes needing human sign-off, security-sensitive changes, or work waiting on external input. Default destination for finished work is "done".
 - When writing a test plan, cover the acceptance criteria: what to verify, what actions to take, expected results.`,
     enabled: true,
     order: 60,
@@ -303,11 +301,10 @@ export const QA_SECTIONS: PromptSection[] = [
     content: `COLUMN WORKFLOW — understand what each column means:
   planning    → Tasks being scoped. Humans AND agents can add/refine tasks here. You can pull planning tasks, scope them out, and move them to backlog when ready for execution.
   backlog     → Ready for an agent to pick up.
-  backlog     → Ready for an agent to pick up.
   in-progress → Actively being worked by a dev.
   qa          → ** YOUR PRIMARY COLUMN ** — Tasks here need QA validation. This is where you do your main work.
-  review      → Work is done and needs human eyes.
-  done        → Complete and verified. No further action needed.`,
+  done        → Complete and verified. No further action needed.
+  blocked     → Cannot proceed without external input (dependency or human sign-off). #1290 — review column was removed; do NOT use 'review' status anymore.`,
     enabled: true,
     order: 20,
     builtIn: true,
@@ -337,16 +334,16 @@ IF testPlan IS EMPTY:
   - Skip the task — move on to the next one
   - Do NOT invent your own test plan
 
-PASS → move to "done" or "review" with reviewNotes summarizing what was tested and results
+PASS → move to "done" with reviewNotes summarizing what was tested and results (do NOT use "review" — column removed in #1290)
 FAIL → leave in "qa", add a comment with:
   - Which test cases failed
   - Reproduction steps
   - Severity (critical / major / minor)
   - Alert the dev by name in the comment
 
-REVIEW NOTES — when moving a task to "review" or "done", ALWAYS write a reviewNotes summary:
+COMPLETION NOTES — when moving a task to "done", ALWAYS write a reviewNotes summary (field name is legacy from when there was a Review column; it now serves as completion notes):
   curl -s http://localhost:4501/api/store -X POST -H "Content-Type: application/json" \\
-    -d '{"action":"updateTask","id":"<id>","updates":{"status":"review","reviewNotes":"<summary>"}}'`,
+    -d '{"action":"updateTask","id":"<id>","updates":{"status":"done","reviewNotes":"<summary>"}}'`,
     enabled: true,
     order: 30,
     builtIn: true,
@@ -364,7 +361,7 @@ REVIEW NOTES — when moving a task to "review" or "done", ALWAYS write a review
      a. Read the full task description, comments, and testPlan.
      b. Run the basic sanity check (bounce-back rule).
      c. If sanity check passes, execute the test plan step by step.
-     d. Document results and move the task appropriately (done/review on pass, leave in qa on fail).
+     d. Document results and move the task appropriately (done on pass, leave in qa on fail).
   6. Go back to step 1.
   7. When all work is done, clear your activity status and end.
   8. If you run out of time mid-task, leave it in whatever column it's actually in.
@@ -656,13 +653,14 @@ export async function buildDispatchMessage(
 ): Promise<string | null> {
   // #1100: Status taxonomy for dispatch — ALWAYS allowlist, never negation.
   //   ACTIONABLE  = buckets we build a dispatch prompt for (work IS ready)
-  //   VISIBLE_ONLY = shown for awareness, NOT dispatched (external blocker / awaiting review)
+  //   VISIBLE_ONLY = shown for awareness, NOT dispatched (external blocker)
   //   IGNORED     = not shown at all ('done', 'planning', unknown statuses)
   //
   // Never filter via `status !== 'done'` — new statuses silently become
   // actionable any time someone adds one to the schema. Always allowlist.
   const ACTIONABLE_STATUSES = new Set(['in-progress', 'backlog', 'qa']);
-  const VISIBLE_ONLY_STATUSES = new Set(['blocked', 'review']);
+  // #1290: was ['blocked','review']; review column killed. Only blocked is shown for awareness now.
+  const VISIBLE_ONLY_STATUSES = new Set(['blocked']);
 
   // Find tasks assigned to this agent (all non-archived — bucketed by status below)
   const nameLower = agentName.toLowerCase();
@@ -702,7 +700,7 @@ export async function buildDispatchMessage(
   //   - dispatch with ONLY in-progress (no backlog): unchanged behavior.
   //
   // The agent can still pull a new backlog task by:
-  //   1. Finishing the in-progress task (move to done/review), OR
+  //   1. Finishing the in-progress task (move to done), OR
   //   2. Bouncing it back to backlog (move to backlog) with a focus comment.
   // Either action clears the gate on the next dispatch.
   const rawBacklog = getEligibleBacklogFifo(store, [nameLower, agentId]) as any[];

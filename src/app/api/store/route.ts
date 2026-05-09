@@ -231,7 +231,8 @@ function notifyTaskStatusChange(task: any, newStatus: string, store: StoreData) 
   
   // Notify on all significant status transitions (user needs to see these)
   // All statuses go to the activity feed, but only high-signal ones go to Telegram
-  const FEED_STATUSES = ['in-progress', 'review', 'done', 'blocked']; // #862: dropped 'qa'
+  // #1290 (2026-05-08): dropped 'review' — column removed entirely.
+  const FEED_STATUSES = ['in-progress', 'done', 'blocked']; // #862: dropped 'qa'; #1290: dropped 'review'
   const TELEGRAM_STATUSES = ['blocked']; // Only blocked tasks are urgent enough for Telegram
   if (!FEED_STATUSES.includes(newStatus)) return;
 
@@ -242,9 +243,9 @@ function notifyTaskStatusChange(task: any, newStatus: string, store: StoreData) 
 
   const statusEmoji: Record<string, string> = {
     'in-progress': '⚙️',
-    'review': '👀',
     'done': '✅',
     'blocked': '🚫',
+    // #1290: 'review' removed — column killed.
   };
 
   const emoji = statusEmoji[newStatus] || '📋';
@@ -332,7 +333,8 @@ function piggybackStuckCheck(store: any) {
     const assignee = task.assignee?.toLowerCase();
     if (!assignee) continue;
 
-    if (['in-progress', 'review'].includes(task.status)) {
+    // #1290: was ['in-progress','review']; review column removed.
+    if (task.status === 'in-progress') {
       agentHasActive.add(assignee);
     } else if (task.status === 'backlog') {
       const created = task.createdAt || 0;
@@ -655,7 +657,8 @@ export async function POST(req: NextRequest) {
         }
 
         // #862: reject 'qa' as a status — QA is a component, not a column.
-        const VALID_STATUSES = ['planning', 'backlog', 'in-progress', 'review', 'done', 'blocked'];
+        // #1290: dropped 'review' — column removed.
+        const VALID_STATUSES = ['planning', 'backlog', 'in-progress', 'done', 'blocked'];
         if (!VALID_STATUSES.includes(initialStatus)) {
           return NextResponse.json(
             { error: `Invalid status '${initialStatus}'. Allowed: ${VALID_STATUSES.join(', ')}. (QA is a component, not a column — see #862.)` },
@@ -909,11 +912,12 @@ export async function POST(req: NextRequest) {
           }
 
           // #862: reject status 'qa' — QA is a component, not a column.
+          // #1290: reject 'review' — column killed; default destination is 'done', use 'blocked' for awaiting-sign-off.
           if (updates.status !== undefined) {
-            const VALID_STATUSES = ['planning', 'backlog', 'in-progress', 'review', 'done', 'blocked'];
+            const VALID_STATUSES = ['planning', 'backlog', 'in-progress', 'done', 'blocked'];
             if (!VALID_STATUSES.includes(updates.status)) {
               return NextResponse.json(
-                { error: `Invalid status '${updates.status}'. Allowed: ${VALID_STATUSES.join(', ')}. (QA is a component, not a column — see #862.)` },
+                { error: `Invalid status '${updates.status}'. Allowed: ${VALID_STATUSES.join(', ')}. (QA is a component — #862. Review column removed — #1290; ship to 'done' or 'blocked' with reason.)` },
                 { status: 400 }
               );
             }
@@ -967,9 +971,9 @@ export async function POST(req: NextRequest) {
             // The status validation above already rejected it; this branch is removed.
 
             // Notify on status changes FROM in-progress (tracked work transitions)
-            // OR notify on transitions TO in-progress/review/done/blocked (significant state changes)
+            // OR notify on transitions TO in-progress/done/blocked (significant state changes) — #1290 dropped 'review'.
             const shouldNotify = (t.status === 'in-progress') || 
-                                  ['in-progress', 'review', 'done', 'blocked'].includes(updates.status);
+                                  ['in-progress', 'done', 'blocked'].includes(updates.status);
             if (shouldNotify) {
               const merged = { ...t, ...updates };
               notifyTaskStatusChange(merged, updates.status, store);
@@ -1085,8 +1089,8 @@ export async function POST(req: NextRequest) {
           triggerAgentLoop(triggeredAssignee, store);
         }
 
-        // Chain to next backlog task when agent completes work
-        if (payload.updates?.status && ['done', 'review'].includes(payload.updates.status)) {
+        // Chain to next backlog task when agent completes work — #1290 dropped 'review'.
+        if (payload.updates?.status && payload.updates.status === 'done') {
           const completed = store.tasks.find(t => t.id === payload.id);
           if (completed?.assignee) {
             // Clear the in-flight lock — task completion is the definitive signal

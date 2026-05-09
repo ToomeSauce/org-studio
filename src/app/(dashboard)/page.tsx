@@ -166,6 +166,7 @@ function ActivityFeedSection({ selectedAgent, tasks, projects }: { selectedAgent
   // Build fallback from task statusHistory when WS feed is empty
   const fallbackEvents = useMemo(() => {
     if (wsEvents.length > 0 || !tasks?.length) return [];
+    // #1290: 'review' kept here so historical activity-feed entries still render with 'eyes' emoji; #862 'qa' similar.
     const statusEmoji: Record<string, string> = { 'in-progress': '⚙️', 'review': '👀', 'done': '✅', 'blocked': '🚫', 'qa': '🧪', 'backlog': '📋' };
     const projectMap: Record<string, string> = {};
     for (const p of (projects || [])) projectMap[p.id] = p.name;
@@ -277,6 +278,7 @@ function SprintsSection({ projects, tasks, agentMap }: { projects: any[]; tasks:
   const enrichedTasks = tasks.map((t: any) => ({ ...t, projectName: projectMap.get(t.projectId) }));
 
   const sprints = useMemo(() => {
+    // #1290: 'review' removed but kept in legacy filter for historical reporting; #862 'qa' similar.
     const activeWorkStatuses = ['backlog', 'in-progress', 'qa', 'review', 'done'];
     const results: any[] = [];
 
@@ -298,6 +300,7 @@ function SprintsSection({ projects, tasks, agentMap }: { projects: any[]; tasks:
 
       const done = projectTasks.filter((t: any) => t.status === 'done').length;
       const total = projectTasks.length;
+      // #1290: 'review' removed; legacy 'qa' kept (#862). Active = in-progress only forward-going.
       const hasActive = projectTasks.some((t: any) => ['in-progress', 'qa', 'review'].includes(t.status));
       const allDone = projectTasks.every((t: any) => t.status === 'done');
 

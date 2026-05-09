@@ -203,12 +203,18 @@ export async function GET() {
     reviewMinutes: number;
   }[] = [];
 
+  // #1290 (2026-05-08): Review column removed. tasksInReview stays in the
+  // payload shape for backward compat with any consumers, but it's always 0.
+  // The historical review→done duration loop below still runs against old
+  // statusHistory entries that carry status='review' so we can show legacy
+  // analytics; new transitions never produce these.
   let tasksInReview = 0;
 
   for (const task of tasks) {
     const history: { status: string; timestamp: number }[] = task.statusHistory || [];
 
-    if (task.status === 'review') tasksInReview++;
+    // (status === 'review' is impossible going forward; check kept for completeness on legacy data)
+    if ((task.status as string) === 'review') tasksInReview++;
 
     // Find pairs of review → done entries
     for (let i = 0; i < history.length; i++) {

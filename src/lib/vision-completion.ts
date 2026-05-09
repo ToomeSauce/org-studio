@@ -58,6 +58,7 @@ export function checkVersionCompletion(
   // For now, we consider the version complete if there are no tasks in backlog/in-progress/review
   // This is a simplification; in production, we'd track which tasks belong to which version
   const activeTasks = projectTasks.filter(t =>
+    // #1290 (2026-05-08): 'review' kept here for legacy data; column removed.
     ['backlog', 'in-progress', 'review', 'qa'].includes(t.status)
   );
 

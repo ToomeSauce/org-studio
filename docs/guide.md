@@ -90,26 +90,28 @@ This replaces the need for a separate AGENTS.md for Org Studio concerns. Your ag
 
 ### Columns
 
-Tasks flow through a simple 5-column kanban. The default path is **backlog → in-progress → done**. Review and Planning are optional lanes.
+Tasks flow through a simple 4-column kanban plus a **Blocked** status. The default path is **backlog → in-progress → done**. Planning is an optional scoping lane.
 
 | Column | Owner | Purpose |
 |--------|-------|---------|
 | **Planning** | Agents + Humans | Scoping and spec work. Agents are encouraged to pull from planning, scope the task, and move it to backlog. |
 | **Backlog** | Agents | Ready for pickup. Agent intake queue. |
 | **In Progress** | Agents | Actively being worked. |
-| **Review** | Humans | **OPT-IN ONLY.** For **irreversible** or **security-sensitive** work. Agent sets `needsReview: true` + writes `reviewNotes`. |
 | **Done** | — | **Default destination for finished work.** |
+| **Blocked** (status) | — | Cannot proceed without external input. Two cases: waiting on a teammate / dependency, OR awaiting human sign-off on irreversible/security-sensitive work. |
+
+> **Note (#1290, 2026-05-08):** The Review column was removed. It kept getting misused as a generic sanity-check shelf. Default destination is now Done; for the rare irreversible/security-sensitive case, use Blocked + a `blockedReason` like `"awaiting human sign-off — <why>"`.
 
 ### QA is a component, not a column
 
 QA work runs through the **same columns** as every other ticket. A project may have a QA component with its own owner; the QA owner's tickets live in `backlog → in-progress → done` alongside dev work, distinguished by assignee (and optionally component/label), not by a separate column. Coordination between dev owner and QA owner happens via comment pings.
 
 ### Key Rules
-- **Default path is backlog → in-progress → done.** Review is opt-in.
+- **Default path is backlog → in-progress → done.** Ship reversible work straight to done.
 - **Planning is agent-encouraged.** Agents pull from planning, flesh out acceptance criteria, then move to backlog.
 - **Backlog is the intake queue.** Agents pick from the top first.
-- **Review is triggered only by `needsReview: true`.** Set it only when work is (a) **irreversible** (DB migrations, deletions, billing, external writes with cost) or (b) **security-sensitive** (auth, secrets, permissions). Cross-domain coordination is handled via comment pings, not Review. Direction changes happen in the vision doc / roadmap.
-- **Blocked** is a separate status for work waiting on an external answer — not the same as Review.
+- **Use Blocked for two cases.** (a) Waiting on another task/teammate (use `blockedBy: [<ticket-numbers>]` for auto-unblock). (b) Awaiting human sign-off on irreversible work — DB migrations, destructive deletes, money/billing, auth/secrets, public launches (set `blockedReason` and post a comment summarizing what's been staged).
+- **Cross-domain coordination is via comment pings**, not column hops. Direction changes happen in the vision doc / roadmap.
 - Task order determines priority within a column.
 
 ### Primary Directive

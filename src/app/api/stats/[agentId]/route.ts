@@ -92,7 +92,8 @@ export async function GET(
     );
 
     const completedTasks = agentTasks.filter((t: any) => {
-      if (t.status !== 'done' && t.status !== 'review') return false;
+      // #1290: was ['done','review']; review column removed.
+      if (t.status !== 'done') return false;
       // Check if marked done within period
       const doneEntry = t.statusHistory?.find(
         (e: any) => e.status === 'done'

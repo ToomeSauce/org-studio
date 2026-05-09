@@ -11,33 +11,35 @@ import { useState, useEffect, useMemo, useCallback, Suspense, useRef } from 'rea
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { toast } from 'react-toastify';
 
+// #1290 (2026-05-08): Review column removed. Board now renders 4 columns plus Blocked.
+// Default destination for finished work is Done. Blocked is used for both:
+//   (a) tasks waiting on a teammate / external dependency (existing meaning)
+//   (b) tasks awaiting human sign-off on irreversible/security-sensitive work (new meaning)
 const BASE_COLUMNS: { key: Task['status']; label: string; color: string }[] = [
   { key: 'planning', label: 'Planning', color: 'bg-indigo-500' },
   { key: 'backlog', label: 'Backlog', color: 'bg-zinc-500' },
   { key: 'in-progress', label: 'In Progress', color: 'bg-[var(--warning)]' },
-  { key: 'review', label: 'Review', color: 'bg-purple-500' },
   { key: 'done', label: 'Done', color: 'bg-[var(--success)]' },
   { key: 'blocked', label: 'Blocked', color: 'bg-[var(--error)]' }, // #1264 — blocked tickets need a column or they go invisible on the board.
 ];
 
 const QA_COLUMN_LEGACY_SENTINEL = null; // #862: QA is a component, not a column. Sentinel kept so grep catches any regressions.
+const REVIEW_COLUMN_LEGACY_SENTINEL = null; // #1290: Review removed. Sentinel kept so grep catches any regressions.
 
 const COLUMN_TOOLTIPS: Record<Task['status'], string> = {
   'planning': 'Scoping column. Humans and agents can add/refine tasks here. Move to Backlog when ready for execution.',
   'backlog': 'Agent intake queue — ready to be picked up. Top = highest priority.',
   'in-progress': 'Actively being worked by agents or humans.',
-  'review': 'Opt-in human sign-off for irreversible or security-sensitive work.',
   'done': 'Completed and verified.',
-  'blocked': 'Waiting on an external answer or dependency. Add a comment explaining the block.',
+  'blocked': 'Cannot proceed without external input. Two cases: waiting on a teammate/dependency, OR awaiting human sign-off on irreversible/security-sensitive work. Add a comment explaining which.',
 };
 
 const COLUMN_EMPTY: Record<Task['status'], { emoji: string; heading: string; text: string }> = {
   'planning': { emoji: '📝', heading: 'Scoping zone', text: 'Add and refine tasks here. Move to Backlog when fully scoped and ready for an agent to pick up.' },
   'backlog': { emoji: '📥', heading: 'Agent intake', text: 'Ready tasks land here. Agents pull from the top — highest priority first.' },
   'in-progress': { emoji: '⚡', heading: 'Where the work happens', text: 'Agents pull from Backlog and work here. Tasks show up automatically.' },
-  'review': { emoji: '👀', heading: 'Awaiting sign-off', text: 'Opt-in: agents park irreversible or security-sensitive work here for human review.' },
   'done': { emoji: '✅', heading: 'Shipped', text: 'Completed and verified. Nice work, team.' },
-  'blocked': { emoji: '🚫', heading: 'Blocked', text: 'Work that\'s waiting on something external. Unblock, then return to in-progress.' },
+  'blocked': { emoji: '🚫', heading: 'Blocked', text: 'Work that\'s waiting on external input — a teammate, a dependency, or human sign-off. Add a comment explaining what\'s needed.' },
 };
 
 import { Teammate, resolveColor, buildAgentMap, buildNameColorMap } from '@/lib/teammates';
@@ -119,13 +121,14 @@ function TaskCard({ task, projects, onDelete, onSelect, agents, nameColors }: {
           <p className="text-[var(--text-sm)] font-semibold text-[var(--text-primary)] leading-snug">{task.title}</p>
         </div>
       </div>
-      {/* Review notes — shown on review/done cards when agent left notes */}
-      {task.reviewNotes?.trim() && (task.status === 'review' || task.status === 'done') && (
+      {/* #1290: was 'review' || 'done'; review removed but kept here for legacy data display. */}
+      {task.reviewNotes?.trim() && ((task.status as string) === 'review' || task.status === 'done') && (
         <div className="mb-2 px-2.5 py-2 bg-[var(--bg-secondary)] border-l-2 border-[var(--accent-primary)] rounded-r-[var(--radius-sm)]">
           <div className="flex items-center gap-1.5 mb-0.5">
             <MessageSquare size={11} className="text-[var(--accent-primary)]" />
             <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--accent-primary)]">
-              {task.status === 'review' ? 'Review Notes' : 'Completion Notes'}
+              {/* #1290: legacy review handling — always 'Completion Notes' for new data. */}
+              {(task.status as string) === 'review' ? 'Review Notes' : 'Completion Notes'}
             </span>
           </div>
           <p className="text-[var(--text-xs)] text-[var(--text-secondary)] leading-relaxed whitespace-pre-wrap line-clamp-2">{task.reviewNotes}</p>
@@ -142,7 +145,8 @@ function TaskCard({ task, projects, onDelete, onSelect, agents, nameColors }: {
               💬 {commentCount}
             </span>
           )}
-          {['in-progress', 'review'].includes(task.status) && (() => {
+          {/* #1290: was ['in-progress','review']; review column removed. */}
+          {task.status === 'in-progress' && (() => {
             const activityStatus = getTaskActivityStatus(task);
             const display = getActivityStatusDisplay(activityStatus);
             return (

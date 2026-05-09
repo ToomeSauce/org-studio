@@ -81,6 +81,7 @@ function seedActivityFeedFromStore(store) {
   const projectMap = {};
   for (const p of projects) projectMap[p.id] = p.name;
 
+  // #1290 (2026-05-08): 'review' kept here so legacy activity-feed entries still emojify; new tasks won't produce them.
   const statusEmoji = { 'in-progress': '⚙️', 'review': '👀', 'done': '✅', 'blocked': '🚫', 'qa': '🧪' };
   const recentEvents = [];
   const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;

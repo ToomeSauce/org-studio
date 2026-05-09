@@ -377,6 +377,7 @@ export async function buildVisionPrompt(
   // Filter backlog/in-progress tasks
   const activeOrBacklogTasks = existingTasks.filter(t =>
     t.projectId === project.id &&
+    // #1290 (2026-05-08): 'review' kept here for legacy data; column removed.
     ['backlog', 'in-progress', 'qa', 'review'].includes(t.status)
   );
 
