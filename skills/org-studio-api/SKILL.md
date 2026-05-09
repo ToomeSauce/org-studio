@@ -82,11 +82,51 @@ Projects may have a **QA component** with its own owner. QA tickets follow the *
 
 ### When to use Review (opt-in)
 
-Set `needsReview: true` and `reviewReason: "<why>"` at task start (or mid-work if scope changes). Move to **review** instead of **done** ONLY when:
-- **(a) Irreversible** — DB migrations, deletions, money/billing, external API writes with cost
-- **(b) Security-sensitive** — auth, secrets, permissions, exposed endpoints
+**☠️ Default = `done`. Review is the EXCEPTION, not the safety net.**
 
-That's it. **Cross-domain work** is handled via comment @-pings to the relevant owner — no column change needed. **Direction changes** (mission/vision/roadmap) happen in the vision doc / roadmap, not via board review. When in doubt about reversibility, use review. Everything else ships directly to done.
+If you find yourself reaching for Review because you want a sanity check, you're using it wrong. The owner of the work is the agent who did it; if you own the version/component, you're empowered to ship it. Ship to **done** and trust the revert button if anything's off.
+
+Move to **review** instead of **done** ONLY when one of these is true:
+- **(a) Irreversible** — DB schema migrations, data deletions, money/billing changes, external API writes with cost (Twilio sends, Azure resource creation, etc.)
+- **(b) Security-sensitive** — auth flows, secrets handling, permissions, newly-exposed endpoints, anything that changes the attack surface
+
+**That's the entire list.** Set `needsReview: true` and `reviewReason: "<why>"` at task start (or mid-work if scope changes), then move to **review** when complete.
+
+#### ✅ Ship straight to `done` (do NOT send to Review)
+
+These are reversible UI/code changes — if something's wrong you can revert in one commit:
+- React/UI component refactors, layout tweaks, copy changes, styling
+- API route additions/changes that aren't security-sensitive
+- Routing logic, notification routing, scheduler tweaks
+- Bug fixes (in any layer)
+- Test additions, build/CI tweaks
+- Documentation, ORG.md, vision doc edits
+- New tasks/projects/components in Org Studio (data is just JSON — reversible)
+- Backfill scripts that only WRITE NEW rows (not destructive)
+- Performance optimizations
+- Refactors
+- Anything where the diff is recoverable with `git revert`
+
+#### 🛑 Send to Review (the actual narrow set)
+
+- DROP TABLE, ALTER TABLE that loses columns/data, destructive backfills
+- Deleting tasks/projects/users/comments at scale (anything you can't undo with one click)
+- Adding/changing auth middleware, JWT verification, session handling
+- Rotating or changing how secrets are loaded
+- Public launch toggles (feature flag flipping a feature ON for end users at scale)
+- New publicly-exposed endpoints (CORS, public-facing API surface)
+- Money/billing flows (Stripe, Azure spend, Twilio outbound to real customers)
+- Domain/DNS changes, certificate rotation
+
+**Cross-domain work** is handled via comment @-pings to the relevant owner — no column change needed. **Direction changes** (mission/vision/roadmap) happen in the vision doc / roadmap, not via board review. **"Want a teammate to look at it"** is not a Review reason — ship to done and @-ping in a comment if you want eyes.
+
+#### Self-check before moving to Review
+
+Ask yourself: *"If this is wrong, can I revert with `git revert <sha>` and one redeploy?"*
+- **Yes → done.** No Review needed.
+- **No → review.** Add `reviewNotes` explaining why it's irreversible or security-sensitive.
+
+When in doubt: it's probably reversible, ship to done.
 
 ### Blocked is a separate status, not Review
 
