@@ -21,6 +21,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequest } from '@/lib/auth';
 import { getStoreProvider } from '@/lib/store-provider';
 import { routeCommentNotifications } from '@/lib/notification-router';
+import { resolveTaskComponent, resolveTaskVersion } from '@/lib/notification-context';
 
 export async function POST(request: NextRequest) {
   const authError = await authenticateRequest(request);
@@ -104,6 +105,11 @@ export async function POST(request: NextRequest) {
         ? { id: task.id, title: task.title, projectId: task.projectId, assignee: task.assignee }
         : undefined,
       project: routerProject,
+      // #1287 — parity with /api/store route: component + version owners
+      // drive the per-comment page; project devOwner is now an orphan-only
+      // fallback. See notification-router.ts.
+      component: task ? resolveTaskComponent(project, task) : undefined,
+      version: task ? resolveTaskVersion(project, task) : undefined,
       projectTasks,
       watchers: [],
     },

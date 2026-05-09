@@ -757,7 +757,7 @@ describe('Notification Router', () => {
   describe('scope→recipients mapping', () => {
     test.each([
       {
-        name: 'task: notifies assignee + mentioned',
+        name: 'task: notifies assignee + mentioned (qaOwner is no longer auto-paged — #1287)',
         scope: { kind: 'task' as const, taskId: 'task-1' },
         comment: { id: 'c10', author: 'Basil', content: '@Henry heads up' },
         context: {
@@ -765,7 +765,11 @@ describe('Notification Router', () => {
           project: { id: 'p1', name: 'P', devOwner: 'Ana', qaOwner: 'Mikey' },
           projectTasks: [{ assignee: 'Ana' }],
         },
-        expectNotified: ['ana', 'henry', 'mikey'], // assignee + mentioned + qaOwner
+        // #1287 — qaOwner ('mikey') is intentionally NOT included anymore.
+        // Expected: assignee (ana) + mentioned (henry). Project devOwner Ana
+        // also collapses to the assignee delivery (already 'ana'). Mikey, who
+        // used to land here as the project qaOwner, must no longer.
+        expectNotified: ['ana', 'henry'],
       },
       {
         name: 'board: only mentioned agents in project set',

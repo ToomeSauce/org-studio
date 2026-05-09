@@ -57,6 +57,17 @@ export interface RouterSection {
   owner?: string;
 }
 
+export interface RouterComponent {
+  id: string;
+  name: string;
+  owner?: string;
+}
+
+export interface RouterVersion {
+  version: string;
+  owner?: string;
+}
+
 export interface RouteParams {
   comment: RouterComment;
   scope: CommentScope;
@@ -65,6 +76,21 @@ export interface RouteParams {
     task?: RouterTask;
     project?: RouterProject;
     section?: RouterSection;
+    /**
+     * #1287 — component owner of the task's section/component. Auto-notified
+     * on every task-scope comment. The component owner is generally an agent
+     * (e.g. the dev lead for that area), so paging on every comment matches
+     * the assignee/version-owner pattern. If the project doesn't have
+     * components, leave this undefined and the legacy section.owner can be
+     * passed via `section` (only used as a fallback in resolveRecipients).
+     */
+    component?: RouterComponent;
+    /**
+     * #1287 — version owner for the task's roadmap version. Auto-notified on
+     * every task-scope comment. Resolved upstream from the matching entry in
+     * primary-component.versions[] for task.version.
+     */
+    version?: RouterVersion;
     projectTasks?: { assignee?: string }[];
     watchers?: string[]; // agent ids watching this task (future, OK empty for now)
   };
@@ -134,6 +160,8 @@ export type RecipientReason =
   | 'mention'
   | 'assignee'
   | 'watcher'
+  | 'version-owner'
+  | 'component-owner'
   | 'project-owner'
   | 'section-owner'
   | 'dm-participant'
@@ -157,7 +185,11 @@ function buildMessage(
       // reads "commented on your task" instead of "mentioned you".
       const title = ctx.task?.title || 'Unknown task';
       const taskId = ctx.task?.id || (scope as any).taskId || '';
-      const verb = reason === 'mention' ? 'mentioned you on task' : 'commented on your task';
+      const verb = reason === 'mention'
+        ? 'mentioned you on task'
+        : reason === 'assignee'
+          ? 'commented on your task'
+          : 'commented on a task you own';
       const author = comment.author;
       // Keep the body short — use the snippet, not full content. Long
       // comments still arrive through the UI; the prompt's job is to
@@ -234,12 +266,34 @@ function resolveRecipients(params: RouteParams): Map<string, RecipientReason> {
       for (const wid of context.watchers || []) {
         addOnce(wid, 'watcher');
       }
-      // project owners (auto-notify: devOwner + qaOwner)
-      if (context.project) {
-        for (const ownerName of [context.project.devOwner, context.project.qaOwner].filter(Boolean)) {
-          const t = resolveTeammate(ownerName!, teammates);
-          if (t) addOnce(t.agentId, 'project-owner');
+      // #1287 — version owner (auto-notify, replaces project.devOwner/qaOwner
+      // as the canonical owner ping). Filed under the rationale that
+      // project-level devOwner/qaOwner over-page when per-version ownership
+      // exists. Surfaced by ticket #1278: project devOwner Gem was getting
+      // paged on every comment of a v1.21.0 ticket owned by Kate.
+      //
+      // Component owner is intentionally NOT auto-notified here — component
+      // owners get pulled in via @mention or assignment instead. Auto-paging
+      // them on every comment of every ticket in their component reproduces
+      // the same spam shape we just fixed (Gem on proj-garage owns the
+      // entire Main component but isn't necessarily the per-ticket owner).
+      let versionOwnerResolved = false;
+      if (context.version?.owner) {
+        const t = resolveTeammate(context.version.owner, teammates);
+        if (t) {
+          addOnce(t.agentId, 'version-owner');
+          versionOwnerResolved = true;
         }
+      }
+      // #1287 — orphan fallback. If the task has no version owner (e.g. an
+      // adhoc task or an old/loose project that never adopted versioned
+      // roadmaps), fall back to the project devOwner so the page still lands
+      // somewhere. qaOwner is intentionally NOT used as a fallback — it was
+      // always over-pagey, and routine QA coordination should happen via
+      // @mention.
+      if (!versionOwnerResolved && context.project?.devOwner) {
+        const t = resolveTeammate(context.project.devOwner, teammates);
+        if (t) addOnce(t.agentId, 'project-owner');
       }
       break;
     }

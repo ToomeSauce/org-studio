@@ -4,6 +4,7 @@ import { rpc } from '@/lib/gateway-rpc';
 import { getStoreProvider, type StoreData } from '@/lib/store-provider';
 import { parseMentions } from '@/lib/mention-notifier';
 import { routeCommentNotifications } from '@/lib/notification-router';
+import { resolveTaskComponent, resolveTaskVersion } from '@/lib/notification-context';
 import { syncRoadmapItemForTask } from '@/lib/roadmap-sync';
 import { checkArchivedProject } from '@/lib/archived-project-compat';
 import { getEffectiveOwner } from '@/lib/component-helpers';
@@ -1779,6 +1780,16 @@ export async function POST(req: NextRequest) {
           ? store.tasks.filter((t: any) => t.projectId === routerProject.id)
           : [];
 
+        // #1287 — resolve component + version owners for the task scope so
+        // the router can replace the project devOwner/qaOwner per-comment
+        // page with version-owner + component-owner. Project-level page
+        // remains as the orphan fallback (see notification-router.ts).
+        const projectFull = task?.projectId
+          ? store.projects.find((p: any) => p.id === task.projectId)
+          : undefined;
+        const routerComponent = task ? resolveTaskComponent(projectFull, task) : undefined;
+        const routerVersion = task ? resolveTaskVersion(projectFull, task) : undefined;
+
         // Single unified call replaces all per-scope branchy dispatch
         routeCommentNotifications({
           comment: { id: comment.id, author: comment.author, content: comment.content, type: comment.type },
@@ -1788,6 +1799,8 @@ export async function POST(req: NextRequest) {
             task: task ? { id: task.id, title: task.title, projectId: task.projectId, assignee: task.assignee } : undefined,
             project: routerProject,
             section: routerSection,
+            component: routerComponent,
+            version: routerVersion,
             projectTasks: projectTasks.map((t: any) => ({ assignee: t.assignee })),
             watchers: [],
           },

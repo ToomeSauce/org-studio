@@ -248,3 +248,185 @@ describe('#1268 — auto-notify dev owner on every (non-system) ticket comment',
     expect(res.notified).toContain('mikey');
   });
 });
+
+/**
+ * #1287 — scope task-comment auto-notify to version + component owners.
+ *
+ * Bug surfaced by ticket #1278: project-level devOwner/qaOwner were being
+ * paged on every task comment, even when the task had its own version owner
+ * and component owner. Result: dev leads getting spammed on tickets they
+ * weren't actually assigned to or responsible for.
+ *
+ * New contract for the 'task' scope:
+ *   - assignee, watchers, mentions — unchanged.
+ *   - version owner is auto-notified (NEW).
+ *   - component owner is auto-notified (NEW).
+ *   - project.devOwner is the orphan fallback only (when both upstream
+ *     owners are unresolved).
+ *   - project.qaOwner is no longer auto-notified anywhere; QA coordination
+ *     happens via @mention.
+ */
+describe('#1287 — version + component owners replace project devOwner/qaOwner per-comment paging', () => {
+  const teammates1287: Teammate[] = [
+    { id: 'b', name: 'Basil', agentId: '', isHuman: true },
+    { id: 'k', name: 'Kate', agentId: 'kate', isHuman: false },
+    { id: 'g', name: 'Gem', agentId: 'gem', isHuman: false },
+    { id: 'a', name: 'Ana', agentId: 'ana', isHuman: false },
+    { id: 'm', name: 'Mikey', agentId: 'mikey', isHuman: false },
+  ];
+
+  it('Garage-shape: project.devOwner=Gem, component.owner=Gem, version.owner=Kate, assignee=Kate — only Kate notified, Gem stays off the page', async () => {
+    sentMessages.length = 0;
+    const task = { id: 't-garage', title: 'Concierge onboard', projectId: 'proj-garage', assignee: 'Kate' };
+    const res = await routeCommentNotifications({
+      comment: { id: '1287-a', author: 'Mikey', content: 'progress note' },
+      scope: { kind: 'task', taskId: task.id },
+      teammates: teammates1287,
+      context: {
+        task,
+        project: { id: 'proj-garage', name: 'Garage', devOwner: 'Gem', qaOwner: '' },
+        component: { id: 'sec-main', name: 'Main', owner: 'Gem' },
+        version: { version: '1.21.0', owner: 'Kate' },
+      },
+    });
+    // Kate is notified (assignee + version-owner collapse to one delivery).
+    expect(res.notified).toContain('kate');
+    // Gem must NOT be notified — component-owner is no longer an auto-notify
+    // path on routine comments. She'll get pinged via @mention or because
+    // her component-level ownership shows up in some other channel.
+    expect(res.notified).not.toContain('gem');
+  });
+
+  it('Garage-shape with non-Kate author: only Kate (assignee+version-owner) notified — Gem stays off the page', async () => {
+    sentMessages.length = 0;
+    const task = { id: 't-garage-2', title: 'Concierge onboard', projectId: 'proj-garage', assignee: 'Kate' };
+    const res = await routeCommentNotifications({
+      comment: { id: '1287-b', author: 'Ana', content: 'fyi' },
+      scope: { kind: 'task', taskId: task.id },
+      teammates: teammates1287,
+      context: {
+        task,
+        project: { id: 'proj-garage', name: 'Garage', devOwner: 'Gem', qaOwner: '' },
+        component: { id: 'sec-main', name: 'Main', owner: 'Gem' },
+        version: { version: '1.21.0', owner: 'Kate' },
+      },
+    });
+    expect(res.notified).toEqual(['kate']);
+    expect(res.notified).not.toContain('gem');
+  });
+
+  it('component-only owner (no version owner): assignee notified, project devOwner falls back, component owner is NOT auto-paged', async () => {
+    sentMessages.length = 0;
+    const task = { id: 't-comp', title: 'compy', projectId: 'p', assignee: 'Mikey' };
+    const res = await routeCommentNotifications({
+      comment: { id: '1287-c', author: 'Basil', content: 'thoughts' },
+      scope: { kind: 'task', taskId: task.id },
+      teammates: teammates1287,
+      context: {
+        task,
+        project: { id: 'p', name: 'P', devOwner: 'Ana' },
+        component: { id: 'c', name: 'C', owner: 'Gem' },
+        // version present but owner missing — simulates a roadmap row with no owner set.
+        version: { version: '1.0', owner: undefined as any },
+      },
+    });
+    // No version owner → fallback to project.devOwner (Ana). Gem (component
+    // owner) is intentionally NOT auto-paged.
+    expect(new Set(res.notified)).toEqual(new Set(['mikey', 'ana']));
+    expect(res.notified).not.toContain('gem');
+  });
+
+  it('orphan task (no version, no component owner): falls back to project.devOwner', async () => {
+    sentMessages.length = 0;
+    const task = { id: 't-orph', title: 'orphan', projectId: 'p', assignee: 'Mikey' };
+    const res = await routeCommentNotifications({
+      comment: { id: '1287-d', author: 'Basil', content: 'who owns this?' },
+      scope: { kind: 'task', taskId: task.id },
+      teammates: teammates1287,
+      context: {
+        task,
+        project: { id: 'p', name: 'P', devOwner: 'Ana' },
+        // no component, no version
+      },
+    });
+    expect(new Set(res.notified)).toEqual(new Set(['mikey', 'ana']));
+  });
+
+  it('all three owners distinct from assignee: assignee + version-owner notified; component owner and project devOwner NOT', async () => {
+    sentMessages.length = 0;
+    const task = { id: 't-three', title: 'three', projectId: 'p', assignee: 'Mikey' };
+    const res = await routeCommentNotifications({
+      comment: { id: '1287-e', author: 'Basil', content: 'check' },
+      scope: { kind: 'task', taskId: task.id },
+      teammates: teammates1287,
+      context: {
+        task,
+        project: { id: 'p', name: 'P', devOwner: 'Ana' },
+        component: { id: 'c', name: 'C', owner: 'Gem' },
+        version: { version: '1.0', owner: 'Kate' },
+      },
+    });
+    expect(new Set(res.notified)).toEqual(new Set(['mikey', 'kate']));
+    expect(res.notified).not.toContain('gem');
+    expect(res.notified).not.toContain('ana');
+  });
+
+  it('project qaOwner is no longer auto-paged on routine task comments', async () => {
+    sentMessages.length = 0;
+    const task = { id: 't-qa', title: 'qa-test', projectId: 'p', assignee: 'Mikey' };
+    const res = await routeCommentNotifications({
+      comment: { id: '1287-f', author: 'Basil', content: 'note' },
+      scope: { kind: 'task', taskId: task.id },
+      teammates: teammates1287,
+      context: {
+        task,
+        project: { id: 'p', name: 'P', devOwner: 'Ana', qaOwner: 'Gem' },
+        component: { id: 'c', name: 'C', owner: 'Kate' },
+        version: { version: '1.0', owner: 'Kate' },
+      },
+    });
+    // Kate (version owner) and Mikey (assignee).
+    // Gem (qaOwner) MUST NOT be in there. Ana (devOwner) also off, version owner takes precedence.
+    expect(new Set(res.notified)).toEqual(new Set(['mikey', 'kate']));
+    expect(res.notified).not.toContain('gem');
+    expect(res.notified).not.toContain('ana');
+  });
+
+  it('self-suppression still applies when author is the version owner', async () => {
+    sentMessages.length = 0;
+    const task = { id: 't-self-v', title: 'self', projectId: 'p', assignee: 'Mikey' };
+    const res = await routeCommentNotifications({
+      comment: { id: '1287-g', author: 'Kate', content: 'self note' },
+      scope: { kind: 'task', taskId: task.id },
+      teammates: teammates1287,
+      context: {
+        task,
+        project: { id: 'p', name: 'P', devOwner: 'Ana' },
+        component: { id: 'c', name: 'C', owner: 'Gem' },
+        version: { version: '1.0', owner: 'Kate' },
+      },
+    });
+    expect(res.notified).not.toContain('kate');
+    expect(res.skipped.find((s) => s.agentId === 'kate')?.reason).toBe('self');
+  });
+
+  it('mention beats version-owner reason on tie (first-write-wins ordering)', async () => {
+    sentMessages.length = 0;
+    const task = { id: 't-mvo', title: 'mvo', projectId: 'p', assignee: 'Mikey' };
+    await routeCommentNotifications({
+      comment: { id: '1287-h', author: 'Basil', content: 'hey @kate look at this' },
+      scope: { kind: 'task', taskId: task.id },
+      teammates: teammates1287,
+      context: {
+        task,
+        project: { id: 'p', name: 'P', devOwner: 'Ana' },
+        component: { id: 'c', name: 'C', owner: 'Gem' },
+        version: { version: '1.0', owner: 'Kate' },
+      },
+    });
+    const sentToKate = sentMessages.find((m) => m.agentId === 'kate');
+    expect(sentToKate).toBeTruthy();
+    expect(sentToKate!.message).toMatch(/mentioned you on task/);
+    expect(sentToKate!.message).not.toMatch(/commented on a task you own/);
+  });
+});
