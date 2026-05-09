@@ -80,6 +80,7 @@ export interface StoreProvider {
    * Optional — only Postgres provider implements this initially.
    */
   listComments?(scope: { kind: string; taskId?: string; sectionId?: string; boardProjectId?: string; dmThreadId?: string }, opts?: { limit?: number; before?: number }): Promise<any[]>;
+  countComments?(scope: { kind: string; taskId?: string; sectionId?: string; boardProjectId?: string; dmThreadId?: string }): Promise<number>;
 
   /**
    * Update settings (mission statement, values, teammates, etc.)
@@ -1064,6 +1065,28 @@ export class PostgresStoreProvider implements StoreProvider {
       }));
     } catch (e: any) {
       if (e.code === '42P01') return []; // table not yet created
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * #1289 — lightweight count for the TaskDetailPanel header. Same
+   * scope_key contract as listComments so the math is consistent.
+   */
+  async countComments(scope: { kind: string; taskId?: string; sectionId?: string; boardProjectId?: string; dmThreadId?: string }): Promise<number> {
+    const scopeKey = scope.kind + ':' + (scope.taskId || scope.sectionId || scope.boardProjectId || scope.dmThreadId || '');
+    const pool = await this.getPool();
+    const client = await pool.connect();
+    try {
+      const result = await client.query(
+        `SELECT COUNT(*)::int AS n FROM org_studio_comments WHERE scope_key = $1`,
+        [scopeKey]
+      );
+      return result.rows[0]?.n ?? 0;
+    } catch (e: any) {
+      if (e.code === '42P01') return 0; // table not yet created
       throw e;
     } finally {
       client.release();

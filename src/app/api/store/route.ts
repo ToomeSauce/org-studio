@@ -1860,6 +1860,27 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: true, comments });
       }
 
+      case 'countComments': {
+        // #1289 — lightweight count for the TaskDetailPanel header. Counted
+        // off the same scope_key as listComments so the math stays
+        // consistent across pages. When phase-2 of #1288 ships and the
+        // inline task.comments[] is retired, this stays unchanged.
+        if (!payload.scope) return NextResponse.json({ error: 'Missing scope' }, { status: 400 });
+        const provider = getStoreProvider();
+        if (typeof (provider as any).countComments === 'function') {
+          const count = await (provider as any).countComments(payload.scope);
+          return NextResponse.json({ ok: true, count });
+        }
+        // Fallback for providers without native count: list all and length.
+        // Acceptable today — #1278 has ~100 comments, the listComments query
+        // ORDERs+LIMITs anyway. We bypass the limit by passing a huge value.
+        if (typeof (provider as any).listComments === 'function') {
+          const all = await (provider as any).listComments(payload.scope, { limit: 100000 });
+          return NextResponse.json({ ok: true, count: Array.isArray(all) ? all.length : 0 });
+        }
+        return NextResponse.json({ ok: true, count: 0 });
+      }
+
       case 'listDmThreads': {
         const provider = getStoreProvider();
         if (typeof (provider as any).listDmThreads !== 'function') {

@@ -362,6 +362,23 @@ export async function addComment(taskId: string, comment: Omit<TaskComment, 'id'
   return result.comment;
 }
 
+// #1289 — fetch comments for a scope via the normalized org_studio_comments
+// table. Returned comments are sorted ASC by createdAt (oldest of the page
+// at index 0, newest at the end). For cursor-paged "older comments", pass
+// `before` = the createdAt of the oldest comment you currently have.
+export async function listComments(
+  scope: CommentScope,
+  opts?: { limit?: number; before?: number },
+): Promise<TaskComment[]> {
+  const result = await mutateStore('listComments', { scope, ...(opts || {}) });
+  return Array.isArray(result.comments) ? result.comments : [];
+}
+
+export async function countComments(scope: CommentScope): Promise<number> {
+  const result = await mutateStore('countComments', { scope });
+  return typeof result.count === 'number' ? result.count : 0;
+}
+
 // === Section mutators ===
 // #1112 PR 3: dual-write — keep both `sections[]` and `components[]` in sync
 // in the local cache so the new Components panel reads fresh data immediately.

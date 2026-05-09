@@ -98,11 +98,25 @@ export class PostgresStoreProviderWithPubSub implements StoreProvider {
     return result;
   }
 
-  async listComments(scope: { kind: string; taskId?: string; sectionId?: string; boardProjectId?: string; dmThreadId?: string }): Promise<any[]> {
+  async listComments(scope: { kind: string; taskId?: string; sectionId?: string; boardProjectId?: string; dmThreadId?: string }, opts?: { limit?: number; before?: number }): Promise<any[]> {
     if (typeof (this.baseProvider as any).listComments === 'function') {
-      return (this.baseProvider as any).listComments(scope);
+      // #1289 — forward opts. Previously dropped them on the floor, which
+      // silently disabled pagination when the pubsub-wrapped provider was
+      // active (i.e. always, in production).
+      return (this.baseProvider as any).listComments(scope, opts);
     }
     return [];
+  }
+
+  async countComments(scope: { kind: string; taskId?: string; sectionId?: string; boardProjectId?: string; dmThreadId?: string }): Promise<number> {
+    if (typeof (this.baseProvider as any).countComments === 'function') {
+      return (this.baseProvider as any).countComments(scope);
+    }
+    if (typeof (this.baseProvider as any).listComments === 'function') {
+      const all = await (this.baseProvider as any).listComments(scope, { limit: 100000 });
+      return Array.isArray(all) ? all.length : 0;
+    }
+    return 0;
   }
 
   async listDmThreads(forAgent?: string): Promise<any[]> {
