@@ -871,19 +871,22 @@ function TasksPageInner() {
               const colTasks = filteredTasks
                 .filter(t => t.status === col.key)
                 .sort((a, b) => {
-                  // #1250: manual drag order wins. sortOrder is set when the
-                  // user drops a card; tasks without it fall through to the
-                  // activity-time tiebreaker so brand-new / never-reordered
-                  // items still surface near the top.
-                  const aHas = typeof a.sortOrder === 'number';
-                  const bHas = typeof b.sortOrder === 'number';
-                  if (aHas && bHas) return (a.sortOrder as number) - (b.sortOrder as number);
-                  if (aHas) return -1;
-                  if (bHas) return 1;
-                  // Fallback: most recent activity on top.
-                  const aTime = a.lastActivityAt || (a.statusHistory?.length ? a.statusHistory[a.statusHistory.length - 1]?.timestamp : 0) || a.createdAt || 0;
-                  const bTime = b.lastActivityAt || (b.statusHistory?.length ? b.statusHistory[b.statusHistory.length - 1]?.timestamp : 0) || b.createdAt || 0;
-                  return bTime - aTime;
+                  // #1290-followup-2 (2026-05-08): newest-on-top is the display
+                  // contract for the context board (per Basil). createdAt DESC
+                  // is primary; lastActivityAt DESC is a tiebreaker for cases
+                  // where two tickets share a creation timestamp. Manual drag
+                  // order (sortOrder) is intentionally NOT honored on display
+                  // anymore — dragging a card across columns still updates its
+                  // status, but board ordering stays "freshest first" so users
+                  // always see what just happened. Backlog dispatch in
+                  // scheduler.ts (getEligibleBacklogFifo) still reads sortOrder
+                  // ASC + createdAt for FIFO — that path is unaffected.
+                  const aCreated = a.createdAt || 0;
+                  const bCreated = b.createdAt || 0;
+                  if (aCreated !== bCreated) return bCreated - aCreated;
+                  const aActivity = a.lastActivityAt || (a.statusHistory?.length ? a.statusHistory[a.statusHistory.length - 1]?.timestamp : 0) || 0;
+                  const bActivity = b.lastActivityAt || (b.statusHistory?.length ? b.statusHistory[b.statusHistory.length - 1]?.timestamp : 0) || 0;
+                  return bActivity - aActivity;
                 });
               return (
                 <div key={col.key} data-column={col.key} className="w-[280px] sm:w-[320px] shrink-0 flex flex-col"
@@ -926,32 +929,21 @@ function TasksPageInner() {
                       }
                     }
 
+                    // #1290-followup-2 (2026-05-08): board display now fixed-sorts
+                    // newest-first (createdAt DESC). Drag-drop within a column is
+                    // therefore visually a no-op — we no longer write sortOrder from
+                    // the board, because doing so would silently re-rank the dispatch
+                    // FIFO queue (scheduler reads sortOrder ASC + createdAt). Cross-
+                    // column drag still updates status as expected.
                     if (sourceCol === col.key) {
-                      const currentIdx = colTasks.findIndex(t => t.id === id);
-                      if (currentIdx === -1 || currentIdx === insertIdx || currentIdx === insertIdx - 1) return;
-
-                      const reordered = [...colTasks];
-                      const [moved] = reordered.splice(currentIdx, 1);
-                      const targetIdx = insertIdx > currentIdx ? insertIdx - 1 : insertIdx;
-                      reordered.splice(targetIdx, 0, moved);
-
-                      reordered.forEach((t, i) => {
-                        const newOrder = (i + 1) * 1000;
-                        if (t.sortOrder !== newOrder) {
-                          lastMutationRef.current = Date.now();
-                          setLocalTasks(prev => (prev || []).map(lt => lt.id === t.id ? { ...lt, sortOrder: newOrder } : lt));
-                          updateTask(t.id, { sortOrder: newOrder });
-                        }
-                      });
-                    } else {
-                      const newSortOrder = insertIdx < colTasks.length
-                        ? (colTasks[insertIdx]?.sortOrder ?? colTasks[insertIdx]?.createdAt ?? Date.now()) - 1
-                        : (colTasks.length > 0 ? (colTasks[colTasks.length - 1]?.sortOrder ?? colTasks[colTasks.length - 1]?.createdAt ?? Date.now()) + 1000 : 1000);
-
-                      lastMutationRef.current = Date.now();
-                      setLocalTasks(prev => (prev || []).map(t => t.id === id ? { ...t, status: col.key, sortOrder: newSortOrder } : t));
-                      updateTask(id, { status: col.key, sortOrder: newSortOrder });
+                      // Intra-column drag is a no-op now. Status unchanged, sortOrder
+                      // unchanged. Nothing to write.
+                      return;
                     }
+
+                    lastMutationRef.current = Date.now();
+                    setLocalTasks(prev => (prev || []).map(t => t.id === id ? { ...t, status: col.key } : t));
+                    updateTask(id, { status: col.key });
                   }}
                 >
                   <div className="flex items-center gap-2.5 px-2 pb-3 mb-1">
