@@ -273,6 +273,25 @@ export function TaskDetailPanel({
 
   const [commentSending, setCommentSending] = useState(false);
 
+  // ---- #1289: client-side pagination over the inline task.comments[] ----
+  // Why client-side and not listComments: the normalized org_studio_comments
+  // table doesn't exist on the live DB, and the dual-write in addComment is
+  // a best-effort try/catch that silently no-ops on undefined_table. Switching
+  // the panel to listComments today would render 0 comments per ticket. The
+  // ACTUAL UX pain on #1278 is heavy DOM (100 nodes on open), not /api/store
+  // payload size — that's #1288's problem and lives in a separate ticket.
+  // This pagination solves the DOM-on-open problem with zero migration risk.
+  // When #1288 lands and the inline blob retires, swap `allComments` below
+  // for a listComments fetch + cursor; the UI surface is unchanged.
+  const COMMENTS_PAGE_SIZE = 25;
+  const [visibleCount, setVisibleCount] = useState(COMMENTS_PAGE_SIZE);
+
+  // Reset visibleCount when the panel swaps to a new task.
+  useEffect(() => {
+    setVisibleCount(COMMENTS_PAGE_SIZE);
+  }, [task.id]);
+
+
   const handleAddComment = useCallback(async () => {
     if (!commentText.trim() || commentSending) return;
     setCommentSending(true);
@@ -291,6 +310,11 @@ export function TaskDetailPanel({
       if (mentions.length > 0) {
         toast.info(`Mentioned ${mentions.length} agent${mentions.length > 1 ? 's' : ''}: ${mentions.join(', ')}`);
       }
+      // #1289 — keep the new comment visible without dropping any prior
+      // ones off the bottom of the page. The parent updates task.comments
+      // optimistically (see store.ts addComment), so a +1 to visibleCount
+      // covers the new arrival.
+      setVisibleCount(c => c + 1);
     } finally {
       setCommentSending(false);
     }
@@ -306,10 +330,18 @@ export function TaskDetailPanel({
   // ~49 such rows existed at the time of the fix — demo seeds + a few real
   // comments lost to the empty-body bug. Leaving the rows in place but
   // hiding them in the UI avoids destructive cleanup.
-  const comments: TaskComment[] = (task.comments || []).filter((c: any) => {
+  const allComments: TaskComment[] = (task.comments || []).filter((c: any) => {
     const text = ((c?.content ?? '') + (c?.body ?? '') + (c?.text ?? '')).trim();
     return text.length > 0;
   });
+  // #1289 — only render the last N comments (newest at the bottom). The
+  // inline task.comments[] is in insertion order (oldest first), so a
+  // tail-slice gives us the newest page with the oldest of that page on top
+  // and the newest at the bottom — matches the existing visual order.
+  const visibleSliceStart = Math.max(0, allComments.length - visibleCount);
+  const comments: TaskComment[] = allComments.slice(visibleSliceStart);
+  const totalComments = allComments.length;
+  const hasMoreOlder = visibleSliceStart > 0;
   const statusHistory: { status: string; timestamp: number }[] = (task as any).statusHistory || [];
 
   return (
@@ -644,9 +676,30 @@ export function TaskDetailPanel({
             <div className="flex items-center gap-2 mb-3">
               <MessageSquare size={14} className="text-[var(--text-muted)]" />
               <span className="text-[10px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">
-                Comments {comments.length > 0 && `(${comments.length})`}
+                {/* #1289 — header shows total, not just visible. */}
+                Comments {totalComments > 0 && `(${totalComments})`}
               </span>
+              {hasMoreOlder && (
+                <span className="text-[10px] text-[var(--text-muted)]">
+                  showing {comments.length} of {totalComments}
+                </span>
+              )}
             </div>
+
+            {/* #1289 — "Show 25 more" button at the top. Pure client-side
+                slice bump; no fetch needed. The button reveals the next
+                older page (older comments prepend above the current view). */}
+            {hasMoreOlder && (
+              <div className="mb-3 flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => setVisibleCount(c => c + COMMENTS_PAGE_SIZE)}
+                  className="text-[11px] px-3 py-1.5 rounded-[var(--radius-sm)] border border-[var(--border-default)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+                >
+                  Show {Math.min(COMMENTS_PAGE_SIZE, visibleSliceStart)} more
+                </button>
+              </div>
+            )}
 
             {comments.length > 0 && (
               <div className="space-y-2.5 mb-3">
