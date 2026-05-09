@@ -394,6 +394,17 @@ function TasksPageInner() {
   }, [urlTask]);
   const [searchQuery, setSearchQuery] = useState('');
 
+  // #1290-followup (2026-05-08): per-column visible-count state for client-side
+  // pagination. Display-layer ONLY — backlog dispatch in scheduler.ts:getActionableWork
+  // remains FIFO (oldest-first by sortOrder/createdAt). The slice happens in the
+  // render layer just before .map(). Drag-and-drop and add-task continue to operate
+  // on the full filteredTasks set, not the visible slice.
+  const COLUMN_PAGE_SIZE = 25;
+  const [colVisible, setColVisible] = useState<Record<string, number>>({});
+  const showMoreInColumn = useCallback((colKey: string) => {
+    setColVisible(prev => ({ ...prev, [colKey]: (prev[colKey] ?? COLUMN_PAGE_SIZE) + COLUMN_PAGE_SIZE }));
+  }, []);
+
   // Reset section filter when project filter changes
   useEffect(() => {
     setFilterSection('all');
@@ -956,7 +967,13 @@ function TasksPageInner() {
                   </div>
 
                   <div className="flex-1 space-y-0 overflow-y-auto pr-1">
-                    {colTasks.map((task, idx) => (
+                    {(() => {
+                      const visibleLimit = colVisible[col.key] ?? COLUMN_PAGE_SIZE;
+                      const visibleColTasks = colTasks.slice(0, visibleLimit);
+                      const hiddenCount = Math.max(0, colTasks.length - visibleColTasks.length);
+                      return (
+                        <>
+                          {visibleColTasks.map((task, idx) => (
                       <div key={task.id}>
                         {dragOverCol === col.key && dragOverIndex === idx && (
                           <div className={clsx('h-0.5 rounded-full mx-1 my-1', col.color)} />
@@ -993,10 +1010,25 @@ function TasksPageInner() {
                           />
                         </div>
                       </div>
-                    ))}
-                    {dragOverCol === col.key && dragOverIndex === colTasks.length && (
-                      <div className={clsx('h-0.5 rounded-full mx-1 my-1', col.color)} />
-                    )}
+                          ))}
+                          {dragOverCol === col.key && dragOverIndex === visibleColTasks.length && (
+                            <div className={clsx('h-0.5 rounded-full mx-1 my-1', col.color)} />
+                          )}
+                          {hiddenCount > 0 && (
+                            <div className="py-2 flex justify-center">
+                              <button
+                                type="button"
+                                onClick={() => showMoreInColumn(col.key)}
+                                className="text-[11px] px-3 py-1.5 rounded-[var(--radius-sm)] border border-[var(--border-default)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+                                title={`Show ${Math.min(COLUMN_PAGE_SIZE, hiddenCount)} more (${hiddenCount} hidden)`}
+                              >
+                                Show {Math.min(COLUMN_PAGE_SIZE, hiddenCount)} more
+                              </button>
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
 
                     {colTasks.length === 0 && addingTo !== col.key && (() => {
                       const empty = COLUMN_EMPTY[col.key];

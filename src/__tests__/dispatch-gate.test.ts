@@ -435,6 +435,29 @@ describe('#1189 getEligibleBacklogFifo — single FIFO queue', () => {
     expect(out.map((t) => t.id)).toEqual(['t-bug', 't-versioned', 't-chore']);
   });
 
+  it('dispatch order is independent of input array order (display sort cannot influence FIFO) — #1290-followup', () => {
+    // The context-board UI sorts columns by lastActivityAt DESC (newest on top)
+    // and may pass a re-sorted array up the tree. The dispatcher must NOT honor
+    // that order — it must always order by sortOrder ASC + createdAt tiebreaker.
+    // Pin this so a future refactor that accidentally pre-sorts the source array
+    // can't silently flip backlog from FIFO to LIFO.
+    const a = { ...mkAdhoc({ id: 't-old' }), createdAt: 100 };
+    const b = { ...mkAdhoc({ id: 't-mid' }), createdAt: 200 };
+    const c = { ...mkAdhoc({ id: 't-new' }), createdAt: 300 };
+
+    const fifoOrder = getEligibleBacklogFifo(
+      { projects: [mkProject()], tasks: [a, b, c] },
+      ['mikey'],
+    ).map((t: any) => t.id);
+    const lifoInput = getEligibleBacklogFifo(
+      { projects: [mkProject()], tasks: [c, b, a] },
+      ['mikey'],
+    ).map((t: any) => t.id);
+
+    expect(fifoOrder).toEqual(['t-old', 't-mid', 't-new']);
+    expect(lifoInput).toEqual(['t-old', 't-mid', 't-new']);
+  });
+
   it('versioned tickets do NOT cut in front of older adhoc tickets', () => {
     // Critical regression test for #1189. Pre-refactor, the scheduler
     // happened to mix lanes via insertion order (often FIFO-ish), but

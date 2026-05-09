@@ -338,12 +338,13 @@ export function TaskDetailPanel({
     const text = ((c?.content ?? '') + (c?.body ?? '') + (c?.text ?? '')).trim();
     return text.length > 0;
   });
-  // #1289 — only render the last N comments (newest at the bottom). The
-  // inline task.comments[] is in insertion order (oldest first), so a
-  // tail-slice gives us the newest page with the oldest of that page on top
-  // and the newest at the bottom — matches the existing visual order.
+  // #1289 + #UX-followup (2026-05-08): newest-on-top display order, with
+  // the Add Comment composer at the TOP of the section so the affordance
+  // sits next to the freshest context. We still slice the underlying
+  // insertion-order array as a tail (gives the newest N items), then reverse
+  // for render so newest is first.
   const visibleSliceStart = Math.max(0, allComments.length - visibleCount);
-  const comments: TaskComment[] = allComments.slice(visibleSliceStart);
+  const comments: TaskComment[] = allComments.slice(visibleSliceStart).reverse();
   const totalComments = allComments.length;
   const hasMoreOlder = visibleSliceStart > 0;
   const statusHistory: { status: string; timestamp: number }[] = (task as any).statusHistory || [];
@@ -691,20 +692,33 @@ export function TaskDetailPanel({
               )}
             </div>
 
-            {/* #1289 — "Show 25 more" button at the top. Pure client-side
-                slice bump; no fetch needed. The button reveals the next
-                older page (older comments prepend above the current view). */}
-            {hasMoreOlder && (
-              <div className="mb-3 flex justify-center">
-                <button
-                  type="button"
-                  onClick={() => setVisibleCount(c => c + COMMENTS_PAGE_SIZE)}
-                  className="text-[11px] px-3 py-1.5 rounded-[var(--radius-sm)] border border-[var(--border-default)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
-                >
-                  Show {Math.min(COMMENTS_PAGE_SIZE, visibleSliceStart)} more
-                </button>
-              </div>
-            )}
+            {/* Composer at TOP — #UX-followup 2026-05-08: with newest-first
+                ordering and pagination, the input belongs above the freshest
+                comment, not buried below 25 stale ones. */}
+            <div className="flex gap-2 mb-3">
+              <textarea
+                ref={commentInputRef}
+                value={commentText}
+                onChange={e => setCommentText(e.target.value)}
+                placeholder="Add a comment... (use @name to mention agents)"
+                rows={2}
+                className="flex-1 text-[var(--text-sm)] bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-md)] px-3 py-2 text-[var(--text-secondary)] placeholder-[var(--text-muted)] outline-none resize-none focus:border-[var(--accent-primary)] transition-colors"
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault();
+                    handleAddComment();
+                  }
+                }}
+              />
+              <button
+                onClick={handleAddComment}
+                disabled={!commentText.trim() || commentSending}
+                className="self-end px-3 py-2 bg-[var(--accent-primary)] text-white rounded-[var(--radius-md)] hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
+                title="Add comment (Cmd+Enter)"
+              >
+                <Send size={14} />
+              </button>
+            </div>
 
             {comments.length > 0 && (
               <div className="space-y-2.5 mb-3">
@@ -739,30 +753,19 @@ export function TaskDetailPanel({
               </div>
             )}
 
-            <div className="flex gap-2">
-              <textarea
-                ref={commentInputRef}
-                value={commentText}
-                onChange={e => setCommentText(e.target.value)}
-                placeholder="Add a comment... (use @name to mention agents)"
-                rows={2}
-                className="flex-1 text-[var(--text-sm)] bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-md)] px-3 py-2 text-[var(--text-secondary)] placeholder-[var(--text-muted)] outline-none resize-none focus:border-[var(--accent-primary)] transition-colors"
-                onKeyDown={e => {
-                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                    e.preventDefault();
-                    handleAddComment();
-                  }
-                }}
-              />
-              <button
-                onClick={handleAddComment}
-                disabled={!commentText.trim() || commentSending}
-                className="self-end px-3 py-2 bg-[var(--accent-primary)] text-white rounded-[var(--radius-md)] hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
-                title="Add comment (Cmd+Enter)"
-              >
-                <Send size={14} />
-              </button>
-            </div>
+            {/* #UX-followup — "Show more" sits at the BOTTOM of the visible list,
+                revealing the next older page (older comments append below). */}
+            {hasMoreOlder && (
+              <div className="mt-1 flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => setVisibleCount(c => c + COMMENTS_PAGE_SIZE)}
+                  className="text-[11px] px-3 py-1.5 rounded-[var(--radius-sm)] border border-[var(--border-default)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+                >
+                  Show {Math.min(COMMENTS_PAGE_SIZE, visibleSliceStart)} more
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Status History */}
