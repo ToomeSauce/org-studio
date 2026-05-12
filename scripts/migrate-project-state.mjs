@@ -92,10 +92,20 @@ async function main() {
   }
 }
 
-// Run if invoked directly
-main().catch(err => {
-  console.error('[MigrateState] Fatal:', err);
-  process.exit(1);
-});
+// Run if invoked directly. #1312: previously this was an unconditional
+// `main().catch(...).process.exit(1)` at module top level, which ran ON IMPORT
+// from server.mjs. If Postgres rejected the migration's connection (e.g.
+// transient "too many clients" on Azure), process.exit(1) killed the entire
+// dashboard — and the catch in server.mjs:1309 was never given a chance,
+// because the rejection happened during module evaluation, not inside the
+// awaited importer's try-block. Result: 2-day systemd restart-loop outage
+// from a 30-second Postgres hiccup (see May 10 04:07 incident).
+const isMainModule = import.meta.url === `file://${process.argv[1]}`;
+if (isMainModule) {
+  main().catch(err => {
+    console.error('[MigrateState] Fatal:', err);
+    process.exit(1);
+  });
+}
 
 export { main as migrateProjectState };

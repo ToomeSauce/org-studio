@@ -1322,12 +1322,18 @@ if (WORKSPACE_BASE) {
         if (task.isArchived) continue;
         const lastEntry = (task.statusHistory || []).at(-1);
         if (!lastEntry) continue;
-        if (now - lastEntry.timestamp > RECENT_MS) continue;
+        // #1313: guard against malformed timestamps (undefined/null/NaN/string)
+        // which made `new Date(...).toISOString()` throw "Invalid time value" and
+        // spam the warn-block on every restart even though it was caught as
+        // non-fatal. Skip the row instead of crashing the whole reconcile pass.
+        const ts = Number(lastEntry.timestamp);
+        if (!Number.isFinite(ts) || ts <= 0) continue;
+        if (now - ts > RECENT_MS) continue;
         if (lastEntry.status !== task.status) {
           console.warn(
             `[Reconcile] Task ${task.id} (#${task.ticketNumber || '?'}): ` +
             `statusHistory says '${lastEntry.status}' but current status is '${task.status}'. ` +
-            `Possible lost write. Last transition at ${new Date(lastEntry.timestamp).toISOString()}`
+            `Possible lost write. Last transition at ${new Date(ts).toISOString()}`
           );
         }
       }

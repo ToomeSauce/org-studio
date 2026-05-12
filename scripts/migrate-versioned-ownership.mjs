@@ -373,7 +373,12 @@ async function main() {
   logHeader('EXECUTE complete.');
 }
 
-main().catch(e => {
-  console.error('Migration failed:', e);
-  process.exit(1);
-});
+// #1312 guard: only auto-run when invoked as a script. When imported by
+// another module (e.g. server.mjs), do NOT trigger main() — let the
+// caller decide. Prevents one Postgres hiccup from killing the dashboard.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch(e => {
+    console.error('Migration failed:', e);
+    process.exit(1);
+  });
+}
