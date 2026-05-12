@@ -544,10 +544,15 @@ function TasksPageInner() {
   const handleProjectChange = useCallback((projectId: string) => {
     setNewProject(projectId);
     const proj = projects.find(p => p.id === projectId);
-    if (proj?.owner) {
-      setNewAssignee(proj.owner);
+    // #1310: prefer devOwner (canonical) over legacy owner field. New projects
+    // (post-v0.14 launches) only set devOwner — without this fallback the
+    // assignee dropdown stuck on whoever was selected before (e.g. Basil for
+    // Thrivor even though Trevor is the dev lead).
+    const ownerCandidate = (proj as any)?.devOwner || proj?.owner;
+    if (ownerCandidate) {
+      setNewAssignee(ownerCandidate);
     }
-    setNewSectionId(defaultSectionId(proj, proj?.owner || newAssignee) || '');
+    setNewSectionId(defaultSectionId(proj, ownerCandidate || newAssignee) || '');
     setNewSectionManual(false);
   }, [projects, newAssignee]);
 
@@ -580,7 +585,13 @@ function TasksPageInner() {
   }, [filterProject, projects, teammates]);
 
   const handleAdd = async (status: Task['status']) => {
-    if (!newTitle.trim()) return;
+    // #1311: surface empty-title state. Previously a silent return — no toast,
+    // no log, no network call. Users reported the Add button as "unresponsive"
+    // when really it was just refusing an empty title.
+    if (!newTitle.trim()) {
+      toast.error('Task title is required.', { autoClose: 4000 });
+      return;
+    }
     const seedFields = {
       doneWhen: newDoneWhen.trim() || undefined,
       constraints: newConstraints.trim() || undefined,
