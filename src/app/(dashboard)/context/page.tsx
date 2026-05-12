@@ -575,7 +575,13 @@ function TasksPageInner() {
   const openAddForm = useCallback((status: Task['status']) => {
     const defaultProjectId = filterProject !== 'all' ? filterProject : (projects[0]?.id || '');
     const defaultProject = projects.find(p => p.id === defaultProjectId);
-    const defaultAssignee = defaultProject?.owner || teammates[0]?.name || '';
+    // #1310 (followup): same devOwner-over-owner fallback as handleProjectChange.
+    // openAddForm seeds the form when first opened (e.g. when the user clicks
+    // "Add task" and the default project is already the filtered one). Without
+    // this, Thrivor's defaultAssignee resolved to legacy `owner=Basil` instead
+    // of canonical `devOwner=Trevor`, and handleProjectChange never fired
+    // because the project wasn't changed.
+    const defaultAssignee = (defaultProject as any)?.devOwner || defaultProject?.owner || teammates[0]?.name || '';
     setNewProject(defaultProjectId);
     setNewAssignee(defaultAssignee);
     setNewSectionId(defaultSectionId(defaultProject, defaultAssignee) || '');
