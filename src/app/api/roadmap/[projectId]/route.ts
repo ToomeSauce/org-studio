@@ -4,6 +4,7 @@ import { authenticateRequest } from '@/lib/auth';
 import { checkArchivedProject } from '@/lib/archived-project-compat';
 import { versionSortKey, compareVersions, isValidVersion } from '@/lib/version-utils';
 import { renameVersionInProjectData, rvDerivedId } from '@/lib/roadmap-rename';
+import { syncProjectShadowVersion } from '@/lib/roadmap-sync';
 
 export const dynamic = 'force-dynamic';
 
@@ -551,13 +552,44 @@ export async function POST(
             }
           }
 
+          // #1314: keep project.sections[].versions and components[].versions
+          // in lock-step with the canonical row we just wrote. Without this,
+          // the API returns 200 but the dashboard renders stale roadmaps
+          // until the 15-min reconcile cron runs (and that cron only fixes
+          // item.done flags, not new version rows). Trevor caught this on
+          // Thrivor 2026-05-12 — 6 versions sat invisible for hours.
+          let shadowSync: { sectionsHit: number; componentsHit: number; touched: boolean } = {
+            sectionsHit: 0, componentsHit: 0, touched: false,
+          };
+          try {
+            shadowSync = await syncProjectShadowVersion(client, projectId, 'upsert', version, {
+              id: versionId,
+              version,
+              title,
+              status,
+              items: itemsWithIds,
+              sort_order: sortOrder,
+              version_type: resolvedVersionType,
+              owner: ownerProvided ? ownerValue : null,
+            });
+          } catch (e) {
+            console.warn('[Roadmap] Shadow sync failed (non-fatal, reconcile cron will heal):', (e as any)?.message || e);
+          }
+
           await notifyRoadmapChange(client, projectId, action, version);
+          // #1314: emit project_update too so the cached store refreshes the
+          // shadow we just rewrote (roadmap_update alone doesn't reload
+          // project.sections jsonb on the server-side cache).
+          if (shadowSync.touched) {
+            await notifyProjectChange(client, projectId);
+          }
           return NextResponse.json({
             action: 'upserted',
             version,
             id: versionId,
             version_type: resolvedVersionType,
             owner: ownerProvided ? ownerValue : undefined,
+            shadowSync,
           });
         } else if (action === 'delete') {
           await client.query(
@@ -565,8 +597,22 @@ export async function POST(
             [projectId, version, 'default-workspace']
           );
 
+          // #1314: also strip the version from project shadows so the UI
+          // doesn't keep showing a deleted version until the next reconcile.
+          let shadowSync: { sectionsHit: number; componentsHit: number; touched: boolean } = {
+            sectionsHit: 0, componentsHit: 0, touched: false,
+          };
+          try {
+            shadowSync = await syncProjectShadowVersion(client, projectId, 'delete', version);
+          } catch (e) {
+            console.warn('[Roadmap] Shadow sync (delete) failed (non-fatal):', (e as any)?.message || e);
+          }
+
           await notifyRoadmapChange(client, projectId, action, version);
-          return NextResponse.json({ action: 'deleted', version });
+          if (shadowSync.touched) {
+            await notifyProjectChange(client, projectId);
+          }
+          return NextResponse.json({ action: 'deleted', version, shadowSync });
         } else if (action === 'reorder') {
           // Update sort_order for each version in the order array
           // sort_order ASC = first in array appears first

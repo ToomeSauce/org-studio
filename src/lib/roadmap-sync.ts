@@ -129,6 +129,184 @@ function fireVersionShippedNudge(
 }
 
 /* ------------------------------------------------------------------ */
+/*  syncProjectShadowVersion (#1314)                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Mirror a single roadmap version row into the project document's embedded
+ * `sections[].versions[]` and `components[].versions[]` arrays.
+ *
+ * Why this exists (Trevor caught it 2026-05-12): POST /api/roadmap upsert
+ * inserts a new row into `org_studio_roadmap_versions` (canonical) and
+ * returns 200 — but the dashboard renders from `project.sections[].versions`
+ * (a shadow copy hydrated into the jsonb at write time, NOT a join). When
+ * the upsert path didn't write to the shadow, the API was honest about the
+ * canonical table but lying about what users would see. Six versions sat in
+ * the canonical table for hours while the UI showed the old roadmap.
+ *
+ * Behavior:
+ *   - mode='upsert' → add or replace the matching {version} entry in every
+ *     section/component that already carries shadow versions. Sections with
+ *     zero existing shadow versions are LEFT ALONE (those projects are
+ *     intentionally not using the shadow; we don't seed it from a single
+ *     write). Garage-style projects with both `components` and `sections`
+ *     get both updated.
+ *   - mode='delete' → remove any matching {version} entry from all shadows.
+ *
+ * Returns counts so callers can log/expose how many places were touched.
+ * Idempotent. Safe to call from inside an open transaction (uses the
+ * passed-in client's connection).
+ */
+export async function syncProjectShadowVersion(
+  client: any,
+  projectId: string,
+  mode: 'upsert' | 'delete',
+  version: string,
+  rowFromCanonical?: {
+    id?: string;
+    version: string;
+    title?: string;
+    status?: string;
+    items?: any[];
+    sort_order?: number;
+    version_type?: string;
+    owner?: string | null;
+    shipped_at?: number | null;
+    progress?: { done: number; total: number };
+  },
+): Promise<{ sectionsHit: number; componentsHit: number; touched: boolean }> {
+  const projRes = await client.query(
+    `SELECT data FROM org_studio_projects WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
+    [projectId, 'default-workspace'],
+  );
+  if (projRes.rows.length === 0) {
+    return { sectionsHit: 0, componentsHit: 0, touched: false };
+  }
+  const raw = projRes.rows[0].data;
+  const projData =
+    raw == null ? {} : typeof raw === 'string' ? JSON.parse(raw) : raw;
+
+  let sectionsHit = 0;
+  let componentsHit = 0;
+  let dirty = false;
+
+  const containers: Array<'sections' | 'components'> = ['sections', 'components'];
+  for (const key of containers) {
+    const arr = Array.isArray(projData[key]) ? projData[key] : [];
+    for (const container of arr) {
+      const versions: any[] = Array.isArray(container.versions) ? container.versions : [];
+      // Don't seed shadows that are intentionally empty. Only sync into
+      // containers that ALREADY carry version shadows. (Otherwise we'd
+      // start populating shadows on projects that opted out.)
+      if (versions.length === 0) continue;
+
+      const existingIdx = versions.findIndex((v: any) => v?.version === version);
+
+      if (mode === 'delete') {
+        if (existingIdx >= 0) {
+          versions.splice(existingIdx, 1);
+          container.versions = versions;
+          if (key === 'sections') sectionsHit++;
+          else componentsHit++;
+          dirty = true;
+        }
+        continue;
+      }
+
+      // mode === 'upsert' — replace existing or append new
+      const shadowEntry = {
+        ...(rowFromCanonical || { version }),
+        version,
+      };
+      if (existingIdx >= 0) {
+        // Preserve any per-shadow keys the canonical row didn't set
+        versions[existingIdx] = { ...versions[existingIdx], ...shadowEntry };
+      } else {
+        versions.push(shadowEntry);
+      }
+      container.versions = versions;
+      if (key === 'sections') sectionsHit++;
+      else componentsHit++;
+      dirty = true;
+    }
+  }
+
+  if (dirty) {
+    await client.query(
+      `UPDATE org_studio_projects SET data = $1 WHERE id = $2 AND workspace_id = $3`,
+      [JSON.stringify(projData), projectId, 'default-workspace'],
+    );
+  }
+
+  return { sectionsHit, componentsHit, touched: dirty };
+}
+
+/**
+ * Drift report for a single project: count canonical roadmap rows vs
+ * project-shadow entries and list any versions present in canonical but
+ * missing from every shadow container. Read-only; safe to expose via API.
+ */
+export async function inspectRoadmapDrift(
+  client: any,
+  projectId: string,
+): Promise<{
+  canonicalCount: number;
+  shadowSummary: Array<{ container: 'sections' | 'components'; id: string; name?: string; count: number }>;
+  missingFromAllShadows: string[];
+  inSync: boolean;
+}> {
+  const canRes = await client.query(
+    `SELECT version FROM org_studio_roadmap_versions WHERE project_id = $1 AND workspace_id = $2 ORDER BY sort_order ASC, version ASC`,
+    [projectId, 'default-workspace'],
+  );
+  const canonicalVersions: string[] = canRes.rows.map((r: any) => r.version);
+
+  const projRes = await client.query(
+    `SELECT data FROM org_studio_projects WHERE id = $1 AND workspace_id = $2`,
+    [projectId, 'default-workspace'],
+  );
+
+  const shadowSummary: Array<{ container: 'sections' | 'components'; id: string; name?: string; count: number }> = [];
+  const versionsInAnyShadow = new Set<string>();
+
+  if (projRes.rows.length > 0) {
+    const raw = projRes.rows[0].data;
+    const projData =
+      raw == null ? {} : typeof raw === 'string' ? JSON.parse(raw) : raw;
+    for (const key of ['sections', 'components'] as const) {
+      const arr = Array.isArray(projData[key]) ? projData[key] : [];
+      for (const c of arr) {
+        const versions: any[] = Array.isArray(c.versions) ? c.versions : [];
+        for (const v of versions) {
+          if (v?.version) versionsInAnyShadow.add(v.version);
+        }
+        // Only report shadow containers that are actually being used. Empty
+        // shadow arrays mean "this project doesn't use the shadow" — not
+        // drift.
+        if (versions.length > 0) {
+          shadowSummary.push({ container: key, id: c.id, name: c.name, count: versions.length });
+        }
+      }
+    }
+  }
+
+  // "Missing" means: canonical has it AND at least one shadow exists, but no
+  // shadow contains it. If the project carries no shadows at all, drift is
+  // not meaningful and we report inSync=true.
+  const hasAnyShadow = shadowSummary.length > 0;
+  const missingFromAllShadows = hasAnyShadow
+    ? canonicalVersions.filter((v) => !versionsInAnyShadow.has(v))
+    : [];
+
+  return {
+    canonicalCount: canonicalVersions.length,
+    shadowSummary,
+    missingFromAllShadows,
+    inSync: missingFromAllShadows.length === 0,
+  };
+}
+
+/* ------------------------------------------------------------------ */
 /*  syncRoadmapItemForTask                                             */
 /* ------------------------------------------------------------------ */
 
