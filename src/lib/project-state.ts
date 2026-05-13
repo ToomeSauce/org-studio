@@ -125,15 +125,22 @@ export async function promoteProjectToNextVersion(
   // #1224: horizon comes only from the primary component's
   // approvedVersions[]. The legacy project-wide autonomy.approvedThrough
   // scalar and the per-component approvedThrough scalar are both gone.
+  //
+  // #1314.2 (Basil 2026-05-12): when no non-support/non-qa container
+  // exists, fall back to the first container. Without this fallback,
+  // single-section projects whose section is tagged role:'support' (e.g.
+  // Thrivor) silently never advance — promoteProjectToNextVersion sees
+  // approvedVersions:[] and refuses, even though the user just ticked an
+  // approval. Routing code must always have SOMETHING to route through.
   const componentsList: any[] =
     Array.isArray(projData.components) && projData.components.length > 0
       ? projData.components
       : Array.isArray(projData.sections)
         ? projData.sections
         : [];
-  const primaryComponent = componentsList.find(
-    (c: any) => !c?.role || (c.role !== 'qa' && c.role !== 'support'),
-  );
+  const primaryComponent =
+    componentsList.find((c: any) => !c?.role || (c.role !== 'qa' && c.role !== 'support'))
+    || componentsList[0];
   const approvedVersionsList: string[] = Array.isArray(primaryComponent?.approvedVersions)
     ? primaryComponent.approvedVersions
     : [];

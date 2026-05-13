@@ -576,10 +576,16 @@ export async function checkAndAutoAdvance(
 
     const approvedVersionsList: string[] = (() => {
       // #1224: derive from primary component's approvedVersions[] only.
+      // #1314.2 (Basil 2026-05-12): fall back to first container when no
+      // non-support/qa primary exists — prevents single-section support-
+      // role projects from being silently un-advanceable. Same rule applied
+      // in promoteProjectToNextVersion (project-state.ts).
       const comps: any[] = Array.isArray(projData.components) && projData.components.length > 0
         ? projData.components
         : Array.isArray(projData.sections) ? projData.sections : [];
-      const primary = comps.find((c: any) => !c?.role || (c.role !== 'qa' && c.role !== 'support'));
+      const primary =
+        comps.find((c: any) => !c?.role || (c.role !== 'qa' && c.role !== 'support'))
+        || comps[0];
       return Array.isArray(primary?.approvedVersions) ? primary.approvedVersions : [];
     })();
 

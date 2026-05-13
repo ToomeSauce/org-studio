@@ -297,6 +297,31 @@ export function getPrimaryComponent(project: ProjectLike): ComponentLike | undef
   return comps.find((c) => !c.role || (c.role !== 'qa' && c.role !== 'support'));
 }
 
+/**
+ * Like getPrimaryComponent, but falls back to the first component (regardless
+ * of role) when no non-support/non-qa primary exists. Use this for routing
+ * decisions (promote, auto-advance, approval-horizon checks) where "this
+ * project has no main/primary container" should NOT mean "nothing happens."
+ *
+ * Why this exists (#1314.2, Basil 2026-05-12): Thrivor's only section had
+ * `role: 'support'`, so getPrimaryComponent returned undefined, which made
+ * promoteProjectToNextVersion() see approvedVersions: [] and refuse to
+ * advance even though the section had 27 approved versions (including the
+ * one Basil just ticked). For projects that only have support/qa-roled
+ * containers, the routing primary is whichever container actually carries
+ * approvals/roadmap.
+ *
+ * Display code (sidebars, badges) should still use getPrimaryComponent so
+ * support/qa containers don't get misrepresented as "main." Routing code
+ * uses this.
+ */
+export function getRoutingPrimaryComponent(project: ProjectLike): ComponentLike | undefined {
+  const comps = getEffectiveComponents(project);
+  if (comps.length === 0) return undefined;
+  const explicit = comps.find((c) => !c.role || (c.role !== 'qa' && c.role !== 'support'));
+  return explicit || comps[0];
+}
+
 // ─── Per-component roadmap reads (#1112 PR 3; PR 6 removed legacy fallbacks) ───
 
 /**
