@@ -50,7 +50,9 @@ const DEFAULT_LOOP_STEPS = [
   },
 ];
 
-/** Resolve model from agent name via Gateway sessions list. Best-effort, returns undefined on failure. */
+/** Resolve model from agent name via Gateway sessions list. Best-effort, returns undefined on failure.
+ *  #1344: Wrapped in AbortController (1s timeout) and gated on explicit GATEWAY_PORT in container/staging
+ *  envs to prevent self-deadlock when port 4501 IS the same Next process (no Gateway behind it). */
 async function resolveAgentModel(agentName: string, store: StoreData): Promise<string | undefined> {
   try {
     // Resolve agent name → agentId
@@ -62,13 +64,40 @@ async function resolveAgentModel(agentName: string, store: StoreData): Promise<s
     const agentId = match?.agentId;
     if (!agentId) return undefined;
 
-    // Query Gateway for active sessions
+    // #1344 — staging/container has no separate Gateway process. If GATEWAY_PORT is
+    // not explicitly set AND we are in a container/staging env, skip the fetch entirely
+    // to avoid recursing into our own (already-busy) Next process.
+    const gatewayPortExplicit = !!process.env.GATEWAY_PORT;
+    const inContainerOrStaging = !!(
+      process.env.CONTAINER_APP_NAME ||
+      process.env.WEBSITES_PORT ||
+      process.env.K_SERVICE ||
+      (process.env.NODE_ENV === 'production' && !process.env.GATEWAY_URL)
+    );
+    if (!gatewayPortExplicit && inContainerOrStaging) {
+      return undefined;
+    }
+
+    // Query Gateway for active sessions, with 1s timeout (#1344)
     const port = process.env.GATEWAY_PORT || '4501';
-    const resp = await fetch(`http://127.0.0.1:${port}/api/gateway`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ method: 'sessions.list', params: { limit: 50 } }),
-    });
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 1000);
+    let resp: Response;
+    try {
+      resp = await fetch(`http://127.0.0.1:${port}/api/gateway`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ method: 'sessions.list', params: { limit: 50 } }),
+        signal: ac.signal,
+      });
+    } catch (e: any) {
+      if (e?.name === 'AbortError') {
+        console.warn('[resolveAgentModel] gateway fetch timed out after 1s — returning undefined');
+      }
+      return undefined;
+    } finally {
+      clearTimeout(timer);
+    }
     const data = await resp.json();
     const sessions = Array.isArray(data.result) ? data.result : (data.result?.sessions || data.result?.items || []);
 
