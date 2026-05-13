@@ -272,10 +272,15 @@ describe('#1267 POST upsert with originalVersion (rename)', () => {
     const body = await res.json();
     expect(res.status).toBe(200);
     expect(body.action).toBe('upserted');
-    // Did NOT take the rename path.
-    const sawSelectForUpdate = pgState.queryLog.some((q) =>
-      /FOR UPDATE/i.test(q.sql),
+    // Did NOT take the rename path. The rename branch is uniquely
+    // identified by an UPDATE against org_studio_tasks (to retag
+    // version strings on existing tasks) — the upsert branch never
+    // touches that table. (#1314: stopped asserting absence of
+    // SELECT ... FOR UPDATE; the upsert path now legitimately locks
+    // the project row to keep section/component shadows in sync.)
+    const sawTasksRetag = pgState.queryLog.some((q) =>
+      /UPDATE org_studio_tasks/i.test(q.sql),
     );
-    expect(sawSelectForUpdate).toBe(false);
+    expect(sawTasksRetag).toBe(false);
   });
 });
