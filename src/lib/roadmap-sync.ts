@@ -213,7 +213,7 @@ export async function syncProjectShadowVersion(
         continue;
       }
 
-      // mode === 'upsert' — replace existing or append new
+      // mode === 'upsert' — replace existing or append new (then sort below)
       const shadowEntry = {
         ...(rowFromCanonical || { version }),
         version,
@@ -225,6 +225,25 @@ export async function syncProjectShadowVersion(
         versions.push(shadowEntry);
       }
       container.versions = versions;
+
+      // #1314.1 (Basil 2026-05-12): keep the shadow array sorted by
+      // sort_order ASC after every mutation. The UI renders this array
+      // verbatim — no client-side sort — so insertion-order leaves new
+      // versions stranded at the bottom (e.g. 0.18.2 sitting after 1.0.0
+      // because it was POSTed later). Sort using the same key the
+      // canonical table uses (versionSortKey via /lib/version-utils).
+      try {
+        const { versionSortKey, compareVersions } = require('@/lib/version-utils');
+        container.versions.sort((a: any, b: any) => {
+          const ao = typeof a?.sort_order === 'number' ? a.sort_order : versionSortKey(a?.version);
+          const bo = typeof b?.sort_order === 'number' ? b.sort_order : versionSortKey(b?.version);
+          if (ao !== bo) return ao - bo;
+          return compareVersions(a?.version || '', b?.version || '');
+        });
+      } catch {
+        // best-effort — if sort utils aren't available, fall back to insertion order
+      }
+
       if (key === 'sections') sectionsHit++;
       else componentsHit++;
       dirty = true;
