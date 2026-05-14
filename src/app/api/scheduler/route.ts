@@ -233,7 +233,7 @@ async function sweepExpiredLeases(store: StoreData): Promise<{ bounced: number; 
   const now = Date.now();
   let bounced = 0;
   let skippedInactive = 0;
-  let mutated = false;
+  const provider = getStoreProvider();
 
   for (let i = 0; i < store.tasks.length; i++) {
     const t = store.tasks[i];
@@ -243,13 +243,7 @@ async function sweepExpiredLeases(store: StoreData): Promise<{ bounced: number; 
     if (now <= t.claim_lease_expires_at) continue; // lease still valid
 
     const assigneeLower = (t.assignee || '').toLowerCase();
-    if (!assigneeLower) {
-      // Expired lease with no assignee → already orphaned, bounce as cleanup.
-      // (Shouldn't happen in normal flow but keeps the contract self-healing.)
-    } else {
-      // Is the assignee active elsewhere within the window? If yes → bounce.
-      // If no → leave for slice 3's escalation ladder (whole-agent inactive
-      // ≠ moved-on-from-this-task; needs different handling).
+    if (assigneeLower) {
       const otherActivity = maxOtherTaskActivity(store, assigneeLower, t.id);
       const activeElsewhere = otherActivity > 0 && (now - otherActivity) < STALE_OTHER_ACTIVITY_WINDOW_MS;
       if (!activeElsewhere) {
@@ -262,40 +256,48 @@ async function sweepExpiredLeases(store: StoreData): Promise<{ bounced: number; 
     const lastActivity = t.lastActivityAt || t.claim_started_at || 0;
     const formerAssignee = t.assignee || '(unassigned)';
 
-    const history = t.statusHistory || [];
-    history.push({ status: 'backlog', timestamp: now, by: 'System (lease-bounce)' });
+    const history = (t.statusHistory || []).concat([
+      { status: 'backlog', timestamp: now, by: 'System (lease-bounce)' },
+    ]);
 
-    const comments = t.comments || [];
-    comments.push({
-      id: `sys-lease-bounce-${now}-${t.id}`,
-      author: 'System',
-      content:
-        `⏱️ **Claim lease expired — auto-bounced to backlog.**\n\n` +
-        `Lease expired at ${new Date(leaseExpiredAt).toISOString()}; ` +
-        `last activity on this task was ${lastActivity ? new Date(lastActivity).toISOString() : '(never)'}. ` +
-        `Former assignee: **${formerAssignee}** (still active on other tasks within 60 min — likely moved on).\n\n` +
-        `Anyone can pick this back up by claiming it.`,
-      createdAt: now,
-      type: 'system',
-    });
-
-    store.tasks[i] = {
-      ...t,
-      status: 'backlog',
-      assignee: '', // clear claim
-      claim_started_at: undefined,
-      claim_lease_expires_at: undefined,
-      loopCount: 0,
-      _lastDispatchedAt: undefined,
-      statusHistory: history,
-      comments,
-      lastActivityAt: now,
-    };
-    mutated = true;
-    bounced++;
+    // #1352: write per-task via the targeted provider API rather than a
+    // whole-store DELETE+INSERT writeStore() call. The whole-store path
+    // races with concurrent scheduler triggers and trips
+    // org_studio_projects_pkey under load. updateTask + addComment use
+    // single-row UPDATEs and are safe to call from any tick.
+    try {
+      await provider.updateTask(t.id, {
+        status: 'backlog',
+        assignee: '',
+        claim_started_at: null,
+        claim_lease_expires_at: null,
+        loopCount: 0,
+        _lastDispatchedAt: null,
+        statusHistory: history,
+        lastActivityAt: now,
+      });
+      await provider.addComment(
+        { kind: 'task', taskId: t.id },
+        {
+          id: `sys-lease-bounce-${now}-${t.id}`,
+          author: 'System',
+          content:
+            `⏱️ **Claim lease expired — auto-bounced to backlog.**\n\n` +
+            `Lease expired at ${new Date(leaseExpiredAt).toISOString()}; ` +
+            `last activity on this task was ${lastActivity ? new Date(lastActivity).toISOString() : '(never)'}. ` +
+            `Former assignee: **${formerAssignee}** (still active on other tasks within 60 min — likely moved on).\n\n` +
+            `Anyone can pick this back up by claiming it.`,
+          createdAt: now,
+          type: 'system',
+        },
+      );
+      bounced++;
+    } catch (err: any) {
+      console.warn(`[lease-sweep #1352] bounce failed for task ${t.id}: ${err?.message || err}`);
+      // continue — best-effort, don't let one failure abort the sweep
+    }
   }
 
-  if (mutated) await writeStore(store);
   return { bounced, skippedInactive };
 }
 
