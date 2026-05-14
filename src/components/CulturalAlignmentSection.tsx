@@ -51,6 +51,7 @@ interface CulturalAlignmentData {
 const VALUE_COLORS: Record<string, string> = {
   'people-first': '#f59e0b',
   'autonomy': 'var(--accent-primary)',
+  'craft': '#a855f7',
   'curiosity': '#3b82f6',
   'teamwork': '#22c55e',
 };

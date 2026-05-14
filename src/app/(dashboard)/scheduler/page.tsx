@@ -965,7 +965,7 @@ export default function SchedulerPage() {
               onChange={e => { setPreamble(e.target.value); setPreambleDirty(true); }}
               onBlur={() => { if (preambleDirty) savePreamble(preamble); }}
               rows={8}
-              placeholder={`Example:\nMission: Foster continuous learning and growth with coaching agents that make hard things easy.\n\nValues — P.A.C.T.:\n1. People-First — obsessed with the people we serve\n2. Autonomy — own your domain, act on what matters\n3. Curiosity — ask why, dig deeper, never stop learning\n4. Teamwork — communicate openly, share wins and failures`}
+              placeholder={`Example:\nMission: Foster continuous learning and growth with coaching agents that make hard things easy.\n\nValues — P.A.C.C.T.:\n1. People-First — obsessed with the people we serve\n2. Autonomy — own your domain, act on what matters\n3. Craft — build it right, not just done\n4. Curiosity — ask why, dig deeper, never stop learning\n5. Teamwork — communicate openly, share wins and failures`}
               className="w-full bg-[var(--bg-primary)] border border-[var(--border-strong)] rounded-[var(--radius-md)] px-3 py-2.5 text-[var(--text-sm)] text-[var(--text-primary)] placeholder:text-[var(--text-muted)] resize-y focus:outline-none focus:border-[var(--accent-primary)] font-mono leading-relaxed min-h-[120px]"
             />
             <div className="flex items-center justify-between">

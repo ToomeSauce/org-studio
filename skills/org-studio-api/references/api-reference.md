@@ -252,7 +252,7 @@ Query params: `?agentId=Ana&type=kudos&limit=20` (all optional, case-insensitive
 }
 ```
 
-PACT value slugs: `people-first`, `autonomy`, `curiosity`, `teamwork`
+PACCT value slugs: `people-first`, `autonomy`, `craft`, `curiosity`, `teamwork`
 
 ### POST /api/kudos — delete
 

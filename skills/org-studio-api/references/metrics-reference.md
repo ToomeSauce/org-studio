@@ -177,7 +177,7 @@ Categories: `throughput`, `quality`, `engagement`, `consistency`, `general`
 
 ### GET /api/metrics/cultural-alignment
 
-PACT values breakdown from kudos/flags data.
+PACCT values breakdown from kudos/flags data.
 
 ```json
 {

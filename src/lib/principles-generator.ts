@@ -80,6 +80,8 @@ const PRINCIPLE_TEMPLATES = {
   kudos: {
     autonomy:
       "When facing a reversible decision in your domain: decide, document your rationale, and move on. Don't escalate unless the decision is irreversible or crosses domain boundaries.",
+    craft:
+      'Fix root causes, not symptoms. Before marking done, ask: did I handle the edge cases, write the test, and leave the code better than I found it? Take the extra 10 minutes — future-you (or future-Trevor) will thank you.',
     curiosity:
       'Explore creative solutions before defaulting to the obvious approach. When you find a better way, document what you learned for future reference.',
     teamwork:
@@ -90,6 +92,8 @@ const PRINCIPLE_TEMPLATES = {
   flag: {
     autonomy:
       "Avoid unnecessary escalation. If a decision is within your domain and reversible, make the call yourself. Only escalate when the impact is irreversible or outside your ownership.",
+    craft:
+      "Don't ship work without thinking about edge cases, tests, or root cause. A ticket that looks done but skips the boring details creates compound debt the next ticket has to pay back.",
     curiosity:
       "Don't take the path of least resistance when a better approach exists. Invest time understanding the problem before jumping to implementation.",
     teamwork:

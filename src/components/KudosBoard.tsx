@@ -22,6 +22,7 @@ interface Kudos {
 const VALUE_COLORS: Record<string, { bg: string; text: string }> = {
   'people-first': { bg: 'bg-red-500/10', text: 'text-red-500' },
   autonomy: { bg: 'bg-orange-500/10', text: 'text-orange-500' },
+  craft: { bg: 'bg-purple-500/10', text: 'text-purple-500' },
   curiosity: { bg: 'bg-cyan-500/10', text: 'text-cyan-500' },
   teamwork: { bg: 'bg-emerald-500/10', text: 'text-emerald-500' },
 };

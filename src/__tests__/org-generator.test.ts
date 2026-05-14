@@ -61,10 +61,11 @@ function makeContext(overrides: Record<string, any> = {}) {
   return {
     missionStatement: 'Foster continuous learning and growth with coaching agents that make hard things easy.',
     values: {
-      name: 'P.A.C.T.',
+      name: 'P.A.C.C.T.',
       items: [
         { letter: 'P', icon: '📣', title: 'People-First', description: 'Obsessed with the people we serve.' },
         { letter: 'A', icon: '🔥', title: 'Autonomy', description: 'Own your domain, act on what matters.' },
+        { letter: 'C', icon: '🛠️', title: 'Craft', description: 'Build it right, not just done.' },
         { letter: 'C', icon: '🔍', title: 'Curiosity', description: 'Ask why, dig deeper, never stop learning.' },
         { letter: 'T', icon: '🤝', title: 'Teamwork', description: 'Work together, communicate openly.' },
       ],
@@ -87,9 +88,10 @@ describe('generateOrgMd', () => {
     const ctx = makeContext();
     const md = generateOrgMd(ctx);
 
-    expect(md).toContain('## Values — P.A.C.T.');
+    expect(md).toContain('## Values — P.A.C.C.T.');
     expect(md).toContain('**People-First**');
     expect(md).toContain('**Autonomy**');
+    expect(md).toContain('**Craft**');
     expect(md).toContain('**Curiosity**');
     expect(md).toContain('**Teamwork**');
   });

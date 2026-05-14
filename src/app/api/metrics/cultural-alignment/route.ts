@@ -40,11 +40,12 @@ function getISOWeek(ts: number): string {
   return `${d.getUTCFullYear()}-W${String(weekNum).padStart(2, '0')}`;
 }
 
-const VALUE_SLUGS = ['people-first', 'autonomy', 'curiosity', 'teamwork'];
+const VALUE_SLUGS = ['people-first', 'autonomy', 'craft', 'curiosity', 'teamwork'];
 
 const DEFAULT_PACT_VALUES: PactValueConfig[] = [
   { icon: '📣', title: 'People-First', letter: 'P' },
   { icon: '🔥', title: 'Autonomy', letter: 'A' },
+  { icon: '🛠️', title: 'Craft', letter: 'C' },
   { icon: '🔍', title: 'Curiosity', letter: 'C' },
   { icon: '🤝', title: 'Teamwork', letter: 'T' },
 ];

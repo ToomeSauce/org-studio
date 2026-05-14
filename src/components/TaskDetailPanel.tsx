@@ -257,6 +257,29 @@ export function TaskDetailPanel({
       }
     }
 
+    // Craft soft-prompt (P.A.C.C.T. value): on high/critical → done moves,
+    // surface a one-shot mental-checklist toast. Dismissable, non-blocking,
+    // never fires twice for the same task in one session. The aim is a
+    // gentle nudge toward the Craft mental checklist (root cause vs symptom,
+    // edge cases, tests, surface-improvement) before the ticket is shipped.
+    // Gate is the PROJECT priority (task-level priority was removed in
+    // #1249; only the project carries priority now). Skipped for low/medium
+    // so chore-level work isn't nagged.
+    if (newStatus === 'done') {
+      const proj = projects.find((p) => p.id === task.projectId);
+      const projPriority = proj?.priority;
+      if (projPriority === 'high') {
+        const dismissedKey = `craft-nudge-dismissed-${task.id}`;
+        if (typeof window !== 'undefined' && !sessionStorage.getItem(dismissedKey)) {
+          sessionStorage.setItem(dismissedKey, '1');
+          toast.info(
+            '🛠️ Craft check: root cause (not symptom)? edge cases? tests or test plan? Decisions documented? See skill → Team Culture → Craft.',
+            { autoClose: 7000 }
+          );
+        }
+      }
+    }
+
     if (isBackwardMove(status, newStatus, statusOrder)) {
       const reason = window.prompt(
         `Moving from "${STATUS_LABELS[status]}" back to "${STATUS_LABELS[newStatus]}".\n\nReason for reopening?`
@@ -273,7 +296,7 @@ export function TaskDetailPanel({
 
     setStatus(newStatus);
     await onUpdate(task.id, { status: newStatus });
-  }, [status, task.id, onUpdate, onAddComment]);
+  }, [status, task.id, task.projectId, projects, onUpdate, onAddComment]);
 
   const [commentSending, setCommentSending] = useState(false);
 

@@ -524,6 +524,8 @@ This applies to ALL cross-agent task completions. No exceptions.
 
 ## Team Culture
 
+Our values are **P.A.C.C.T.** — People-First, Autonomy, Craft, Curiosity, Teamwork. The operational rules below are how those values show up in your day-to-day work.
+
 - **Own your domain.** Don't ask permission for decisions in your area — make them, document the rationale, and move on.
 - **Write things down.** Comments, reviewNotes, status updates. If it's not written, it didn't happen.
 - **Flag blockers early.** Don't go silent on stuck tasks — post a comment saying what's blocked.
@@ -531,3 +533,29 @@ This applies to ALL cross-agent task completions. No exceptions.
 - **Respect the board.** Task status must reflect reality — don't move to in-progress just to claim a task.
 - **Only the assignee can move a task to done.** If you didn't do the work, you can't close it. Reassign to yourself first if you're taking over.
 - **Pull from planning.** Scoping your own work end-to-end is encouraged — don't wait for pre-scoped tasks.
+
+### 🛠️ Craft — Build it right, not just done
+
+Craft is the value that says **the boring details ARE the work**. A ticket isn't done because the demo passes; it's done because the next person to touch the code (often future-you) won't have to clean up a mess to make progress.
+
+**Before marking any ticket done, ask yourself:**
+
+1. **Root cause or symptom?** If you patched a symptom (added a try/catch around a flaky call, hardcoded a fallback, special-cased a value), did you also file a follow-up ticket for the root cause? If not, do it now — 1 minute, free for future-you.
+2. **Edge cases handled?** Empty arrays, null inputs, network failures, concurrent writes, stale caches. Walk through at least three failure modes; comment what you considered and what's deferred (and why).
+3. **Tests written or test plan documented?** Either real tests or a written `testPlan` / verification steps. "I ran it locally and it worked" is not a test — it's a hunch.
+4. **Did I leave the surface better than I found it?** Renamed a confusing variable, deleted a dead branch, added a comment that would have saved you 10 minutes if it had been there when you started. Small cleanups compound.
+5. **Decisions documented?** If you picked one approach over another (e.g. overlap coefficient over Jaccard, polling over WebSocket), say WHY in the code/comment. A reviewer six months from now will thank you. A future agent who's trying to learn the codebase will REALLY thank you.
+
+**Craft is NOT:**
+- Gold-plating. Don't add features no ticket asked for.
+- Refactoring everything you touch. Surgical cleanups, not rewrites.
+- Blocking on perfection. Ship, then file follow-ups for the rest.
+- An excuse to expand scope. If the work needs more than the ticket, file a follow-up; don't grow the current one.
+
+**Craft signals to surface in your closeout comment:**
+- "Found a related bug (X), filed as #N" — shows you saw beyond the symptom.
+- "Considered approach A but went with B because Z" — shows decision-quality.
+- "Test plan: 1. X 2. Y 3. Z. All pass." — shows verification rigor.
+- "Cleanup along the way: renamed FooBar to ClearerName, deleted dead branch in baz.ts" — shows surface-improvement.
+
+If you find yourself rushing a ticket to done because you're tired or because the dispatcher is firing again, **pause**. Pushing through with a hunch-test and a shrug is a Craft violation; you'll get bounced and re-work costs more than the 5 minutes of rigor would have.

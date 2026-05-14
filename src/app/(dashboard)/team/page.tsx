@@ -569,7 +569,7 @@ export default function TeamPage() {
             Our {valuesData.name || 'Values'}
           </h2>
           <p className="text-[var(--text-base)] text-[var(--text-tertiary)] mt-1 mb-4">Guiding principles. Cultural values.</p>
-          <div className={clsx('grid gap-4', valuesData.items.length <= 3 ? 'grid-cols-1 md:grid-cols-3' : 'grid-cols-2 md:grid-cols-4')}>
+          <div className={clsx('grid gap-4', valuesData.items.length <= 3 ? 'grid-cols-1 md:grid-cols-3' : valuesData.items.length === 5 ? 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5' : 'grid-cols-2 md:grid-cols-4')}>
             {valuesData.items.map((v: any, idx: number) => (
               <ValueCard key={v.letter} value={v} index={idx} allValues={valuesData} />
             ))}

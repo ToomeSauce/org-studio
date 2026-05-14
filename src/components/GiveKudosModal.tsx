@@ -22,6 +22,7 @@ export interface GiveKudosModalProps {
 const PACT_VALUES = [
   { id: 'people-first', label: 'People-First', icon: '📣' },
   { id: 'autonomy', label: 'Autonomy', icon: '🔥' },
+  { id: 'craft', label: 'Craft', icon: '🛠️' },
   { id: 'curiosity', label: 'Curiosity', icon: '🔍' },
   { id: 'teamwork', label: 'Teamwork', icon: '🤝' },
 ];
