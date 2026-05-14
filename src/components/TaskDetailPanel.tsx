@@ -10,6 +10,7 @@ import {
 import { clsx } from 'clsx';
 import type { Task, Project, TaskComment } from '@/lib/store';
 import { extractMentions } from '@/lib/store';
+import { detectEvidence, formatEvidenceList } from '@/lib/evidence-detector';
 import { toast } from 'react-toastify';
 
 // #1184 — per-ticket dispatch-fizzle badge. Pure helper over task+project
@@ -264,6 +265,36 @@ export function TaskDetailPanel({
       }
     }
 
+    // #1351 slice 4 — P0/P1 evidence gate on done-moves.
+    // Spec: 'P0/P1 done moves without commit/PR/test/duplicate ref trigger
+    // confirm dialog citing missing evidence; closure still allowed,
+    // absence logged.' Soft gate per the ticket constraint ('no auto-
+    // reject'). The detector scans task title/description/comments/
+    // reviewNotes/testPlan + the duplicate_of pointer; if it finds NO
+    // evidence and the project priority is high, we show a confirm
+    // dialog. User cancels → bail out, do NOT change status. User
+    // confirms → status moves AND we post a system audit comment so
+    // the absence is logged. We deliberately use window.confirm rather
+    // than a custom modal here for slice 4 — native modal keeps the
+    // surface tiny, no new component, no z-index war with the slide-out
+    // panel. A custom dialog can replace it in a follow-up if the UX
+    // wants richer affordance (e.g. inline 'paste a commit SHA' field).
+    let closedWithoutEvidence = false;
+    if (newStatus === 'done') {
+      const proj = projects.find((p) => p.id === task.projectId);
+      const projPriority = proj?.priority;
+      if (projPriority === 'high') {
+        const evidence = detectEvidence(task);
+        if (!evidence.hasEvidence) {
+          const proceed = window.confirm(
+            `⚠️ This ticket is on a high-priority project but has no shipped-work evidence linked.\n\nMissing: ${evidence.missingLabel}.\n\nGood evidence looks like: a commit SHA in a comment, a #PR or github.com/.../pull/N URL, a populated test plan, or a duplicate_of pointer.\n\nClose anyway?`,
+          );
+          if (!proceed) return;
+          closedWithoutEvidence = true;
+        }
+      }
+    }
+
     // Craft soft-prompt (P.A.C.C.T. value): on high/critical → done moves,
     // surface a one-shot mental-checklist toast. Dismissable, non-blocking,
     // never fires twice for the same task in one session. The aim is a
@@ -303,6 +334,23 @@ export function TaskDetailPanel({
 
     setStatus(newStatus);
     await onUpdate(task.id, { status: newStatus });
+
+    // #1351 slice 4 — audit log for evidence-less closures. We post this
+    // AFTER the status update so the comment timeline shows the move,
+    // then the audit entry. Best-effort; failure to comment does not
+    // roll back the close (the close already happened anyway). This is
+    // the 'absence logged' half of the spec.
+    if (closedWithoutEvidence) {
+      try {
+        await onAddComment(task.id, {
+          author: 'System',
+          content: '📝 Closed without shipped-work evidence (no commit SHA / PR ref / test plan / duplicate-of pointer in title/description/comments). High-priority project; logged for retrospective.',
+          type: 'system',
+        });
+      } catch (e) {
+        console.warn('[evidence-gate] failed to post audit comment:', e);
+      }
+    }
   }, [status, task.id, task.projectId, projects, onUpdate, onAddComment]);
 
   // #1351 slice 3 — "Mark as duplicate of #N" handler. Sets the
