@@ -822,6 +822,44 @@ export async function POST(req: NextRequest) {
         // PERF: Use targeted provider.createTask() instead of full store write
         await getStoreProvider().createTask(task);
 
+        // #1351 slice 2 — fire-and-forget duplicate-detection hook.
+        // Scores the just-created task against the project's linked repos
+        // (merged PRs, last 90d) and the done-task corpus, then writes
+        // `possibly_already_shipped` back via a second small update. Never
+        // blocks ticket create on the lookup (constraint: best-effort).
+        // Skipped for tasks with too little content to score (<2 tokens).
+        if (task.title && (task.title.length + (task.description?.length || 0)) >= 10) {
+          (async () => {
+            try {
+              const { computeMatches } = await import('@/lib/possibly-shipped-hook');
+              const project = (store.projects || []).find((p: any) => p?.id === task.projectId);
+              const { matches, meta } = await computeMatches({
+                task: task as any,
+                project,
+                allTasks: store.tasks || [],
+              });
+              if (matches && matches.length > 0) {
+                await getStoreProvider().updateTask(task.id, {
+                  possibly_already_shipped: matches,
+                } as any);
+                console.info(
+                  `[possibly-shipped #1351] task ${task.id} (#${task.ticketNumber || '?'}): ` +
+                    `${matches.length} match(es) [top=${matches[0].score} ${matches[0].id}] ` +
+                    `(${meta.prCount} PRs, ${meta.doneTaskCount} done tasks, ${meta.durationMs}ms)`,
+                );
+              } else {
+                console.info(
+                  `[possibly-shipped #1351] task ${task.id} (#${task.ticketNumber || '?'}): ` +
+                    `no matches (${meta.prCount} PRs, ${meta.doneTaskCount} done tasks, ${meta.durationMs}ms` +
+                    (meta.error ? `, error=${meta.error}` : '') + ')',
+                );
+              }
+            } catch (e: any) {
+              console.error('[possibly-shipped #1351] hook failed (non-fatal):', e?.message || e);
+            }
+          })();
+        }
+
         // Write back taskId to roadmap item if this is a roadmap task
         if (task.roadmapItemId && task.version && task.projectId) {
           (async () => {
@@ -1085,6 +1123,41 @@ export async function POST(req: NextRequest) {
             const isDone = updates.status === 'done';
             // Fire async — never block the response
             syncRoadmapItemForTask(updated.projectId, payload.id, isDone).catch(() => {});
+          }
+
+          // #1351 slice 2 — re-run the duplicate-detection hook when the
+          // ticket's title or description changed in this update (the two
+          // fields the matcher consumes). Skipped on pure status / sort /
+          // assignee updates to avoid redundant gh-api calls. Same
+          // fire-and-forget pattern as addTask.
+          const titleChanged = typeof payload.updates?.title === 'string' && payload.updates.title !== t.title;
+          const descChanged = typeof payload.updates?.description === 'string' && payload.updates.description !== t.description;
+          if (titleChanged || descChanged) {
+            const taskForHook = updated as any;
+            (async () => {
+              try {
+                const { computeMatches } = await import('@/lib/possibly-shipped-hook');
+                const project = (store.projects || []).find((p: any) => p?.id === taskForHook.projectId);
+                const { matches, meta } = await computeMatches({
+                  task: taskForHook,
+                  project,
+                  allTasks: store.tasks || [],
+                });
+                // Always write back (even an empty array) so stale matches
+                // from a previous title don't linger after an edit.
+                await getStoreProvider().updateTask(taskForHook.id, {
+                  possibly_already_shipped: matches || [],
+                } as any);
+                console.info(
+                  `[possibly-shipped #1351] (updateTask) task ${taskForHook.id} (#${taskForHook.ticketNumber || '?'}): ` +
+                    `${matches?.length || 0} match(es) ` +
+                    (matches && matches.length > 0 ? `[top=${matches[0].score} ${matches[0].id}] ` : '') +
+                    `(${meta.prCount} PRs, ${meta.doneTaskCount} done tasks, ${meta.durationMs}ms)`,
+                );
+              } catch (e: any) {
+                console.error('[possibly-shipped #1351] updateTask hook failed (non-fatal):', e?.message || e);
+              }
+            })();
           }
 
         }
