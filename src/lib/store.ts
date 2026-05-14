@@ -69,6 +69,11 @@ export interface Project {
   // --- Vision Board fields (Phase 1+) ---
   visionDocPath?: string;       // Path to VISION.md (repo-relative or absolute)
   repoUrl?: string;             // GitHub repo URL (e.g. "org/my-project")
+  // #1351 — multi-repo support. Projects with frontend+backend or multiple
+  // services list every repo here. The single `repoUrl` above is kept for
+  // backward compat and treated as the first entry when `repoUrls` is unset.
+  // Each entry is "owner/repo" form (no protocol, no https://github.com prefix).
+  repoUrls?: string[];
   lifecycle?: 'building' | 'mature' | 'bau' | 'sunset';
   visionOwner?: string;         // Human who approves version plans
   devOwner?: string;            // Agent/human who does dev work
@@ -218,6 +223,30 @@ export interface Task {
   previouslyBlockedBy?: number[];
   comments?: TaskComment[];
   statusHistory?: { status: string; timestamp: number; by?: string; model?: string }[];
+
+  // #1351 — Repo-truth grounding. Populated on addTask / updateTask by the
+  // fuzzy matcher when create-time content scores above threshold against
+  // recent merged PRs (linked repos, last 90d) or done tasks (last 90d).
+  // Best-effort: empty / undefined means "no matches found OR matcher
+  // unavailable", not "definitively no duplicates". Persisted via the
+  // JSONB overflow column (no migration). Rendered as a banner in
+  // TaskDetailPanel (slice 3).
+  possibly_already_shipped?: Array<{
+    type: 'pr' | 'task';
+    id: string;        // PR: "owner/repo#123"; task: ticketNumber as string
+    title: string;     // PR/task title at match time
+    score: number;     // 0..1, tuned threshold (see gh-pr-cache.ts)
+    url?: string;      // PR HTML url for one-click open
+    mergedAt?: number; // ms epoch (PRs only)
+    matchedAt: number; // when this match was recorded
+  }>;
+
+  // #1351 — First-class duplicate-of pointer. When set, both tickets
+  // cross-link in the UI and the duplicate inherits the canonical ticket's
+  // status semantically (no auto-status-mirroring; humans / agents flip
+  // status explicitly and reference this field for audit). Ticket number
+  // form (e.g. 1342) for human-friendly cross-reference.
+  duplicate_of?: number;
 }
 
 export interface LoopStep {
