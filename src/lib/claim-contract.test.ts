@@ -39,6 +39,7 @@ import {
   maxOtherTaskActivity,
   newLeaseStamps,
   shouldExtendLease,
+  shouldEscalateAgainst,
   type TaskLike,
   type TeammateLike,
 } from './claim-contract';
@@ -488,6 +489,68 @@ describe('#1352 claim-contract — newLeaseStamps + shouldExtendLease', () => {
         }),
         NOW + HOUR,
         NOW,
+      ),
+    ).toBe(false);
+  });
+});
+
+// ---- #1355 — shouldEscalateAgainst idempotency guard ----
+
+describe('#1355 — shouldEscalateAgainst (escalation idempotency guard)', () => {
+  it('returns true for a valid in-progress task with an active lease', () => {
+    expect(
+      shouldEscalateAgainst(
+        task({ id: 't', status: 'in-progress', claim_lease_expires_at: NOW - MIN }),
+      ),
+    ).toBe(true);
+  });
+
+  it('returns false for null (task deleted between sweep snapshot and escalation)', () => {
+    expect(shouldEscalateAgainst(null)).toBe(false);
+  });
+
+  it('returns false for undefined (same semantics as null)', () => {
+    expect(shouldEscalateAgainst(undefined)).toBe(false);
+  });
+
+  it('returns false for a task that was bounced to backlog (concurrent bounce)', () => {
+    expect(
+      shouldEscalateAgainst(
+        task({ id: 't', status: 'backlog', claim_lease_expires_at: NOW - MIN }),
+      ),
+    ).toBe(false);
+  });
+
+  it('returns false for a task moved to done (agent completed between ticks)', () => {
+    expect(
+      shouldEscalateAgainst(
+        task({ id: 't', status: 'done', claim_lease_expires_at: NOW - MIN }),
+      ),
+    ).toBe(false);
+  });
+
+  it('returns false when claim_lease_expires_at is cleared (concurrent bounce cleared lease)', () => {
+    expect(
+      shouldEscalateAgainst(
+        task({ id: 't', status: 'in-progress', claim_lease_expires_at: null }),
+      ),
+    ).toBe(false);
+  });
+
+  it('returns false when claim_lease_expires_at is undefined (pre-#1352 task)', () => {
+    expect(
+      shouldEscalateAgainst(
+        task({ id: 't', status: 'in-progress' }),
+      ),
+    ).toBe(false);
+  });
+
+  it('returns true for a task in review status (NOT valid — should be false)', () => {
+    // Edge case: review is NOT in-progress. A task that moved to review
+    // between the sweep and escalation should not be escalated.
+    expect(
+      shouldEscalateAgainst(
+        task({ id: 't', status: 'review', claim_lease_expires_at: NOW - MIN }),
       ),
     ).toBe(false);
   });

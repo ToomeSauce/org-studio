@@ -44,6 +44,7 @@ import {
   isDispatchBlocked,
   dispatchBlockReason,
   maxOtherTaskActivity as maxOtherTaskActivityLib,
+  shouldEscalateAgainst,
 } from '@/lib/claim-contract';
 const DEFAULT_MODEL = 'foundry-openai-chat/gpt-5.4';
 
@@ -260,9 +261,31 @@ async function escalateInactiveClaim(
   task: any,
   assigneeName: string,
   settingsTeammates: any[],
-): Promise<{ level: number; reason: 'cooldown' | 'no-teammate' | 'acted' }> {
+): Promise<{ level: number; reason: 'cooldown' | 'no-teammate' | 'acted' | 'stale-skip' }> {
   const now = Date.now();
   const provider = getStoreProvider();
+
+  // #1355 idempotency guard: re-read the task from the canonical store
+  // before performing any writes. Between the sweep's snapshot and now,
+  // the task may have been deleted (sandbox probe cleanup), bounced by a
+  // concurrent sweep tick, or moved out of in-progress by the agent.
+  // If so, skip the entire escalation — no comment, no chat, no stamp.
+  try {
+    const freshStore = await provider.read();
+    const freshTask = freshStore.tasks.find((t: any) => t.id === task.id);
+    if (!shouldEscalateAgainst(freshTask)) {
+      console.warn(
+        `[lease-sweep #1355] Skipping escalation for task ${task.id} — ` +
+        `task ${!freshTask ? 'no longer exists' : `status=${freshTask.status}`} (stale sweep snapshot).`
+      );
+      return { level: 0, reason: 'stale-skip' };
+    }
+  } catch (err: any) {
+    // If re-read fails, proceed with the original snapshot — best-effort
+    // guard. The escalation itself is safe (updateTask is a no-op on a
+    // missing row and addComment gracefully fails).
+    console.warn(`[lease-sweep #1355] Re-read guard failed: ${err?.message}. Proceeding with original snapshot.`);
+  }
 
   const assigneeLower = assigneeName.toLowerCase();
   const teammate = settingsTeammates.find(
@@ -433,6 +456,20 @@ async function sweepExpiredLeases(store: StoreData): Promise<{ bounced: number; 
     }
     // classification === 'bounce' or 'no-assignee' — fall through to the
     // existing bounce code below.
+
+    // #1355 idempotency guard: re-read before bounce write (same pattern
+    // as escalateInactiveClaim above).
+    try {
+      const freshStore = await provider.read();
+      const freshTask = freshStore.tasks.find((ft: any) => ft.id === t.id);
+      if (!shouldEscalateAgainst(freshTask)) {
+        console.warn(
+          `[lease-sweep #1355] Skipping bounce for task ${t.id} — ` +
+          `task ${!freshTask ? 'no longer exists' : `status=${freshTask.status}`}.`
+        );
+        continue;
+      }
+    } catch { /* best-effort guard; proceed on failure */ }
 
     const leaseExpiredAt = t.claim_lease_expires_at;
     const lastActivity = t.lastActivityAt || t.claim_started_at || 0;

@@ -181,6 +181,30 @@ export function computeEscalation(
   };
 }
 
+// ---- 2b. Escalation idempotency guard (#1355) ----
+
+/**
+ * Returns true if the task is still a valid escalation target.
+ *
+ * Call this AFTER re-reading the task from the store (provider.getTask
+ * or provider.read().tasks.find()). If the task was deleted, bounced,
+ * or moved out of in-progress between the sweep scan and the escalation
+ * write, this returns false and the caller MUST skip the entire
+ * escalation for this tick — no stamping, no comment, no chat.send.
+ *
+ * Logging the skip is the caller's responsibility (observability).
+ *
+ * This is the #1355 idempotency guard: "If the task no longer exists
+ * or is no longer in-progress, skip."
+ */
+export function shouldEscalateAgainst(task: TaskLike | null | undefined): boolean {
+  if (!task) return false;
+  if (task.status !== 'in-progress') return false;
+  // If the task had its lease cleared (e.g. by a concurrent bounce), don't double-dip.
+  if (!task.claim_lease_expires_at) return false;
+  return true;
+}
+
 // ---- 3. Dispatch enforcement ----
 
 /**
