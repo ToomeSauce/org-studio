@@ -1215,6 +1215,7 @@ function TasksPageInner() {
           agents={agents}
           nameColors={nameColors}
           qaLead={null}
+          tasks={tasks}
           onUpdate={handlePanelUpdate}
           onDelete={handlePanelDelete}
           onAddComment={handlePanelAddComment}

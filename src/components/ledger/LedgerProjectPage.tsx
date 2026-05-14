@@ -542,6 +542,7 @@ function LedgerProjectPageInner() {
           agents={storeData?.settings?.teammates?.map((t: any) => t.name) || []}
           nameColors={{}}
           qaLead={project?.qaLead}
+          tasks={storeData?.tasks || []}
           onUpdate={async (id, updates) => { await updateTask(id, updates); }}
           onDelete={async (id) => { await deleteTask(id); }}
           onAddComment={async (taskId, comment) => addTaskComment(taskId, comment)}

@@ -5,6 +5,7 @@ import {
   X, ChevronDown, ChevronRight, Target, Shield, FileText,
   Link as LinkIcon, MessageSquare, Clock, Trash2,
   AlertTriangle, Send, ClipboardCheck,
+  GitPullRequest, ExternalLink, Sparkles, CheckCircle2,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import type { Task, Project, TaskComment } from '@/lib/store';
@@ -162,6 +163,12 @@ interface TaskDetailPanelProps {
   agents: string[];
   nameColors: Record<string, string>;
   qaLead?: string | null;
+  // #1351 slice 3 — optional task list used to resolve `duplicate_of`
+  // (ticketNumber) and matched-task entries in possibly_already_shipped
+  // into clickable in-app links. Safe additive prop: when omitted/empty,
+  // the banner still renders and external (PR) links still work; only the
+  // task-cross-link button degrades to a search query (`/tasks?q=#N`).
+  tasks?: Task[];
   onUpdate: (id: string, updates: Partial<Task>) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
   onAddComment: (taskId: string, comment: Omit<TaskComment, 'id' | 'createdAt'>) => Promise<TaskComment>;
@@ -169,7 +176,7 @@ interface TaskDetailPanelProps {
 }
 
 export function TaskDetailPanel({
-  task, projects, agents, nameColors, qaLead, onUpdate, onDelete, onAddComment, onClose,
+  task, projects, agents, nameColors, qaLead, tasks = [], onUpdate, onDelete, onAddComment, onClose,
 }: TaskDetailPanelProps) {
   // Local editing state
   const [title, setTitle] = useState(task.title);
@@ -297,6 +304,47 @@ export function TaskDetailPanel({
     setStatus(newStatus);
     await onUpdate(task.id, { status: newStatus });
   }, [status, task.id, task.projectId, projects, onUpdate, onAddComment]);
+
+  // #1351 slice 3 — "Mark as duplicate of #N" handler. Sets the
+  // duplicate_of pointer on the current ticket, posts an audit-trail
+  // system comment so the cross-link is discoverable from history, and
+  // (best-effort) also writes a comment on the canonical ticket so the
+  // back-reference is visible from both sides. Non-blocking: failure to
+  // comment on the canonical side does NOT roll back the pointer write.
+  const handleMarkDuplicate = useCallback(async (ticketNumber: number, sourceTitle?: string) => {
+    if (!ticketNumber) return;
+    const confirmed = window.confirm(
+      `Mark this ticket as a duplicate of #${ticketNumber}?\n\nThis sets duplicate_of=${ticketNumber} on the current ticket and posts a system comment on both sides. You can still keep the ticket open or close it manually.`,
+    );
+    if (!confirmed) return;
+    try {
+      await onUpdate(task.id, { duplicate_of: ticketNumber });
+      await onAddComment(task.id, {
+        author: 'System',
+        content: `Marked as duplicate of #${ticketNumber}${sourceTitle ? ` — “${sourceTitle}”` : ''} (via possibly-shipped banner).`,
+        type: 'system',
+      });
+      // Best-effort back-reference on the canonical ticket. Resolved via
+      // the optional `tasks` prop — if it's empty (e.g. ledger view didn't
+      // pass it yet), we just skip the back-reference rather than failing.
+      const canonical = tasks.find((t) => t.ticketNumber === ticketNumber);
+      if (canonical && canonical.id !== task.id) {
+        try {
+          await onAddComment(canonical.id, {
+            author: 'System',
+            content: `Back-ref: ticket #${(task as any).ticketNumber ?? task.id} marked as duplicate of this one.`,
+            type: 'system',
+          });
+        } catch (e) {
+          console.warn('[duplicate-of] failed to post back-ref comment:', e);
+        }
+      }
+      toast.success(`Marked as duplicate of #${ticketNumber}.`);
+    } catch (e) {
+      console.error('[duplicate-of] failed:', e);
+      toast.error('Failed to mark as duplicate. Check console.');
+    }
+  }, [task.id, (task as any).ticketNumber, tasks, onUpdate, onAddComment]);
 
   const [commentSending, setCommentSending] = useState(false);
 
@@ -429,6 +477,110 @@ export function TaskDetailPanel({
 
         {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain">
+          {/* #1351 slice 3 — PossiblyShipped + DuplicateOf banner. Rendered
+              at the top of the scrollable area so it's the first thing the
+              human/agent sees when opening a ticket. Collapsible, dismissable
+              once the user marks a duplicate. Empty-state: nothing renders. */}
+          {(() => {
+            const matches = task.possibly_already_shipped || [];
+            const dupOf = task.duplicate_of;
+            if (!dupOf && matches.length === 0) return null;
+
+            // Resolve canonical ticket for chip link (if tasks[] available).
+            const canonical = dupOf ? tasks.find((t) => t.ticketNumber === dupOf) : null;
+            const canonicalHref = canonical
+              ? `/context?task=${canonical.id}`
+              : dupOf
+              ? `/tasks?q=%23${dupOf}`
+              : null;
+
+            return (
+              <div className="px-5 py-3 border-b border-[var(--border-default)] bg-[var(--warning-subtle)]/30 space-y-2">
+                {dupOf && (
+                  <div className="flex items-center gap-2 text-[var(--text-sm)]">
+                    <CheckCircle2 size={14} className="text-[var(--accent-primary)] shrink-0" />
+                    <span className="text-[var(--text-secondary)]">Marked duplicate of</span>
+                    {canonicalHref ? (
+                      <a
+                        href={canonicalHref}
+                        className="font-mono text-[var(--accent-primary)] hover:underline"
+                      >
+                        #{dupOf}
+                      </a>
+                    ) : (
+                      <span className="font-mono text-[var(--accent-primary)]">#{dupOf}</span>
+                    )}
+                    {canonical?.title && (
+                      <span className="text-[var(--text-muted)] truncate">— {canonical.title}</span>
+                    )}
+                  </div>
+                )}
+
+                {!dupOf && matches.length > 0 && (
+                  <div>
+                    <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--warning)] mb-2">
+                      <Sparkles size={12} />
+                      <span>Possibly already shipped — {matches.length} match{matches.length === 1 ? '' : 'es'}</span>
+                    </div>
+                    <ul className="space-y-1.5">
+                      {matches.slice(0, 5).map((m, i) => (
+                        <li
+                          key={`${m.type}:${m.id}:${i}`}
+                          className="flex items-start gap-2 text-[var(--text-sm)] leading-snug"
+                        >
+                          <span aria-hidden className="mt-0.5 shrink-0 text-[var(--text-muted)]">
+                            {m.type === 'pr' ? <GitPullRequest size={13} /> : <FileText size={13} />}
+                          </span>
+                          <span className="flex-1 min-w-0">
+                            <span className="text-[10px] font-mono text-[var(--text-muted)] mr-1.5">
+                              {(m.score * 100).toFixed(0)}%
+                            </span>
+                            {m.url ? (
+                              <a
+                                href={m.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[var(--accent-primary)] hover:underline break-words"
+                              >
+                                {m.id} — {m.title}
+                                <ExternalLink size={10} className="inline ml-1 mb-0.5" />
+                              </a>
+                            ) : m.type === 'task' ? (
+                              <a
+                                href={`/tasks?q=%23${m.id}`}
+                                className="text-[var(--accent-primary)] hover:underline break-words"
+                              >
+                                #{m.id} — {m.title}
+                              </a>
+                            ) : (
+                              <span className="text-[var(--text-secondary)] break-words">
+                                {m.id} — {m.title}
+                              </span>
+                            )}
+                            {m.type === 'task' && (
+                              <button
+                                type="button"
+                                onClick={() => handleMarkDuplicate(Number(m.id), m.title)}
+                                className="ml-2 text-[11px] text-[var(--accent-primary)] hover:underline"
+                              >
+                                Mark duplicate of #{m.id}
+                              </button>
+                            )}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    {matches.length > 5 && (
+                      <div className="mt-1.5 text-[11px] text-[var(--text-muted)]">
+                        + {matches.length - 5} more match{matches.length - 5 === 1 ? '' : 'es'} (top-5 shown)
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           {/* Metadata row */}
           <div className="grid grid-cols-2 gap-3 px-5 py-4 border-b border-[var(--border-default)]">
             <div>
