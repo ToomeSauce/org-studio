@@ -83,7 +83,10 @@ function TaskCard({ task, projects, onDelete, onSelect, agents, nameColors }: {
 }) {
   const proj = projects.find(p => p.id === task.projectId);
   const daysAgo = Math.floor((Date.now() - task.createdAt) / 86400000);
-  const commentCount = task.comments?.length || 0;
+  // #1293 phase 1 — prefer the server-stamped commentCount on the snapshot.
+  // Fallback to the inline length is a safety net for any local optimistic
+  // task that hasn't been refreshed from the server yet.
+  const commentCount = (task as any).commentCount ?? (task.comments?.length || 0);
 
   return (
     <div
@@ -536,7 +539,9 @@ function TasksPageInner() {
     // Update local state with the new comment
     lastMutationRef.current = Date.now();
     setLocalTasks(prev => (prev || []).map(t =>
-      t.id === taskId ? { ...t, comments: [...(t.comments || []), result] } : t
+      t.id === taskId
+        ? { ...t, comments: [...(t.comments || []), result], commentCount: ((t as any).commentCount ?? (t.comments?.length || 0)) + 1 }
+        : t
     ));
     return result;
   }, []);

@@ -434,10 +434,27 @@ export async function GET(req: NextRequest) {
     const wsOrError = await resolveRequestWorkspace(req);
     if (wsOrError instanceof NextResponse) return wsOrError;
     const workspace = wsOrError;
+    const filteredTasks = filterByWorkspace(data.tasks, workspace.id);
+
+    // #1293 phase 1 — strip inline task.comments[] from the snapshot and
+    // replace with a numeric commentCount. The normalized org_studio_comments
+    // table (#1288) is the source of truth for the UI now; TaskDetailPanel
+    // fetches via listComments on open. We still preserve the inline column
+    // in storage and keep dual-write going (phase 2 stops the write, phase 3
+    // drops the column). Server-side consumers (scheduler, signal-detector,
+    // evidence-detector, section-access, notify) call readStore() / the
+    // provider directly and continue to see the inline blob — only the
+    // JSON wire response from this endpoint is slimmed.
+    const slimTasks = filteredTasks.map((t: any) => {
+      const comments = Array.isArray(t.comments) ? t.comments : [];
+      const { comments: _stripped, ...rest } = t;
+      return { ...rest, commentCount: comments.length };
+    });
+
     const filteredData = {
       ...data,
       projects: filterByWorkspace(data.projects, workspace.id),
-      tasks: filterByWorkspace(data.tasks, workspace.id),
+      tasks: slimTasks,
     };
 
     return NextResponse.json(filteredData);

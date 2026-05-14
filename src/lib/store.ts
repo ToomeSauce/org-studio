@@ -238,6 +238,14 @@ export interface Task {
   // for history. Never read by the dispatcher — purely observability.
   previouslyBlockedBy?: number[];
   comments?: TaskComment[];
+  // #1293 phase 1 — server adds this to every task in the GET /api/store
+  // snapshot. Source of truth: SUM of dual-written normalized + inline; we
+  // currently take length of the inline blob, which matches normalized
+  // counts byte-for-byte after the #1288 backfill. UI card badges read this
+  // instead of comments?.length once the inline blob is stripped on the wire.
+  // Optional because the in-memory store builder keeps the field absent
+  // until the server stamps it (e.g. optimistic local creates).
+  commentCount?: number;
   statusHistory?: { status: string; timestamp: number; by?: string; model?: string }[];
 
   // #1351 — Repo-truth grounding. Populated on addTask / updateTask by the
@@ -404,8 +412,14 @@ export async function updateProject(id: string, updates: Partial<Project>): Prom
 
 export async function addComment(taskId: string, comment: Omit<TaskComment, 'id' | 'createdAt'>): Promise<TaskComment> {
   const result = await mutateStore('addComment', { taskId, comment });
-  // Update local cache
-  _tasks = _tasks.map(t => t.id === taskId ? { ...t, comments: [...(t.comments || []), result.comment] } : t);
+  // Update local cache. #1293 phase 1: bump commentCount alongside the inline
+  // optimistic blob so card badges update instantly. Inline blob retained for
+  // local-only fallback paths and the TaskDetailPanel — the panel itself now
+  // pulls from listComments on open, but bumping inline keeps the optimistic
+  // "new comment visible" path working until the panel refetches.
+  _tasks = _tasks.map(t => t.id === taskId
+    ? { ...t, comments: [...(t.comments || []), result.comment], commentCount: ((t as any).commentCount ?? (t.comments?.length || 0)) + 1 }
+    : t);
   return result.comment;
 }
 

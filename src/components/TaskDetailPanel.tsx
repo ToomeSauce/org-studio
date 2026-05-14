@@ -396,34 +396,84 @@ export function TaskDetailPanel({
 
   const [commentSending, setCommentSending] = useState(false);
 
-  // ---- #1289: client-side pagination over the inline task.comments[] ----
-  // Why client-side and not listComments: the normalized org_studio_comments
-  // table doesn't exist on the live DB, and the dual-write in addComment is
-  // a best-effort try/catch that silently no-ops on undefined_table. Switching
-  // the panel to listComments today would render 0 comments per ticket. The
-  // ACTUAL UX pain on #1278 is heavy DOM (100 nodes on open), not /api/store
-  // payload size — that's #1288's problem and lives in a separate ticket.
-  // This pagination solves the DOM-on-open problem with zero migration risk.
-  // When #1288 lands and the inline blob retires, swap `allComments` below
-  // for a listComments fetch + cursor; the UI surface is unchanged.
+  // ---- #1293 phase 1: cursor pagination via listComments ----
+  // Previously (#1289) we sliced the inline task.comments[] blob client-side.
+  // Now the GET /api/store snapshot omits comments[] and stamps commentCount
+  // per task, so we fetch comments lazily on panel open. The slice math /
+  // "Show 25 more" button / newest-first render order from #1289 stay; the
+  // only thing that flips is where the data comes from.
+  //
+  // listComments returns ASC by created_at (oldest first within the page)
+  // via the provider — see PostgresStoreWithPubSubProvider.listComments. We
+  // accumulate pages in `fetchedComments` (insertion-order ASC), then reverse
+  // for render (newest-on-top). When the user clicks "Show 25 more" we pass
+  // `before = createdAt of the oldest known comment` as the cursor.
   const COMMENTS_PAGE_SIZE = 25;
-  const [visibleCount, setVisibleCount] = useState(COMMENTS_PAGE_SIZE);
+  const [fetchedComments, setFetchedComments] = useState<TaskComment[]>([]);
+  const [commentsLoading, setCommentsLoading] = useState(false);
+  const [commentsError, setCommentsError] = useState<string | null>(null);
+  // Server-stamped total. Source of truth for hasMoreOlder + header count.
+  const totalCommentCount = (task as any).commentCount ?? 0;
 
-  // Reset visibleCount when the panel swaps to a new task.
+  const fetchCommentPage = useCallback(async (taskId: string, before?: number) => {
+    const body: any = {
+      action: 'listComments',
+      scope: { kind: 'task', taskId },
+      limit: COMMENTS_PAGE_SIZE,
+    };
+    if (before !== undefined) body.before = before;
+    const res = await fetch('/api/store', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`listComments failed: ${res.status}`);
+    const json = await res.json();
+    return (json.comments || []) as TaskComment[];
+  }, []);
+
+  // Reset + load first page when the panel swaps to a new task.
   useEffect(() => {
-    setVisibleCount(COMMENTS_PAGE_SIZE);
+    let cancelled = false;
+    setFetchedComments([]);
+    setCommentsError(null);
+    if (!task.id) return;
+    // Skip the network round-trip when the server says there are zero.
+    if (totalCommentCount === 0) return;
+    setCommentsLoading(true);
+    fetchCommentPage(task.id)
+      .then(page => { if (!cancelled) setFetchedComments(page); })
+      .catch(e => { if (!cancelled) setCommentsError(String(e?.message || e)); })
+      .finally(() => { if (!cancelled) setCommentsLoading(false); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task.id]);
 
+  const handleLoadMoreComments = useCallback(async () => {
+    if (commentsLoading) return;
+    const oldest = fetchedComments[0];
+    if (!oldest) return;
+    setCommentsLoading(true);
+    try {
+      const page = await fetchCommentPage(task.id, oldest.createdAt);
+      // Prepend older page (ASC -> still ASC overall).
+      setFetchedComments(prev => [...page, ...prev]);
+    } catch (e: any) {
+      setCommentsError(String(e?.message || e));
+    } finally {
+      setCommentsLoading(false);
+    }
+  }, [commentsLoading, fetchedComments, task.id, fetchCommentPage]);
 
   const handleAddComment = useCallback(async () => {
     if (!commentText.trim() || commentSending) return;
     setCommentSending(true);
     try {
       const mentions = extractMentions(commentText);
-      await onAddComment(task.id, {
+      const newComment = await onAddComment(task.id, {
         // Send undefined; server will fill in the authenticated user's display
         // name. Using a literal like 'You' produced mention envelopes such as
-        // "💬 **You** mentioned you" which agents misread as self-tests.
+        // "\ud83d\udcac **You** mentioned you" which agents misread as self-tests.
         author: undefined as any,
         content: commentText.trim(),
         type: 'comment',
@@ -433,11 +483,12 @@ export function TaskDetailPanel({
       if (mentions.length > 0) {
         toast.info(`Mentioned ${mentions.length} agent${mentions.length > 1 ? 's' : ''}: ${mentions.join(', ')}`);
       }
-      // #1289 — keep the new comment visible without dropping any prior
-      // ones off the bottom of the page. The parent updates task.comments
-      // optimistically (see store.ts addComment), so a +1 to visibleCount
-      // covers the new arrival.
-      setVisibleCount(c => c + 1);
+      // Append to local fetched list so it renders immediately at the top
+      // (we reverse for display). Server's dual-write puts it in the
+      // normalized table too, so any future refetch picks it up.
+      if (newComment) {
+        setFetchedComments(prev => [...prev, newComment]);
+      }
     } finally {
       setCommentSending(false);
     }
@@ -453,19 +504,21 @@ export function TaskDetailPanel({
   // ~49 such rows existed at the time of the fix — demo seeds + a few real
   // comments lost to the empty-body bug. Leaving the rows in place but
   // hiding them in the UI avoids destructive cleanup.
-  const allComments: TaskComment[] = (task.comments || []).filter((c: any) => {
+  const allComments: TaskComment[] = fetchedComments.filter((c: any) => {
     const text = ((c?.content ?? '') + (c?.body ?? '') + (c?.text ?? '')).trim();
     return text.length > 0;
   });
-  // #1289 + #UX-followup (2026-05-08): newest-on-top display order, with
-  // the Add Comment composer at the TOP of the section so the affordance
-  // sits next to the freshest context. We still slice the underlying
-  // insertion-order array as a tail (gives the newest N items), then reverse
-  // for render so newest is first.
-  const visibleSliceStart = Math.max(0, allComments.length - visibleCount);
-  const comments: TaskComment[] = allComments.slice(visibleSliceStart).reverse();
-  const totalComments = allComments.length;
-  const hasMoreOlder = visibleSliceStart > 0;
+  // #1289: newest-on-top display order. fetchedComments is ASC, reverse for
+  // render so newest sits next to the composer.
+  const comments: TaskComment[] = [...allComments].reverse();
+  // Header count uses the server-stamped total when available; falls back to
+  // the fetched length only if commentCount is missing (e.g. local-only task).
+  const totalComments = totalCommentCount || allComments.length;
+  // We have more older pages if we've fetched fewer than the server total.
+  const hasMoreOlder = fetchedComments.length < totalCommentCount;
+  // Compat-shim for the existing "Show N more" button label. Phase 1 keeps
+  // the visual surface identical to #1289.
+  const visibleSliceStart = Math.max(0, totalCommentCount - fetchedComments.length);
   const statusHistory: { status: string; timestamp: number }[] = (task as any).statusHistory || [];
 
   return (
@@ -913,6 +966,12 @@ export function TaskDetailPanel({
                   showing {comments.length} of {totalComments}
                 </span>
               )}
+              {commentsLoading && (
+                <span className="text-[10px] text-[var(--text-muted)]">loading…</span>
+              )}
+              {commentsError && (
+                <span className="text-[10px] text-[var(--error)]" title={commentsError}>load failed</span>
+              )}
             </div>
 
             {/* Composer at TOP — #UX-followup 2026-05-08: with newest-first
@@ -982,10 +1041,13 @@ export function TaskDetailPanel({
               <div className="mt-1 flex justify-center">
                 <button
                   type="button"
-                  onClick={() => setVisibleCount(c => c + COMMENTS_PAGE_SIZE)}
-                  className="text-[11px] px-3 py-1.5 rounded-[var(--radius-sm)] border border-[var(--border-default)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+                  onClick={handleLoadMoreComments}
+                  disabled={commentsLoading}
+                  className="text-[11px] px-3 py-1.5 rounded-[var(--radius-sm)] border border-[var(--border-default)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Show {Math.min(COMMENTS_PAGE_SIZE, visibleSliceStart)} more
+                  {commentsLoading
+                    ? 'Loading\u2026'
+                    : `Show ${Math.min(COMMENTS_PAGE_SIZE, visibleSliceStart)} more`}
                 </button>
               </div>
             )}
