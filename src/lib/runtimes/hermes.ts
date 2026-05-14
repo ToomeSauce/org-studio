@@ -24,6 +24,8 @@ interface HermesProfile {
   url: string;       // http://host:port
   soulName?: string;  // Name from SOUL.md
   configPath: string;
+  primaryModel?: string;     // model.default from config.yaml (e.g. "gpt-5.5")
+  primaryProvider?: string;  // model.provider from config.yaml (e.g. "custom:azure-foundry-burner")
 }
 
 /**
@@ -61,11 +63,32 @@ function discoverLocalProfiles(): HermesProfile[] {
       }
     } catch {}
 
+    // #1350 — Extract primary model from top-level `model:` block.
+    // Matches:
+    //   model:
+    //     provider: <provider>
+    //     default: <model-name>
+    // Anchored at start-of-line to avoid matching nested `model:` keys (e.g. in fallback_providers).
+    let primaryModel: string | undefined;
+    let primaryProvider: string | undefined;
+    try {
+      const modelBlock = content.match(/(^|\n)model:\s*\n([\s\S]*?)(?=\n[A-Za-z][\w-]*:)/);
+      if (modelBlock) {
+        const block = modelBlock[2];
+        const defMatch = block.match(/^\s+default:\s*["']?([^"'\s#]+)/m);
+        if (defMatch) primaryModel = defMatch[1];
+        const provMatch = block.match(/^\s+provider:\s*["']?([^"'\s#]+)/m);
+        if (provMatch) primaryProvider = provMatch[1];
+      }
+    } catch {}
+
     return {
       name: profileName,
       url: `http://${host}:${port}`,
       soulName,
       configPath: configDir,
+      primaryModel,
+      primaryProvider,
     };
   }
 
@@ -185,6 +208,13 @@ export class HermesRuntime implements AgentRuntime {
             url: profile.url,
             profile: profile.name,
             configPath: profile.configPath,
+            // #1350 — surface primary model so /api/runtimes and resolveAgentModel can read it
+            model: profile.primaryModel
+              ? {
+                  primary: profile.primaryModel,
+                  provider: profile.primaryProvider,
+                }
+              : undefined,
           },
         });
       } catch {}
@@ -374,3 +404,28 @@ export class HermesRuntime implements AgentRuntime {
     this.profileCache = null;
   }
 }
+
+/**
+ * #1350 — Lightweight, filesystem-only helper for resolveAgentModel() in route.ts.
+ * Returns the primary model for a Hermes agent (by agentId like "hermes-trevor" or
+ * "hermes-default") read straight from its profile config.yaml. No network calls,
+ * no health probes — just config introspection.
+ *
+ * Returns undefined if:
+ * - agentId doesn't match a known profile
+ * - profile has no api_server enabled (i.e. not exposed)
+ * - profile has no `model.default` defined
+ */
+export function resolveHermesPrimaryModel(agentId: string): { model?: string; provider?: string } | undefined {
+  if (!agentId || !agentId.startsWith('hermes-')) return undefined;
+  const profileName = agentId === 'hermes-default' ? 'default' : agentId.slice('hermes-'.length);
+  try {
+    const profiles = discoverLocalProfiles();
+    const match = profiles.find(p => p.name === profileName);
+    if (!match || !match.primaryModel) return undefined;
+    return { model: match.primaryModel, provider: match.primaryProvider };
+  } catch {
+    return undefined;
+  }
+}
+

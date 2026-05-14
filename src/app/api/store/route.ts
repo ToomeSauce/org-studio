@@ -20,6 +20,7 @@ import {
 } from '@/lib/workspace-auth';
 import { validateUpdateTaskPayload } from '@/lib/update-task-validation';
 import { canonicalizeTeammate } from '@/lib/canonicalize-teammate';
+import { resolveHermesPrimaryModel } from '@/lib/runtimes/hermes';
 
 const SCHEDULER_URL = 'http://localhost:4501/api/scheduler';
 
@@ -63,6 +64,28 @@ async function resolveAgentModel(agentName: string, store: StoreData): Promise<s
     );
     const agentId = match?.agentId;
     if (!agentId) return undefined;
+
+    // #1350 — Hermes-first lookup. Hermes agents (e.g. hermes-trevor) don't show up
+    // in OpenClaw's Gateway sessions with their *real* model; an opportunistic stale
+    // OpenClaw session (stamped with the OpenClaw default at request-time) can leak
+    // the wrong model name into comment metadata. Read the model straight from the
+    // Hermes profile config when the agentId is a Hermes one.
+    if (agentId.startsWith('hermes-')) {
+      const hermesModel = resolveHermesPrimaryModel(agentId);
+      if (hermesModel?.model) {
+        // Format as provider/model when provider is a real one (azure, copilot,
+        // openai, anthropic). For custom: providers, just return the bare model.
+        const provider = hermesModel.provider || '';
+        if (provider && !provider.startsWith('custom:') && !provider.includes(':')) {
+          return `${provider}/${hermesModel.model}`;
+        }
+        return hermesModel.model;
+      }
+      // Hermes agent but no config-resolved model — don't fall through to OpenClaw
+      // (would just return the stale opus-4.7 leak). Return undefined; comment will
+      // be stamped with no model, which is honest.
+      return undefined;
+    }
 
     // #1344 — staging/container has no separate Gateway process. If GATEWAY_PORT is
     // not explicitly set AND we are in a container/staging env, skip the fetch entirely
