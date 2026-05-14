@@ -416,18 +416,89 @@ function DataStorageSection() {
 
 function RuntimeStatusSection() {
   const [runtimes, setRuntimes] = useState<any[]>([]);
+  const [mismatches, setMismatches] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  // #1353 slice 4 — per-mismatch "applying" state so individual rows
+  // show a spinner without disabling the whole section.
+  const [applyingAgentId, setApplyingAgentId] = useState<string | null>(null);
+  const [applyError, setApplyError] = useState<string | null>(null);
 
   const pollRuntimes = async () => {
     setLoading(true);
+    setApplyError(null);
     try {
       const resp = await fetch('/api/runtimes');
       const data = await resp.json();
       if (data.runtimes) setRuntimes(data.runtimes);
+      // #1353 slice 4 — audit results live alongside runtimes in the
+      // response (slice 3). May be undefined for older deploys; treat
+      // as empty list.
+      setMismatches(Array.isArray(data.runtime_metadata_mismatches) ? data.runtime_metadata_mismatches : []);
     } catch (err) {
       console.error('Failed to poll runtimes:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  /**
+   * #1353 slice 4 — 'Apply runtime value to teammate' action.
+   *
+   * For a 'missing' or 'mismatch' result, set the teammate's `model`
+   * field to the runtime-reported value. Looks up the teammate by
+   * agentId. Re-polls after success so the chip disappears.
+   *
+   * The audit is advisory-only on the server (slice 3 constraint:
+   * never auto-writes); applying the value is an EXPLICIT user
+   * action gated behind this button. Cf. #1353 constraints.
+   */
+  const applyRuntimeValue = async (mismatch: any) => {
+    const runtimeModel = mismatch.runtimeModel;
+    if (!runtimeModel) return; // 'unbound' rows have no runtime value to apply
+    setApplyingAgentId(mismatch.agentId);
+    setApplyError(null);
+    try {
+      // Look up the teammate id by agentId. The store API edits by
+      // teammate.id, not teammate.agentId. One round trip to /api/store
+      // is fine; this isn't a hot path.
+      const storeResp = await fetch('/api/store');
+      const storeData = await storeResp.json();
+      const teammates = storeData?.settings?.teammates || [];
+      const teammate = teammates.find((t: any) => t.agentId === mismatch.agentId);
+      if (!teammate?.id) {
+        throw new Error(`No teammate record found for agentId '${mismatch.agentId}'`);
+      }
+      const apiKey = '';
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      // Browser sessions use the session cookie carried automatically;
+      // no Bearer header needed in UI context (same pattern as the
+      // team page's updateTeammate calls). If a future tweak introduces
+      // a per-page apikey override, set window.__ORG_STUDIO_API_KEY__
+      // and we'll pick it up here.
+      const apiKeyOverride = (typeof window !== 'undefined' && (window as any).__ORG_STUDIO_API_KEY__) || apiKey;
+      if (apiKeyOverride) headers['Authorization'] = `Bearer ${apiKeyOverride}`;
+      const updateResp = await fetch('/api/store', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          action: 'updateTeammate',
+          id: teammate.id,
+          updates: { model: runtimeModel },
+        }),
+      });
+      const updateData = await updateResp.json().catch(() => null);
+      if (!updateResp.ok || !updateData?.ok) {
+        throw new Error(updateData?.error || `HTTP ${updateResp.status}`);
+      }
+      // Re-poll so the chip vanishes (or downgrades from 'mismatch'
+      // to silent if the values now match).
+      await pollRuntimes();
+    } catch (err: any) {
+      const msg = err?.message || String(err);
+      console.error('[#1353] applyRuntimeValue failed:', msg);
+      setApplyError(`Failed to update ${mismatch.agentId}: ${msg}`);
+    } finally {
+      setApplyingAgentId(null);
     }
   };
 
@@ -491,6 +562,88 @@ function RuntimeStatusSection() {
         </div>
       ) : (
         <p className="text-[var(--text-xs)] text-[var(--text-muted)] mt-2">Click "Check" to detect available runtimes</p>
+      )}
+      {/* #1353 slice 4 — Agent metadata consistency audit. Shows
+          mismatches (rare/bad), missing teammate model declarations
+          (common on first run), and unbound agents (runtime down).
+          'Apply runtime value to teammate' is the one-click fix for
+          missing/mismatch rows. Hidden entirely when consistent. */}
+      {mismatches.length > 0 && (
+        <div className="mt-4 pt-4 border-t border-[var(--border-subtle)] space-y-2">
+          <div className="flex items-center justify-between">
+            <h3 className="text-[var(--text-xs)] font-semibold text-[var(--text-primary)] flex items-center gap-1.5">
+              <AlertTriangle size={13} className="text-[var(--warning)]" />
+              Metadata audit ({mismatches.length})
+            </h3>
+            <span className="text-[var(--text-xs)] text-[var(--text-muted)]">#1353</span>
+          </div>
+          <p className="text-[var(--text-xs)] text-[var(--text-tertiary)] leading-relaxed">
+            Agents whose runtime-reported model doesn't match the teammate record.
+            Apply the runtime value to silence each row.
+          </p>
+          {applyError && (
+            <p className="text-[var(--text-xs)] text-[var(--danger)] bg-[var(--danger-subtle)] rounded px-2 py-1.5">
+              {applyError}
+            </p>
+          )}
+          <div className="space-y-1.5">
+            {mismatches.map((m: any) => {
+              const kindLabel =
+                m.kind === 'mismatch'
+                  ? 'mismatch'
+                  : m.kind === 'missing'
+                  ? 'missing teammate model'
+                  : 'runtime offline / unbound';
+              const kindColor =
+                m.kind === 'mismatch'
+                  ? 'bg-[var(--warning-subtle)] text-[var(--warning)]'
+                  : m.kind === 'missing'
+                  ? 'bg-[var(--info-subtle)] text-[var(--info)]'
+                  : 'bg-[var(--bg-secondary)] text-[var(--text-muted)]';
+              const canApply = !!m.runtimeModel && m.kind !== 'unbound';
+              const isApplying = applyingAgentId === m.agentId;
+              return (
+                <div
+                  key={`${m.runtimeId}:${m.agentId}:${m.kind}`}
+                  className="flex items-center gap-2 px-2.5 py-1.5 rounded-[var(--radius-md)] bg-[var(--bg-secondary)] border border-[var(--border-subtle)]"
+                >
+                  <span
+                    className={clsx(
+                      'text-[10px] font-medium px-1.5 py-0.5 rounded-full whitespace-nowrap',
+                      kindColor,
+                    )}
+                  >
+                    {kindLabel}
+                  </span>
+                  <span className="text-[var(--text-xs)] font-mono text-[var(--text-primary)] whitespace-nowrap">
+                    {m.agentId}
+                  </span>
+                  <span className="text-[var(--text-xs)] text-[var(--text-muted)] truncate flex-1" title={m.message}>
+                    <span className="text-[var(--text-tertiary)]">teammate=</span>
+                    <span className="font-mono">{m.teammateModel ?? '∅'}</span>
+                    <span className="text-[var(--text-tertiary)] mx-1">•</span>
+                    <span className="text-[var(--text-tertiary)]">runtime=</span>
+                    <span className="font-mono">{m.runtimeModel ?? '∅'}</span>
+                  </span>
+                  {canApply && (
+                    <button
+                      onClick={() => applyRuntimeValue(m)}
+                      disabled={isApplying}
+                      className="flex items-center gap-1 px-2 py-1 min-h-[28px] rounded text-[10px] font-medium bg-[var(--accent-primary)] text-[var(--accent-on-primary)] hover:opacity-90 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)] whitespace-nowrap"
+                      title={`Set teammate.model to '${m.runtimeModel}'`}
+                    >
+                      {isApplying ? (
+                        <RefreshCw size={11} className="animate-spin" />
+                      ) : (
+                        'Apply'
+                      )}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
       )}
     </section>
   );
