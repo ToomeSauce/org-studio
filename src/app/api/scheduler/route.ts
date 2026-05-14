@@ -115,7 +115,19 @@ function getAgentRole(store: StoreData, agentId: string): string | undefined {
  */
 const MAX_LOOPS_BEFORE_ESCALATION = 12; // raised from 6 (#1138, was raised 3→6 earlier)
 const STALL_QUIET_THRESHOLD_MS = 15 * 60 * 1000; // 15 minutes of no lastActivityAt bump
-const STALE_CLAIM_COMMENT_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 1 stale-claim hint per task per day
+// #1352: STALE_CLAIM_COMMENT_COOLDOWN_MS removed — superseded by lease-based
+// auto-bounce in sweepExpiredLeases() below. The old comment-only nudge had
+// no action attached and let dead claims sit for days; the new contract
+// returns the task to backlog within one tick of lease expiry. doneWhen #6
+// says REMOVED, not duplicated.
+// #1352: Sweep window — how recently another task touch counts as "agent
+// is active elsewhere" (and therefore THIS in-progress is a forgotten
+// claim). Wider than the lease window itself: an agent might have just
+// posted on another task 30 min ago and still legitimately have this
+// one's lease expired. 60 min matches the lease, keeping the contract
+// symmetric — if you haven't touched THIS task in 60 min but touched
+// something else within 60 min, that's a clean stale claim.
+const STALE_OTHER_ACTIVITY_WINDOW_MS = 60 * 60 * 1000;
 
 /**
  * Returns the most recent lastActivityAt across all OTHER tasks owned by
@@ -133,11 +145,10 @@ function maxOtherTaskActivity(store: StoreData, assigneeLower: string, excludeTa
   return max;
 }
 
-async function detectAndIncrementLoops(store: StoreData, agentId: string): Promise<{ stalled: any[]; staleClaims: any[]; incremented: number }> {
+async function detectAndIncrementLoops(store: StoreData, agentId: string): Promise<{ stalled: any[]; incremented: number }> {
   const agentName = getAgentName(store, agentId);
   const nameLower = agentName.toLowerCase();
   const stalled: any[] = [];
-  const staleClaims: any[] = [];
   let incremented = 0;
   const now = Date.now();
 
@@ -176,14 +187,11 @@ async function detectAndIncrementLoops(store: StoreData, agentId: string): Promi
       continue;
     }
 
-    // (c) Stale-claim check: is the agent more recently active on OTHER tasks?
-    // If yes, this 'in-progress' is a forgotten claim — don't page, just note.
-    const otherActivity = maxOtherTaskActivity(store, assignee, t.id);
-    if (otherActivity > lastActivity) {
-      staleClaims.push(store.tasks[i]);
-      continue;
-    }
-
+    // #1352: Old stale-claim arm REMOVED. The decision "agent active on
+    // other tasks → it's a forgotten claim, not a stall" now lives in
+    // sweepExpiredLeases() below, where it triggers an auto-bounce
+    // rather than a passive comment. This branch only flags real stalls
+    // (agent dispatched repeatedly, quiet across all tasks).
     stalled.push(store.tasks[i]);
   }
 
@@ -191,43 +199,104 @@ async function detectAndIncrementLoops(store: StoreData, agentId: string): Promi
     await writeStore(store);
   }
 
-  return { stalled, staleClaims, incremented };
+  return { stalled, incremented };
 }
 
 /**
- * Annotate stale-claim tasks: drop a one-line system comment hinting that
- * the assignee may have moved on, but DO NOT pause or page. Caller decides
- * cadence; we cooldown per task to avoid spamming the comment thread.
+ * #1352: Auto-bounce sweep — replaces the old annotateStaleClaims() generator.
+ *
+ * Runs once per scheduler tick (before per-agent loop detection). Scans every
+ * in-progress task; for each one whose claim_lease_expires_at is past AND
+ * whose assignee has touched ANOTHER task within the last 60min, returns
+ * the task to backlog and clears the assignee. Posts a system comment with
+ * the lease + last-activity timestamps for audit.
+ *
+ * What changed vs. the old generator (doneWhen #6 — REMOVED, not duplicated):
+ *   1. Decision input: lease expiry (deterministic) rather than loopCount
+ *      threshold + quiet-window heuristic (fuzzy). 60 min is the
+ *      Basil-confirmed window from slice 1.
+ *   2. Outcome: actual bounce (status → backlog, assignee cleared) instead
+ *      of a passive comment that anyone could ignore. The old plumbing let
+ *      dead claims sit for days; this catches them within one tick.
+ *   3. Scope: whole-store sweep, not per-agent. Even agents whose own
+ *      schedulers never tick get their dead claims caught.
+ *   4. Idempotency: by the time the task is in backlog with no assignee,
+ *      next sweep doesn't even consider it (status !== 'in-progress' guard).
+ *
+ * Assignee-inactive-everywhere path is HANDLED IN slice 3 (escalation
+ * ladder). This function only handles the "alive but moved on" case;
+ * stalled-everywhere agents still flow through pauseStalledTasks().
+ *
+ * Best-effort: never throws to caller. Returns counts for observability.
  */
-async function annotateStaleClaims(store: StoreData, agentId: string, staleClaims: any[]): Promise<void> {
-  if (staleClaims.length === 0) return;
-  const agentName = getAgentName(store, agentId);
+async function sweepExpiredLeases(store: StoreData): Promise<{ bounced: number; skippedInactive: number }> {
   const now = Date.now();
+  let bounced = 0;
+  let skippedInactive = 0;
   let mutated = false;
 
-  for (const task of staleClaims) {
-    const idx = store.tasks.findIndex(t => t.id === task.id);
-    if (idx < 0) continue;
-    const existing = store.tasks[idx].comments || [];
-    // Cooldown: skip if we already noted this task within the last 24h.
-    const recentNote = existing
-      .filter((c: any) => c.type === 'system' && typeof c.id === 'string' && c.id.startsWith('sys-stale-claim-'))
-      .pop();
-    if (recentNote && (now - (recentNote.createdAt || 0)) < STALE_CLAIM_COMMENT_COOLDOWN_MS) continue;
+  for (let i = 0; i < store.tasks.length; i++) {
+    const t = store.tasks[i];
+    if (t.status !== 'in-progress') continue;
+    if (t.loopPausedAt) continue; // stall path owns this one
+    if (!t.claim_lease_expires_at) continue; // pre-#1352 task or no lease stamped
+    if (now <= t.claim_lease_expires_at) continue; // lease still valid
 
-    const note = `🔍 **Possible stale claim** — ${agentName} appears to be active on other tasks more recently than this one. If this task is done or no longer assigned to ${agentName}, please update its status. (No agent loop paused.)`;
-    existing.push({
-      id: `sys-stale-claim-${now}-${task.id}`,
+    const assigneeLower = (t.assignee || '').toLowerCase();
+    if (!assigneeLower) {
+      // Expired lease with no assignee → already orphaned, bounce as cleanup.
+      // (Shouldn't happen in normal flow but keeps the contract self-healing.)
+    } else {
+      // Is the assignee active elsewhere within the window? If yes → bounce.
+      // If no → leave for slice 3's escalation ladder (whole-agent inactive
+      // ≠ moved-on-from-this-task; needs different handling).
+      const otherActivity = maxOtherTaskActivity(store, assigneeLower, t.id);
+      const activeElsewhere = otherActivity > 0 && (now - otherActivity) < STALE_OTHER_ACTIVITY_WINDOW_MS;
+      if (!activeElsewhere) {
+        skippedInactive++;
+        continue;
+      }
+    }
+
+    const leaseExpiredAt = t.claim_lease_expires_at;
+    const lastActivity = t.lastActivityAt || t.claim_started_at || 0;
+    const formerAssignee = t.assignee || '(unassigned)';
+
+    const history = t.statusHistory || [];
+    history.push({ status: 'backlog', timestamp: now, by: 'System (lease-bounce)' });
+
+    const comments = t.comments || [];
+    comments.push({
+      id: `sys-lease-bounce-${now}-${t.id}`,
       author: 'System',
-      content: note,
+      content:
+        `⏱️ **Claim lease expired — auto-bounced to backlog.**\n\n` +
+        `Lease expired at ${new Date(leaseExpiredAt).toISOString()}; ` +
+        `last activity on this task was ${lastActivity ? new Date(lastActivity).toISOString() : '(never)'}. ` +
+        `Former assignee: **${formerAssignee}** (still active on other tasks within 60 min — likely moved on).\n\n` +
+        `Anyone can pick this back up by claiming it.`,
       createdAt: now,
       type: 'system',
     });
-    store.tasks[idx] = { ...store.tasks[idx], comments: existing };
+
+    store.tasks[i] = {
+      ...t,
+      status: 'backlog',
+      assignee: '', // clear claim
+      claim_started_at: undefined,
+      claim_lease_expires_at: undefined,
+      loopCount: 0,
+      _lastDispatchedAt: undefined,
+      statusHistory: history,
+      comments,
+      lastActivityAt: now,
+    };
     mutated = true;
+    bounced++;
   }
 
   if (mutated) await writeStore(store);
+  return { bounced, skippedInactive };
 }
 
 /**
@@ -765,14 +834,29 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        // Loop detection (#1138 v2): time-based + stale-claim aware.
-        const freshStore = await readStore();
-        const { stalled, staleClaims, incremented } = await detectAndIncrementLoops(freshStore, agentId);
-
-        // Stale claims: annotate (system comment) but don't pause or page.
-        if (staleClaims.length > 0) {
-          await annotateStaleClaims(await readStore(), agentId, staleClaims);
+        // #1352 slice 2 — Auto-bounce sweep. Runs ONCE per tick, before
+        // per-agent loop detection, against the whole store. Dead claims
+        // get returned to backlog within one tick of lease expiry; the
+        // bounced tasks are then visible to anyone (including a fresh
+        // dispatch to this very agent) on the next read. Best-effort —
+        // any failure here must NOT block the dispatch path below.
+        try {
+          const sweepStore = await readStore();
+          const sweepResult = await sweepExpiredLeases(sweepStore);
+          if (sweepResult.bounced > 0 || sweepResult.skippedInactive > 0) {
+            console.info(
+              `[lease-sweep #1352] tick swept: bounced=${sweepResult.bounced}, ` +
+                `skippedInactive=${sweepResult.skippedInactive} (latter await slice-3 escalation)`,
+            );
+          }
+        } catch (sweepErr: any) {
+          console.warn('[lease-sweep #1352] failed (non-fatal):', sweepErr?.message || sweepErr);
         }
+
+        // Loop detection (#1138 v2): time-based stall detection only.
+        // (Old stale-claim arm replaced by sweepExpiredLeases above — #1352.)
+        const freshStore = await readStore();
+        const { stalled, incremented } = await detectAndIncrementLoops(freshStore, agentId);
 
         if (stalled.length > 0) {
           // Pause stalled tasks and send alerts instead of firing another loop
