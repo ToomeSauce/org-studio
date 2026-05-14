@@ -1057,6 +1057,24 @@ export async function POST(req: NextRequest) {
             (updates as any).loopPausedAt = null;
             (updates as any).loopPauseReason = null;
 
+            // #1352 — Claim contract lifecycle on status transitions.
+            //  Moving INTO in-progress → stamp a fresh lease.
+            //  Moving OUT of in-progress → clear the lease.
+            // Idempotent on no-op transitions (already guarded by
+            // `updates.status !== t.status` outer check). Using null
+            // rather than undefined keeps the Postgres path consistent
+            // with the loopPausedAt clear above — the store provider
+            // strips nulls on write, JSONB-overflow safe.
+            const LEASE_WINDOW_MS = 60 * 60 * 1000; // 60min, Basil-confirmed
+            if (updates.status === 'in-progress') {
+              const nowTs = Date.now();
+              (updates as any).claim_started_at = nowTs;
+              (updates as any).claim_lease_expires_at = nowTs + LEASE_WINDOW_MS;
+            } else {
+              (updates as any).claim_started_at = null;
+              (updates as any).claim_lease_expires_at = null;
+            }
+
             // #862: QA is a component, not a column. Moving to 'qa' is no longer supported.
             // The status validation above already rejected it; this branch is removed.
 
@@ -1102,6 +1120,27 @@ export async function POST(req: NextRequest) {
           }
 
           // #862: QA-column trigger removed — QA tickets follow standard backlog→in-progress assignee triggers.
+
+          // #1352 — Activity extends the claim lease idempotently. Any
+            // field write on an active in-progress task with a current lease
+            // is treated as proof-of-life. Skip when status is changing (the
+            // status-transition branch above already stamps a fresh lease or
+            // clears it). Only writes when there's nothing already bumping
+            // it in this update.
+          if (
+            updated.status === 'in-progress' &&
+            updated.claim_lease_expires_at &&
+            updates.status === undefined &&
+            (updates as any).claim_lease_expires_at === undefined
+          ) {
+            const renewed = Date.now() + 60 * 60 * 1000;
+            (updates as any).claim_lease_expires_at = renewed;
+            updated.claim_lease_expires_at = renewed;
+            if (updates.lastActivityAt === undefined) {
+              updates.lastActivityAt = Date.now();
+              updated.lastActivityAt = updates.lastActivityAt;
+            }
+          }
 
           store.tasks[i] = updated;
           // Piggyback stuck-task detection: check if this updated task is now stuck
@@ -1869,7 +1908,18 @@ export async function POST(req: NextRequest) {
         // But also update lastActivityAt on the task
         await getStoreProvider().addComment(commentScope, comment);
         if (task) {
-          await getStoreProvider().updateTask(commentScope.taskId, { lastActivityAt: Date.now() });
+          // #1352 — If this is an active claim (in-progress + lease set),
+          // extend the lease idempotently to now + 60min. Comment activity
+          // counts as proof-of-life. Skipping system comments would be
+          // accurate-but-fragile here (an agent posting progress notes
+          // shouldn't have to also POST status to stay alive); the
+          // scheduler-tick decision already cross-checks "active on other
+          // tasks" before bouncing, so noise here is harmless.
+          const activityUpdate: any = { lastActivityAt: Date.now() };
+          if (task.status === 'in-progress' && task.claim_lease_expires_at) {
+            activityUpdate.claim_lease_expires_at = Date.now() + 60 * 60 * 1000;
+          }
+          await getStoreProvider().updateTask(commentScope.taskId, activityUpdate);
         }
 
         // --- Unified notification routing (async, best-effort) ---

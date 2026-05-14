@@ -188,6 +188,22 @@ export interface Task {
   loopPausedAt?: number;    // Timestamp when loop was paused due to stall detection
   loopPauseReason?: string; // Why the loop was paused
   blockedReason?: string;   // Why the task is blocked (required when status='blocked' — see #1138 follow-up)
+
+  // #1352 — Claim contract (60-min heartbeat lease).
+  // When an agent transitions a task INTO in-progress, claim_started_at is
+  // stamped and claim_lease_expires_at = claim_started_at + 60min. Every
+  // activity that bumps lastActivityAt (comments, updateTask field writes,
+  // explicit heartbeatClaim action) extends claim_lease_expires_at to
+  // now + 60min idempotently. On transition OUT of in-progress (done /
+  // blocked / backlog), both fields are cleared. Scheduler tick reads
+  // these to detect stale claims and auto-bounce. Soft contract: lease
+  // expiry alone never blocks anything; the bounce decision also requires
+  // "assignee active on other tasks" or escalation triggers.
+  // 60min window is the Basil-confirmed middle ground — agent-friendly
+  // enough that real work won't trip it, conservative enough to catch
+  // dead claims within an hour rather than half a day.
+  claim_started_at?: number;
+  claim_lease_expires_at?: number;
   // #1254 — Project-scope opt-in for blocked tasks that legitimately have
   // no component (cross-cutting milestones, launches, exit gates). When
   // true, the orphan-blocked callout on ProjectDashboardPage skips this

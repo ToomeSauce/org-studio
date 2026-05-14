@@ -16,6 +16,21 @@ export interface Teammate {
   description: string;
   color: string; // color key: 'red', 'emerald', 'cyan', 'purple', 'amber', etc.
   isHuman?: boolean;
+
+  // #1352 — Claim contract escalation ladder. Per-teammate counters with
+  // 24-hour decay: each auto-bounce event from a stale claim increments
+  // staleClaimCount and stamps staleClaimCountedAt. The scheduler tick
+  // is responsible for decaying entries older than 24h on read. Ladder:
+  //   count == 1 within 24h → system comment on the offending task
+  //   count == 2 within 24h → topic ping to the agent + offending list
+  //   count == 3 within 24h → set loopDisabledAt; dispatch path skips
+  //     this agent until cleared. Cleared on next agent start OR by a
+  //     human via the Team page (it's a flag, not a kill).
+  // All fields are best-effort: missing means "no penalty yet".
+  staleClaimCount?: number;
+  staleClaimCountedAt?: number; // ms epoch of the most recent increment
+  loopDisabledAt?: number;      // ms epoch when scheduler dispatch was disabled
+  loopDisableReason?: string;   // human-readable cause for audit/UI
 }
 
 
