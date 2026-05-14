@@ -129,6 +129,28 @@ const STALL_QUIET_THRESHOLD_MS = 15 * 60 * 1000; // 15 minutes of no lastActivit
 // something else within 60 min, that's a clean stale claim.
 const STALE_OTHER_ACTIVITY_WINDOW_MS = 60 * 60 * 1000;
 
+// #1352 slice 3: Escalation-ladder tuning.
+//   - DECAY_MS: how long a stale-claim incident "counts" before resetting.
+//     24h matches doneWhen #5 ("per-assignee stale_claim_count with 24h
+//     decay"). An agent that has one bad day but recovers gets a clean
+//     slate the next day. Long enough that repeat offenders rack up the
+//     count; short enough that one-offs don't compound forever.
+//   - INCREMENT_COOLDOWN_MS: minimum gap between two increments for the
+//     same assignee. Without this, every scheduler tick (every ~30s for an
+//     active workspace) would re-increment any task whose lease has been
+//     expired for a while — a single dead task would hit Level 3 in 90
+//     seconds. Tying the cooldown to the lease window (60 min) means an
+//     agent gets at most one strike per lease cycle, which lines up with
+//     the "hit Level 3 only after 3 distinct dead-claim incidents" intent.
+//   - LEVEL_WARN / LEVEL_PING / LEVEL_DISABLE: the count thresholds.
+//     1/2/3 gives the smoothest "warn → nudge → disable" UX without
+//     punishing first offenders.
+const STALE_COUNT_DECAY_MS = 24 * 60 * 60 * 1000;
+const STALE_COUNT_INCREMENT_COOLDOWN_MS = 60 * 60 * 1000;
+const LEVEL_WARN = 1;
+const LEVEL_PING = 2;
+const LEVEL_DISABLE = 3;
+
 /**
  * Returns the most recent lastActivityAt across all OTHER tasks owned by
  * `assigneeLower` (i.e. excluding `excludeTaskId`). Used to detect stale
@@ -203,6 +225,153 @@ async function detectAndIncrementLoops(store: StoreData, agentId: string): Promi
 }
 
 /**
+ * #1352 slice 3 — Escalation ladder for assignees who are inactive
+ * everywhere (not just on the offending task). Distinct from slice 2's
+ * bounce path: "moved on from this task" → bounce. "appears dead" → ladder.
+ *
+ * Decision tree on each tick where a task's lease has expired AND the
+ * assignee has NO activity on any task within the last 60 min:
+ *   - Look up teammate by name (case-insensitive against settings.teammates).
+ *   - Apply 24h decay to staleClaimCount (reset to 0 if last increment
+ *     older than DECAY_MS) before incrementing.
+ *   - Cooldown: skip if last increment was within INCREMENT_COOLDOWN_MS.
+ *     Otherwise the same dead task increments on every 30s tick.
+ *   - Increment, then act on the new value:
+ *     1  → warn comment on the offending task. Task stays in-progress.
+ *     2  → warn comment + chat-ping to the agent's main session.
+ *          Task stays in-progress (still trying to reach the agent).
+ *     3+ → bounce the task (same shape as slice-2 bounce) AND stamp
+ *          loopDisabledAt + loopDisableReason on the teammate. Slice 4
+ *          will enforce loopDisabled in the dispatch path; for now we
+ *          just set the flag and let the chat ping inform the human.
+ *
+ * Best-effort, never throws to the sweep caller. Logs and returns the
+ * level taken (or 0 for cooldown/no-op) for observability.
+ */
+async function escalateInactiveClaim(
+  task: any,
+  assigneeName: string,
+  settingsTeammates: any[],
+): Promise<{ level: number; reason: 'cooldown' | 'no-teammate' | 'acted' }> {
+  const now = Date.now();
+  const provider = getStoreProvider();
+
+  const assigneeLower = assigneeName.toLowerCase();
+  const teammate = settingsTeammates.find(
+    (tm: any) =>
+      (tm?.name || '').toLowerCase() === assigneeLower ||
+      (tm?.agentId || '').toLowerCase() === assigneeLower,
+  );
+  if (!teammate) return { level: 0, reason: 'no-teammate' };
+
+  const lastCountedAt = teammate.staleClaimCountedAt || 0;
+  if (lastCountedAt && now - lastCountedAt < STALE_COUNT_INCREMENT_COOLDOWN_MS) {
+    return { level: 0, reason: 'cooldown' };
+  }
+
+  const decayed =
+    lastCountedAt && now - lastCountedAt < STALE_COUNT_DECAY_MS
+      ? teammate.staleClaimCount || 0
+      : 0;
+  const newCount = decayed + 1;
+
+  try {
+    const allTeammates = settingsTeammates.map((tm: any) =>
+      tm === teammate
+        ? {
+            ...tm,
+            staleClaimCount: newCount,
+            staleClaimCountedAt: now,
+            ...(newCount >= LEVEL_DISABLE
+              ? {
+                  loopDisabledAt: now,
+                  loopDisableReason:
+                    `Auto-disabled after ${newCount} stale-claim incidents within 24h ` +
+                    `(latest: task "${task.title}" #${task.ticketNumber || '?'}). ` +
+                    `Clear loopDisabledAt on agent start or via Team page to re-enable.`,
+                }
+              : {}),
+          }
+        : tm,
+    );
+    await provider.updateSettings({ teammates: allTeammates });
+  } catch (err: any) {
+    console.warn(`[lease-sweep #1352] failed to bump staleClaimCount for ${assigneeName}: ${err?.message || err}`);
+    return { level: 0, reason: 'cooldown' };
+  }
+
+  const leaseExpiredAt = task.claim_lease_expires_at;
+  const lastActivity = task.lastActivityAt || task.claim_started_at || 0;
+  const baseMsg =
+    `Lease expired at ${new Date(leaseExpiredAt).toISOString()}; ` +
+    `last activity on this task was ${lastActivity ? new Date(lastActivity).toISOString() : '(never)'}. ` +
+    `Assignee **${assigneeName}** has no activity on any task within the last 60 min.`;
+
+  try {
+    await provider.addComment(
+      { kind: 'task', taskId: task.id },
+      {
+        id: `sys-stale-${now}-${task.id}`,
+        author: 'System',
+        content:
+          `⚠️ **Stale claim — Level ${newCount}** ` +
+          (newCount === LEVEL_WARN
+            ? `(warn).\n\n${baseMsg}\n\nNo action taken yet — task remains in-progress in case the agent returns. Next strike escalates.`
+            : newCount === LEVEL_PING
+              ? `(topic ping).\n\n${baseMsg}\n\nPinging the agent's main session. One more strike auto-bounces this task and disables the agent's dispatch loop.`
+              : `(loop disabled + auto-bounce).\n\n${baseMsg}\n\nAgent loop has been disabled and this task is being returned to backlog. Clear loopDisabledAt on the teammate to re-enable dispatch.`),
+        createdAt: now,
+        type: 'system',
+      },
+    );
+  } catch (err: any) {
+    console.warn(`[lease-sweep #1352] failed to post Level ${newCount} warn comment: ${err?.message || err}`);
+  }
+
+  if (newCount >= LEVEL_PING) {
+    try {
+      const agentId = teammate.agentId || teammate.name?.toLowerCase() || assigneeLower;
+      await rpc('chat.send', {
+        sessionKey: `agent:${agentId}:main`,
+        message:
+          `⚠️ **Stale-claim escalation — Level ${newCount}**\n\n` +
+          `Task: "${task.title}" (#${task.ticketNumber || '?'})\n` +
+          `${baseMsg}\n\n` +
+          (newCount >= LEVEL_DISABLE
+            ? `Your dispatch loop has been **auto-disabled** and the task returned to backlog. ` +
+              `Clear \`loopDisabledAt\` on your teammate record (Team page) to re-enable.`
+            : `One more incident within 24h auto-disables your dispatch loop and bounces the task.`),
+        idempotencyKey: `stale-claim-${task.id}-${now}`,
+      });
+    } catch (err: any) {
+      console.warn(`[lease-sweep #1352] chat.send ping failed for ${assigneeName} (Level ${newCount}): ${err?.message || err}`);
+    }
+  }
+
+  if (newCount >= LEVEL_DISABLE) {
+    const history = (task.statusHistory || []).concat([
+      { status: 'backlog', timestamp: now, by: 'System (lease-bounce: stale-claim Level 3)' },
+    ]);
+    try {
+      await provider.updateTask(task.id, {
+        status: 'backlog',
+        assignee: '',
+        claim_started_at: null,
+        claim_lease_expires_at: null,
+        loopCount: 0,
+        _lastDispatchedAt: null,
+        statusHistory: history,
+        lastActivityAt: now,
+      });
+    } catch (err: any) {
+      console.warn(`[lease-sweep #1352] Level 3 bounce failed for ${task.id}: ${err?.message || err}`);
+    }
+  }
+
+  return { level: newCount, reason: 'acted' };
+}
+
+/**
  * #1352: Auto-bounce sweep — replaces the old annotateStaleClaims() generator.
  *
  * Runs once per scheduler tick (before per-agent loop detection). Scans every
@@ -229,10 +398,11 @@ async function detectAndIncrementLoops(store: StoreData, agentId: string): Promi
  *
  * Best-effort: never throws to caller. Returns counts for observability.
  */
-async function sweepExpiredLeases(store: StoreData): Promise<{ bounced: number; skippedInactive: number }> {
+async function sweepExpiredLeases(store: StoreData): Promise<{ bounced: number; skippedInactive: number; escalated: number }> {
   const now = Date.now();
   let bounced = 0;
   let skippedInactive = 0;
+  let escalated = 0;
   const provider = getStoreProvider();
 
   for (let i = 0; i < store.tasks.length; i++) {
@@ -247,6 +417,14 @@ async function sweepExpiredLeases(store: StoreData): Promise<{ bounced: number; 
       const otherActivity = maxOtherTaskActivity(store, assigneeLower, t.id);
       const activeElsewhere = otherActivity > 0 && (now - otherActivity) < STALE_OTHER_ACTIVITY_WINDOW_MS;
       if (!activeElsewhere) {
+        // #1352 slice 3: inactive everywhere → escalation ladder (warn →
+        // ping → loop-disable). The ladder itself handles the Level-3 bounce.
+        const settingsTeammates = store.settings?.teammates || [];
+        const result = await escalateInactiveClaim(t, t.assignee || assigneeLower, settingsTeammates);
+        if (result.reason === 'acted') {
+          if (result.level >= LEVEL_DISABLE) bounced++;
+          escalated++;
+        }
         skippedInactive++;
         continue;
       }
@@ -298,7 +476,7 @@ async function sweepExpiredLeases(store: StoreData): Promise<{ bounced: number; 
     }
   }
 
-  return { bounced, skippedInactive };
+  return { bounced, skippedInactive, escalated };
 }
 
 /**
@@ -845,10 +1023,10 @@ export async function POST(request: NextRequest) {
         try {
           const sweepStore = await readStore();
           const sweepResult = await sweepExpiredLeases(sweepStore);
-          if (sweepResult.bounced > 0 || sweepResult.skippedInactive > 0) {
+          if (sweepResult.bounced > 0 || sweepResult.skippedInactive > 0 || sweepResult.escalated > 0) {
             console.info(
               `[lease-sweep #1352] tick swept: bounced=${sweepResult.bounced}, ` +
-                `skippedInactive=${sweepResult.skippedInactive} (latter await slice-3 escalation)`,
+                `escalated=${sweepResult.escalated}, skippedInactive=${sweepResult.skippedInactive}`,
             );
           }
         } catch (sweepErr: any) {
