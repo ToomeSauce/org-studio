@@ -115,6 +115,15 @@ export interface RuntimeRegistry {
   getRuntimeName(runtimeId: string): string | undefined;
 
   /**
+   * #1353 — Read-only access to the registered runtimes map.
+   * Callers (e.g. the metadata audit, slice 3) need to call
+   * runtime.getAgentMetadata() on the same instance the registry
+   * used to discover the agent. Returning the live Map is fine
+   * for read access; mutating it is undefined behavior.
+   */
+  getRuntimes(): Map<string, AgentRuntime>;
+
+  /**
    * Cleanup - dispose all runtimes
    */
   dispose(): void;

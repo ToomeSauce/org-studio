@@ -100,6 +100,14 @@ class RuntimeRegistryImpl implements RuntimeRegistry {
     return this.runtimes.get(runtimeId)?.name;
   }
 
+  /**
+   * #1353 — see RuntimeRegistry interface JSDoc. Read-only access
+   * to the runtimes map (for audit + introspection).
+   */
+  getRuntimes(): Map<string, AgentRuntime> {
+    return this.runtimes;
+  }
+
   dispose(): void {
     for (const runtime of this.runtimes.values()) {
       runtime.dispose();

@@ -10,6 +10,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getRuntimeRegistry } from '@/lib/runtimes/registry';
 import { getStoreProvider } from '@/lib/store-provider';
+import { auditRuntimeMetadata, logMismatches } from '@/lib/runtimes/audit';
 
 const DEFAULT_AGENT_COLORS = ['cyan', 'emerald', 'purple', 'blue', 'pink', 'orange'];
 
@@ -126,7 +127,30 @@ export async function GET(request: NextRequest) {
       agents: allAgents.filter(a => a.runtime === id),
     }));
 
-    return NextResponse.json({ runtimes });
+    // #1353 slice 3 — Post-discovery metadata audit. Compares
+    // each discovered agent's runtime-declared model against the
+    // teammate store record. Advisory only — logs warnings, exposes
+    // the list via the response, never auto-writes.
+    // Best-effort: any failure here must NOT break /api/runtimes,
+    // which is on the dashboard's hot path.
+    let runtime_metadata_mismatches: any[] = [];
+    try {
+      const auditStore = await getStoreProvider().read();
+      const auditTeammates = auditStore?.settings?.teammates || [];
+      runtime_metadata_mismatches = await auditRuntimeMetadata({
+        agents: allAgents,
+        runtimes: registry.getRuntimes(),
+        teammates: auditTeammates,
+      });
+      logMismatches(runtime_metadata_mismatches);
+    } catch (auditErr: any) {
+      console.warn(
+        '[Runtimes #1353] audit failed (non-fatal):',
+        auditErr?.message || auditErr,
+      );
+    }
+
+    return NextResponse.json({ runtimes, runtime_metadata_mismatches });
   } catch (e: any) {
     const msg = typeof e === 'string' ? e : e?.message || 'Unknown error';
     return NextResponse.json({ error: msg }, { status: 500 });
