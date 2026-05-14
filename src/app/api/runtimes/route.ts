@@ -78,6 +78,40 @@ export async function GET(request: NextRequest) {
         await getStoreProvider().updateSettings({ teammates: updatedTeammates, loops: updatedLoops });
         console.log(`[Runtimes] Auto-scaffolded ${newAgents.length} new agent(s): ${newAgents.map(a => a.id).join(', ')}${loopsCreated ? ` (${loopsCreated} loop(s) created)` : ''}`);
       }
+
+      // #1352 slice 4 — Auto-clear loopDisabledAt on agent re-discovery.
+      // The escalation ladder's Level-3 punishment is meant to be reversible:
+      // the doneWhen text says 'Level-3 loop-disable reversible by human OR
+      // agent on next start (flag, not kill)'. When a previously-disabled
+      // agent re-appears in registry.discoverAll() (e.g. after a process
+      // restart or reconnect), interpret that as 'agent is back, give it
+      // another chance'. Clear loopDisabledAt + loopDisableReason and reset
+      // staleClaimCount to 0 so the ladder starts fresh.
+      //
+      // Subtle: we re-fetch teammates from the store rather than reusing the
+      // updatedTeammates closure variable, because the auto-scaffold block
+      // above just persisted it. Using the closure would re-apply the wipe
+      // even after another writer touched teammates between calls. One extra
+      // read is cheap.
+      try {
+        const discoveredIds = new Set(allAgents.map(a => a.id.toLowerCase()));
+        const freshStore = await getStoreProvider().read();
+        const freshTeammates = freshStore?.settings?.teammates || [];
+        let clearedCount = 0;
+        const cleared = freshTeammates.map((tm: any) => {
+          if (!tm.loopDisabledAt) return tm;
+          if (!discoveredIds.has((tm.agentId || '').toLowerCase())) return tm;
+          clearedCount++;
+          const { loopDisabledAt, loopDisableReason, staleClaimCount, staleClaimCountedAt, ...rest } = tm;
+          return rest;
+        });
+        if (clearedCount > 0) {
+          await getStoreProvider().updateSettings({ teammates: cleared });
+          console.log(`[Runtimes #1352] Auto-cleared loopDisabledAt on ${clearedCount} re-discovered agent(s)`);
+        }
+      } catch (clearErr) {
+        console.warn('[Runtimes #1352] Auto-clear loopDisabledAt failed:', (clearErr as any)?.message);
+      }
     } catch (scaffoldErr) {
       // Best-effort — don't fail the response if scaffolding fails
       console.warn('[Runtimes] Auto-scaffold failed:', (scaffoldErr as any)?.message);

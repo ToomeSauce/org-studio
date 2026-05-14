@@ -116,6 +116,27 @@ function PersonCard({ person, isActive, activityStatus, overrides, onSave, onUpd
                 )}>
                   {isActive ? 'ACTIVE' : 'IDLE'}
                 </span>
+                {/* #1352 slice 4 — stale-claim badge. Only rendered when
+                 * loopDisabledAt is set (Level 3 reached). Click opens the
+                 * detail panel where the operator can re-enable. */}
+                {person.loopDisabledAt && (
+                  <span
+                    className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-500/10 text-red-400 border border-red-500/30"
+                    title="Dispatch loop auto-disabled by stale-claim escalation. Open the detail panel to re-enable."
+                  >
+                    DISPATCH OFF
+                  </span>
+                )}
+                {!person.loopDisabledAt && (person.staleClaimCount ?? 0) > 0 &&
+                  person.staleClaimCountedAt &&
+                  Date.now() - person.staleClaimCountedAt < 24 * 60 * 60 * 1000 && (
+                    <span
+                      className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-400/10 text-amber-400 border border-amber-400/30"
+                      title={`Stale-claim Level ${person.staleClaimCount} of 3 (within 24h decay window).`}
+                    >
+                      L{person.staleClaimCount}/3
+                    </span>
+                  )}
               </>
             )}
             {!person.isHuman && isDisconnected && (

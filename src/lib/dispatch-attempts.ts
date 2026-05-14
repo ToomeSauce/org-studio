@@ -86,6 +86,13 @@ export const SKIP_REASONS = [
   'gateway-down',
   'stalled-paused',
   'loop-disabled',
+  // #1352 slice 4: distinguishes the stale-claim auto-disable (set by the
+  // sweep's Level-3 escalation, cleared on next agent start OR via Team
+  // page) from the operator-set 'loop-disabled' state. Both are intentional
+  // mutes, but the dispatch-health view treats them as separate signals
+  // because stale-claim-disabled is an event-driven punishment, not a
+  // config choice.
+  'stale-claim-disabled',
   'unknown',
 ] as const;
 export type SkipReason = (typeof SKIP_REASONS)[number];
@@ -401,7 +408,7 @@ export async function getDispatchHealth(
         // 'loop-disabled' is intentional muting (operator action), not a
         // dispatch failure. Don't count it toward staleBacklog — we'd be
         // alerting on a state the operator just set themselves.
-        if (reason !== 'loop-disabled') nonMutedSkips++;
+        if (reason !== 'loop-disabled' && reason !== 'stale-claim-disabled') nonMutedSkips++;
       }
       if (r.top_blocker) {
         byTopBlocker[r.top_blocker] = (byTopBlocker[r.top_blocker] || 0) + 1;

@@ -88,6 +88,114 @@ function Section({ title, defaultOpen = true, children }: { title: string; defau
   );
 }
 
+// --- #1352 slice 4: Stale-Claim Health component ---
+//
+// Pure presentational. State semantics:
+//   - teammate.staleClaimCount missing or 0 → clean.
+//   - teammate.staleClaimCountedAt > 24h old → also clean (decayed).
+//     We still show the historic count as 'decayed' so it's not invisible,
+//     but treat it as a non-event for the next-level prediction.
+//   - teammate.loopDisabledAt set → disabled. Render reason + button.
+//
+// The decay logic mirrors the backend (STALE_COUNT_DECAY_MS = 24h). Keeping
+// the threshold inline rather than importing the scheduler constant because
+// this component is in the dashboard tree and the scheduler module is
+// server-only — prefer a small duplication over a bundle-bloating import.
+const STALE_DECAY_MS = 24 * 60 * 60 * 1000;
+
+function StaleClaimHealth({
+  teammate,
+  onClearDisable,
+}: {
+  teammate: Teammate;
+  onClearDisable: () => void;
+}) {
+  const count = teammate.staleClaimCount || 0;
+  const countedAt = teammate.staleClaimCountedAt;
+  const disabledAt = teammate.loopDisabledAt;
+  const reason = teammate.loopDisableReason;
+  const now = Date.now();
+  const decayed = !!(countedAt && now - countedAt >= STALE_DECAY_MS);
+  const effectiveCount = decayed ? 0 : count;
+
+  // Disabled (Level 3 reached) — most urgent state, render first.
+  if (disabledAt) {
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[var(--error-subtle,#3a1f1f)] text-[var(--error,#ef4444)]">
+            DISPATCH AUTO-DISABLED
+          </span>
+          <span className="text-[var(--text-xs)] text-[var(--text-muted)]">
+            since {timeAgo(disabledAt)}
+          </span>
+        </div>
+        {reason && (
+          <p className="text-[var(--text-xs)] text-[var(--text-secondary)] leading-relaxed border-l-2 border-[var(--error,#ef4444)] pl-3">
+            {reason}
+          </p>
+        )}
+        <button
+          onClick={onClearDisable}
+          className="px-3 py-1.5 rounded-[var(--radius-md)] bg-[var(--accent-primary)] text-white text-[var(--text-xs)] font-medium hover:bg-[var(--accent-primary-hover)] transition-colors"
+        >
+          Re-enable dispatch loop
+        </button>
+        <p className="text-[10px] text-[var(--text-muted)]">
+          Clears loopDisabledAt + resets staleClaimCount to 0. Auto-clears
+          anyway when the agent next re-discovers via /api/runtimes.
+        </p>
+      </div>
+    );
+  }
+
+  // Clean state (count 0 OR decayed).
+  if (effectiveCount === 0) {
+    return (
+      <div className="space-y-1">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[var(--success-subtle)] text-[var(--success)]">
+            CLEAN
+          </span>
+          <span className="text-[var(--text-xs)] text-[var(--text-muted)]">
+            no stale-claim incidents in the last 24h
+          </span>
+        </div>
+        {decayed && countedAt && (
+          <p className="text-[10px] text-[var(--text-muted)] italic">
+            (decayed: {count} historic strike{count === 1 ? '' : 's'}, last
+            {' '}{timeAgo(countedAt)})
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  // Striking (Level 1 or 2 within 24h).
+  const nextLevelLabel =
+    effectiveCount === 1 ? 'Level 2 (topic ping)' : 'Level 3 (loop disable + bounce)';
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[var(--warning-subtle,#3a2f1f)] text-[var(--warning,#f59e0b)]">
+          LEVEL {effectiveCount} OF 3
+        </span>
+        {countedAt && (
+          <span className="text-[var(--text-xs)] text-[var(--text-muted)]">
+            last strike {timeAgo(countedAt)}
+          </span>
+        )}
+      </div>
+      <p className="text-[var(--text-xs)] text-[var(--text-secondary)]">
+        Next stale-claim incident within 24h escalates to <strong>{nextLevelLabel}</strong>.
+      </p>
+      <p className="text-[10px] text-[var(--text-muted)] italic">
+        Strikes decay 24h after the last increment; cooldown between strikes is 60 min.
+      </p>
+    </div>
+  );
+}
+
 // --- Main Panel ---
 interface TeammateDetailPanelProps {
   teammate: Teammate;
@@ -484,6 +592,31 @@ export default function TeammateDetailPanel({
             ) : (
               <p className="text-[var(--text-xs)] text-[var(--text-muted)] italic">No scheduler loop configured</p>
             )}
+          </Section>
+
+          {/* #1352 slice 4 — Stale-Claim Health Section.
+           * Surfaces the auto-bounce escalation state (staleClaimCount +
+           * loopDisabledAt) for this teammate. Three states:
+           *   - Clean: count is 0 OR last increment >24h ago (decayed).
+           *   - Striking: count 1-2 within 24h — show count + last incident.
+           *   - Disabled: loopDisabledAt set — show reason + 'Re-enable' button.
+           */}
+          <Section title="Stale-Claim Health" defaultOpen={Boolean(teammate.loopDisabledAt)}>
+            <StaleClaimHealth
+              teammate={teammate}
+              onClearDisable={() => {
+                if (!teammate.id && !teammate.agentId) return;
+                // null = wire-safe field delete; see store/route.ts updateTeammate.
+                // Match the convention used elsewhere in this file: pass
+                // teammate.id (not agentId) — the store keys teammates by id.
+                onUpdateTeammate(teammate.id || teammate.agentId, {
+                  loopDisabledAt: null,
+                  loopDisableReason: null,
+                  staleClaimCount: 0,
+                  staleClaimCountedAt: null,
+                } as any);
+              }}
+            />
           </Section>
 
           {/* ORG.md Refresh Section — #864 silent-drift vector #1 */}

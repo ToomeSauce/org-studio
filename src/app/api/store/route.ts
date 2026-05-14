@@ -2143,11 +2143,21 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: true, teammate });
       }
 
-      case 'updateTeammate': {
+            case 'updateTeammate': {
         const teammates = store.settings?.teammates || [];
         const idx = teammates.findIndex((t: any) => t.id === payload.id);
         if (idx >= 0) {
-          teammates[idx] = { ...teammates[idx], ...payload.updates };
+          // #1352 slice 4 — Allow caller to DELETE fields by passing null.
+          // JSON.stringify drops `undefined`, so the only wire-safe way to
+          // say "clear this field" is to send an explicit null. Use it for
+          // loopDisabledAt / loopDisableReason / staleClaim* when the
+          // 'Re-enable dispatch loop' button fires. Plain merge still
+          // supports normal field edits (title, domain, etc.).
+          const merged: any = { ...teammates[idx], ...payload.updates };
+          for (const [k, v] of Object.entries(payload.updates || {})) {
+            if (v === null) delete merged[k];
+          }
+          teammates[idx] = merged;
           // PERF: Use targeted provider.updateSettings() instead of full store write
           await getStoreProvider().updateSettings({ teammates });
         }

@@ -996,6 +996,32 @@ export async function POST(request: NextRequest) {
           );
         }
 
+        // #1352 slice 4 — stale-claim auto-disable enforcement.
+        // If the assignee's teammate record has loopDisabledAt set (stamped
+        // by the Level-3 escalation in sweepExpiredLeases()), refuse to
+        // dispatch. The flag is reversible by:
+        //   (a) clicking 'Re-enable loop' on the Team page (clears the
+        //       field via updateSettings), OR
+        //   (b) the agent starting fresh — the gateway-agents WS broadcast
+        //       in server.mjs hits the /api/runtimes endpoint, which on
+        //       agent re-discovery clears loopDisabledAt automatically.
+        //       (Implemented below in this same slice.)
+        const teammates = store.settings?.teammates || [];
+        const teammate = teammates.find(
+          (tm: any) => (tm?.agentId || '').toLowerCase() === agentId.toLowerCase(),
+        );
+        if (teammate?.loopDisabledAt) {
+          return recordAndReturn(
+            {
+              ok: true,
+              skipped: true,
+              reason: `Dispatch loop auto-disabled by stale-claim escalation: ${teammate.loopDisableReason || '(no reason recorded)'}`,
+              loopDisabledAt: teammate.loopDisabledAt,
+            },
+            { outcome: 'skipped', reason: 'stale-claim-disabled' },
+          );
+        }
+
         // Cooldown — don't fire more than once per minute per agent
         const now = Date.now();
         const lastTrigger = lastTriggerByAgent[agentId] || 0;
