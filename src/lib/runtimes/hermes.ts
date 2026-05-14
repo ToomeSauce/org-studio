@@ -15,7 +15,7 @@
  * - Also checks ~/.hermes/config.yaml (default profile)
  * - Each profile with api_server.enabled becomes a discoverable agent
  */
-import type { AgentRuntime, RuntimeAgent } from './types';
+import type { AgentRuntime, RuntimeAgent, AgentMetadata } from './types';
 import { readFileSync, readdirSync, existsSync } from 'fs';
 import { join } from 'path';
 
@@ -398,6 +398,44 @@ export class HermesRuntime implements AgentRuntime {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * #1353 — Hermes's canonical per-agent metadata lives in the profile's
+   * `~/.hermes/profiles/<name>/config.yaml` (or `~/.hermes/config.yaml` for
+   * the default profile), specifically the top-level `model:` block's
+   * `default` + `provider`. The standalone `resolveHermesPrimaryModel`
+   * helper at the bottom of this file already parses this and is reused
+   * by route.ts; this method wraps it under the AgentRuntime interface
+   * so the registry can dispatch uniformly.
+   *
+   * No network calls — reads filesystem only — so this is fast and
+   * stable across runtime-down scenarios. Hermes-the-process can be
+   * offline and we'll still report what the profile config DECLARES the
+   * model to be (which is exactly what the startup audit needs: "what
+   * did the runtime SAY the model is, regardless of whether it's
+   * online right now").
+   *
+   * Returns undefined for non-Hermes agentIds or profiles with no
+   * `api_server` block / no `model.default`.
+   */
+  async getAgentMetadata(agentId: string): Promise<AgentMetadata | undefined> {
+    const resolved = resolveHermesPrimaryModel(agentId);
+    if (!resolved?.model) return undefined;
+    // Match the formatting used by resolveAgentModel() in route.ts so
+    // callers can compare stamps apples-to-apples: provider/model for
+    // "real" providers; bare model for custom: providers.
+    const provider = resolved.provider || '';
+    let modelStamp: string;
+    if (provider && !provider.startsWith('custom:') && !provider.includes(':')) {
+      modelStamp = `${provider}/${resolved.model}`;
+    } else {
+      modelStamp = resolved.model;
+    }
+    return {
+      model: modelStamp,
+      provider: resolved.provider,
+    };
   }
 
   dispose(): void {
