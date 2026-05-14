@@ -34,6 +34,17 @@ import {
   recordSweep,
   setTriggerCooldownMs,
 } from '@/lib/scheduler-state';
+// #1352 slice 5: pure decision helpers. Logic mirrors what was inlined in
+// this file; importing them keeps route.ts in sync with the test suite
+// (src/lib/claim-contract.test.ts) so the contract can't silently drift.
+import {
+  isLeaseExpired,
+  classifyExpiredLease as classifyExpiredLeaseLib,
+  computeEscalation,
+  isDispatchBlocked,
+  dispatchBlockReason,
+  maxOtherTaskActivity as maxOtherTaskActivityLib,
+} from '@/lib/claim-contract';
 const DEFAULT_MODEL = 'foundry-openai-chat/gpt-5.4';
 
 // Minimum seconds between event-driven triggers for the same agent (debounce)
@@ -155,16 +166,13 @@ const LEVEL_DISABLE = 3;
  * Returns the most recent lastActivityAt across all OTHER tasks owned by
  * `assigneeLower` (i.e. excluding `excludeTaskId`). Used to detect stale
  * claims: if the agent is busy elsewhere, this task isn't a stall.
+ *
+ * #1352 slice 5: thin wrapper over the pure lib helper so the route file
+ * still uses StoreData while tests target the pure shape. Keeping the
+ * named export here so call sites elsewhere in this file don't change.
  */
 function maxOtherTaskActivity(store: StoreData, assigneeLower: string, excludeTaskId: string): number {
-  let max = 0;
-  for (const t of store.tasks) {
-    if (t.id === excludeTaskId) continue;
-    if ((t.assignee || '').toLowerCase() !== assigneeLower) continue;
-    const ts = t.lastActivityAt || 0;
-    if (ts > max) max = ts;
-  }
-  return max;
+  return maxOtherTaskActivityLib(store.tasks as any, assigneeLower, excludeTaskId);
 }
 
 async function detectAndIncrementLoops(store: StoreData, agentId: string): Promise<{ stalled: any[]; incremented: number }> {
@@ -262,18 +270,13 @@ async function escalateInactiveClaim(
       (tm?.name || '').toLowerCase() === assigneeLower ||
       (tm?.agentId || '').toLowerCase() === assigneeLower,
   );
-  if (!teammate) return { level: 0, reason: 'no-teammate' };
-
-  const lastCountedAt = teammate.staleClaimCountedAt || 0;
-  if (lastCountedAt && now - lastCountedAt < STALE_COUNT_INCREMENT_COOLDOWN_MS) {
-    return { level: 0, reason: 'cooldown' };
-  }
-
-  const decayed =
-    lastCountedAt && now - lastCountedAt < STALE_COUNT_DECAY_MS
-      ? teammate.staleClaimCount || 0
-      : 0;
-  const newCount = decayed + 1;
+  // #1352 slice 5: pure decision routed through claim-contract lib.
+  // Returns 'cooldown', 'no-teammate', or 'increment' with the new
+  // count + level. Caller still owns the IO (provider write below).
+  const decision = computeEscalation(teammate, now);
+  if (decision.action === 'no-teammate') return { level: 0, reason: 'no-teammate' };
+  if (decision.action === 'cooldown') return { level: 0, reason: 'cooldown' };
+  const newCount = decision.newCount;
 
   try {
     const allTeammates = settingsTeammates.map((tm: any) =>
@@ -282,7 +285,7 @@ async function escalateInactiveClaim(
             ...tm,
             staleClaimCount: newCount,
             staleClaimCountedAt: now,
-            ...(newCount >= LEVEL_DISABLE
+            ...(decision.reachedDisable
               ? {
                   loopDisabledAt: now,
                   loopDisableReason:
@@ -407,28 +410,29 @@ async function sweepExpiredLeases(store: StoreData): Promise<{ bounced: number; 
 
   for (let i = 0; i < store.tasks.length; i++) {
     const t = store.tasks[i];
-    if (t.status !== 'in-progress') continue;
-    if (t.loopPausedAt) continue; // stall path owns this one
-    if (!t.claim_lease_expires_at) continue; // pre-#1352 task or no lease stamped
-    if (now <= t.claim_lease_expires_at) continue; // lease still valid
+    // #1352 slice 5: lease-expiry classification routed through claim-contract
+    // lib. Same predicate as before (status==='in-progress' && !loopPausedAt
+    // && claim_lease_expires_at && now > stamp), just centralized for testing.
+    if (!isLeaseExpired(t as any, now)) continue;
 
-    const assigneeLower = (t.assignee || '').toLowerCase();
-    if (assigneeLower) {
-      const otherActivity = maxOtherTaskActivity(store, assigneeLower, t.id);
-      const activeElsewhere = otherActivity > 0 && (now - otherActivity) < STALE_OTHER_ACTIVITY_WINDOW_MS;
-      if (!activeElsewhere) {
-        // #1352 slice 3: inactive everywhere → escalation ladder (warn →
-        // ping → loop-disable). The ladder itself handles the Level-3 bounce.
-        const settingsTeammates = store.settings?.teammates || [];
-        const result = await escalateInactiveClaim(t, t.assignee || assigneeLower, settingsTeammates);
-        if (result.reason === 'acted') {
-          if (result.level >= LEVEL_DISABLE) bounced++;
-          escalated++;
-        }
-        skippedInactive++;
-        continue;
+    // Classification: bounce-only (active elsewhere) vs escalation-ladder
+    // (inactive everywhere) vs no-assignee (always bounce). Mirrors the
+    // inline logic that was here before and keeps the lib helper honest.
+    const classification = classifyExpiredLeaseLib(t as any, store.tasks as any, now);
+
+    if (classification === 'escalate') {
+      const settingsTeammates = store.settings?.teammates || [];
+      const assigneeLower = (t.assignee || '').toLowerCase();
+      const result = await escalateInactiveClaim(t, t.assignee || assigneeLower, settingsTeammates);
+      if (result.reason === 'acted') {
+        if (result.level >= LEVEL_DISABLE) bounced++;
+        escalated++;
       }
+      skippedInactive++;
+      continue;
     }
+    // classification === 'bounce' or 'no-assignee' — fall through to the
+    // existing bounce code below.
 
     const leaseExpiredAt = t.claim_lease_expires_at;
     const lastActivity = t.lastActivityAt || t.claim_started_at || 0;
@@ -1006,16 +1010,18 @@ export async function POST(request: NextRequest) {
         //       in server.mjs hits the /api/runtimes endpoint, which on
         //       agent re-discovery clears loopDisabledAt automatically.
         //       (Implemented below in this same slice.)
-        const teammates = store.settings?.teammates || [];
+                const teammates = store.settings?.teammates || [];
         const teammate = teammates.find(
           (tm: any) => (tm?.agentId || '').toLowerCase() === agentId.toLowerCase(),
         );
-        if (teammate?.loopDisabledAt) {
+        // #1352 slice 5: routed through claim-contract lib so the test suite
+        // and the route agree on what 'blocked' means.
+        if (isDispatchBlocked(teammate)) {
           return recordAndReturn(
             {
               ok: true,
               skipped: true,
-              reason: `Dispatch loop auto-disabled by stale-claim escalation: ${teammate.loopDisableReason || '(no reason recorded)'}`,
+              reason: dispatchBlockReason(teammate),
               loopDisabledAt: teammate.loopDisabledAt,
             },
             { outcome: 'skipped', reason: 'stale-claim-disabled' },
