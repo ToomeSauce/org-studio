@@ -86,6 +86,22 @@ export class OpenClawRuntime implements AgentRuntime {
    */
   async getAgentMetadata(agentId: string): Promise<AgentMetadata | undefined> {
     if (!agentId) return undefined;
+    // #1353 / #1344 — container/staging guard moved IN here from route.ts
+    // so the runtime owns its own env-discipline. The OpenClaw Gateway round-trip
+    // talks to port 4501; in container/staging Next IS port 4501, so a fetch
+    // would loop back into our own already-busy process and self-deadlock.
+    // Hermes is filesystem-only and never hits this, so it doesn't need an
+    // equivalent guard.
+    const gatewayPortExplicit = !!process.env.GATEWAY_PORT;
+    const inContainerOrStaging = !!(
+      process.env.CONTAINER_APP_NAME ||
+      process.env.WEBSITES_PORT ||
+      process.env.K_SERVICE ||
+      (process.env.NODE_ENV === 'production' && !process.env.GATEWAY_URL)
+    );
+    if (!gatewayPortExplicit && inContainerOrStaging) {
+      return undefined;
+    }
     try {
       // #1344: 1-second AbortController on the Gateway round-trip.
       // Use the HTTP route (same path resolveAgentModel used) rather
@@ -115,12 +131,39 @@ export class OpenClawRuntime implements AgentRuntime {
       const sessions = Array.isArray(data.result)
         ? data.result
         : (data.result?.sessions || data.result?.items || []);
-      // Match the latest active session for this agent that has a model stamp.
+      // 1. Primary source: latest active session keyed `agent:<id>:main`
+      //    with a `model` stamp. This is what the agent is ACTUALLY
+      //    running right now (may be a fallback model the runtime
+      //    selected when the primary was unavailable). Matches the
+      //    pre-#1353 behavior of route.ts — doneWhen #8 says Mikey
+      //    still stamps opus-4.7 even though his configured primary
+      //    is gpt-5.5.
       const agentSession = sessions.find(
         (s: any) => s.key?.startsWith(`agent:${agentId}:`) && s.model,
       );
-      if (!agentSession?.model) return undefined;
-      return { model: agentSession.model };
+      if (agentSession?.model) {
+        return { model: agentSession.model };
+      }
+      // 2. Fallback source: agents.list metadata.model.primary. Used
+      //    when no active session has been bound to a model yet
+      //    (typical for agents that haven't received a message since
+      //    Gateway restart). Honest degraded answer: "this is what
+      //    the config DECLARES, lacking a live signal."
+      try {
+        const agentsResp = await fetch(`http://127.0.0.1:${port}/api/gateway`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ method: 'agents.list' }),
+        });
+        const agentsData = await agentsResp.json().catch(() => null);
+        const agents = agentsData?.result?.agents || [];
+        const match = agents.find((a: any) => a?.id === agentId);
+        const primary = match?.model?.primary;
+        if (primary) return { model: primary };
+      } catch {
+        // best-effort fallback; never throw
+      }
+      return undefined;
     } catch {
       return undefined; // best-effort; never throw
     }

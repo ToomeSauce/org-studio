@@ -20,7 +20,7 @@ import {
 } from '@/lib/workspace-auth';
 import { validateUpdateTaskPayload } from '@/lib/update-task-validation';
 import { canonicalizeTeammate } from '@/lib/canonicalize-teammate';
-import { resolveHermesPrimaryModel } from '@/lib/runtimes/hermes';
+import { getRuntimeRegistry } from '@/lib/runtimes/registry';
 
 const SCHEDULER_URL = 'http://localhost:4501/api/scheduler';
 
@@ -54,9 +54,38 @@ const DEFAULT_LOOP_STEPS = [
 /** Resolve model from agent name via Gateway sessions list. Best-effort, returns undefined on failure.
  *  #1344: Wrapped in AbortController (1s timeout) and gated on explicit GATEWAY_PORT in container/staging
  *  envs to prevent self-deadlock when port 4501 IS the same Next process (no Gateway behind it). */
+/**
+ *  resolveAgentModel — returns the model id for an agent NAME.
+ *
+ *  #1353 — Refactored from per-runtime branching (`if
+ *  agentId.startsWith('hermes-')`) into a thin dispatch over
+ *  RuntimeRegistry.getRuntimeForAgent(agentId).getAgentMetadata(agentId).
+ *  All per-runtime logic now lives inside the AgentRuntime
+ *  implementations themselves (src/lib/runtimes/{openclaw,hermes}.ts).
+ *  Route.ts is back to being source-of-truth-agnostic.
+ *
+ *  Old flow:
+ *    1. agentId.startsWith('hermes-') → read profile config + format
+ *    2. else → fetch Gateway sessions.list (with 1s AbortController guard)
+ *
+ *  New flow:
+ *    1. registry.getRuntimeForAgent(agentId) → .getAgentMetadata(agentId)
+ *    2. Runtime owns its own source of truth + timeout discipline.
+ *    3. Container/staging short-circuit moved inside OpenClaw's impl
+ *       (it's specific to OpenClaw's Gateway round-trip, not Hermes).
+ *
+ *  Backwards compatible: same signature, same return type, same
+ *  fallback-to-undefined semantics. Existing callers (~L989, ~L1744
+ *  before slice 1, same offsets here) unchanged.
+ *
+ *  #1344: AbortController timeout enforcement moved INTO
+ *  OpenClawRuntime.getAgentMetadata so each runtime owns its own
+ *  network discipline. Hermes is filesystem-only so it doesn't need
+ *  a timeout.
+ */
 async function resolveAgentModel(agentName: string, store: StoreData): Promise<string | undefined> {
   try {
-    // Resolve agent name → agentId
+    // Resolve agent name → agentId via the teammates roster.
     const teammates = (store as any).settings?.teammates || [];
     const match = teammates.find((t: any) =>
       t.name?.toLowerCase() === agentName?.toLowerCase() ||
@@ -65,70 +94,31 @@ async function resolveAgentModel(agentName: string, store: StoreData): Promise<s
     const agentId = match?.agentId;
     if (!agentId) return undefined;
 
-    // #1350 — Hermes-first lookup. Hermes agents (e.g. hermes-trevor) don't show up
-    // in OpenClaw's Gateway sessions with their *real* model; an opportunistic stale
-    // OpenClaw session (stamped with the OpenClaw default at request-time) can leak
-    // the wrong model name into comment metadata. Read the model straight from the
-    // Hermes profile config when the agentId is a Hermes one.
-    if (agentId.startsWith('hermes-')) {
-      const hermesModel = resolveHermesPrimaryModel(agentId);
-      if (hermesModel?.model) {
-        // Format as provider/model when provider is a real one (azure, copilot,
-        // openai, anthropic). For custom: providers, just return the bare model.
-        const provider = hermesModel.provider || '';
-        if (provider && !provider.startsWith('custom:') && !provider.includes(':')) {
-          return `${provider}/${hermesModel.model}`;
-        }
-        return hermesModel.model;
-      }
-      // Hermes agent but no config-resolved model — don't fall through to OpenClaw
-      // (would just return the stale opus-4.7 leak). Return undefined; comment will
-      // be stamped with no model, which is honest.
+    // Thin dispatch — ask the runtime that owns this agent for its
+    // canonical metadata. Each runtime knows its own source of truth,
+    // timeout discipline, and env-guards (e.g. OpenClaw owns the
+    // container/staging short-circuit; Hermes is filesystem-only).
+    // route.ts no longer has any per-runtime branching for model
+    // resolution — cf. doneWhen #4 + #8.
+    const registry = await getRuntimeRegistry();
+    let runtime = registry.getRuntimeForAgent(agentId);
+    if (!runtime) {
+      // Agent not in the map yet — registry may not have run discovery
+      // since process start (it's lazy: discoverAll() is only called
+      // when /api/runtimes is hit or when registry.send() is invoked).
+      // First-comment-after-restart would otherwise stamp undefined.
+      // Mirror the pattern used by registry.send() (see registry.ts).
+      await registry.discoverAll();
+      runtime = registry.getRuntimeForAgent(agentId);
+    }
+    if (!runtime) {
+      // No runtime owns this agent (declared in teammates but no live
+      // runtime backs it, or runtime is currently down). Honest
+      // answer: undefined.
       return undefined;
     }
-
-    // #1344 — staging/container has no separate Gateway process. If GATEWAY_PORT is
-    // not explicitly set AND we are in a container/staging env, skip the fetch entirely
-    // to avoid recursing into our own (already-busy) Next process.
-    const gatewayPortExplicit = !!process.env.GATEWAY_PORT;
-    const inContainerOrStaging = !!(
-      process.env.CONTAINER_APP_NAME ||
-      process.env.WEBSITES_PORT ||
-      process.env.K_SERVICE ||
-      (process.env.NODE_ENV === 'production' && !process.env.GATEWAY_URL)
-    );
-    if (!gatewayPortExplicit && inContainerOrStaging) {
-      return undefined;
-    }
-
-    // Query Gateway for active sessions, with 1s timeout (#1344)
-    const port = process.env.GATEWAY_PORT || '4501';
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 1000);
-    let resp: Response;
-    try {
-      resp = await fetch(`http://127.0.0.1:${port}/api/gateway`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ method: 'sessions.list', params: { limit: 50 } }),
-        signal: ac.signal,
-      });
-    } catch (e: any) {
-      if (e?.name === 'AbortError') {
-        console.warn('[resolveAgentModel] gateway fetch timed out after 1s — returning undefined');
-      }
-      return undefined;
-    } finally {
-      clearTimeout(timer);
-    }
-    const data = await resp.json();
-    const sessions = Array.isArray(data.result) ? data.result : (data.result?.sessions || data.result?.items || []);
-
-    // Find the most recent active session for this agent
-    const agentSession = sessions.find((s: any) =>
-      s.key?.startsWith(`agent:${agentId}:`) && s.model
-    );
-    return agentSession?.model || undefined;
+    const metadata = await runtime.getAgentMetadata(agentId);
+    return metadata?.model;
   } catch {
     return undefined; // best-effort — never block on this
   }
