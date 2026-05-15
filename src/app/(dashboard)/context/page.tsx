@@ -90,7 +90,13 @@ function TaskCard({ task, projects, onDelete, onSelect, agents, nameColors }: {
 
   return (
     <div
-      className="bg-[var(--bg-primary)] border border-[var(--border-default)] rounded-[var(--radius-md)] p-4 hover:border-[var(--border-strong)] transition-all group cursor-pointer hover:shadow-[0_2px_12px_rgba(0,0,0,0.3)]"
+      // #1369 — long unbroken strings (file paths, URLs, container FQDNs) in
+      // reviewNotes/title were overflowing the card horizontally. Done column
+      // surfaces this most because Completion Notes commonly contain such
+      // strings. min-w-0 + overflow-hidden on the card and break-words on the
+      // content prevent any column (esp. Done) from being pushed wider than
+      // its 280/320px track.
+      className="bg-[var(--bg-primary)] border border-[var(--border-default)] rounded-[var(--radius-md)] p-4 hover:border-[var(--border-strong)] transition-all group cursor-pointer hover:shadow-[0_2px_12px_rgba(0,0,0,0.3)] min-w-0 overflow-hidden"
       onClick={() => onSelect(task.id)}
     >
       {proj && (
@@ -109,8 +115,8 @@ function TaskCard({ task, projects, onDelete, onSelect, agents, nameColors }: {
           ) : null}
         </div>
       )}
-      <div className="flex items-start gap-1.5 mb-2">
-        <div className="flex-1">
+      <div className="flex items-start gap-1.5 mb-2 min-w-0">
+        <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1">
             {task.ticketNumber && (
               <span className="text-[10px] font-semibold bg-[var(--accent-primary)]/15 text-[var(--accent-primary)] px-1.5 py-0.5 rounded-sm">
@@ -121,7 +127,7 @@ function TaskCard({ task, projects, onDelete, onSelect, agents, nameColors }: {
               <span className="text-xs" title="Has acceptance criteria">✓</span>
             )}
           </div>
-          <p className="text-[var(--text-sm)] font-semibold text-[var(--text-primary)] leading-snug">{task.title}</p>
+          <p className="text-[var(--text-sm)] font-semibold text-[var(--text-primary)] leading-snug break-words">{task.title}</p>
         </div>
       </div>
       {/* #1290: was 'review' || 'done'; review removed but kept here for legacy data display. */}
@@ -134,7 +140,7 @@ function TaskCard({ task, projects, onDelete, onSelect, agents, nameColors }: {
               {(task.status as string) === 'review' ? 'Review Notes' : 'Completion Notes'}
             </span>
           </div>
-          <p className="text-[var(--text-xs)] text-[var(--text-secondary)] leading-relaxed whitespace-pre-wrap line-clamp-2">{task.reviewNotes}</p>
+          <p className="text-[var(--text-xs)] text-[var(--text-secondary)] leading-relaxed whitespace-pre-wrap line-clamp-2 break-words [overflow-wrap:anywhere]">{task.reviewNotes}</p>
         </div>
       )}
       <div className="flex items-center justify-between mt-1">
