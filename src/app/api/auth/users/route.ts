@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequest, authenticateRequestWithContext, requireWriteScope, hashPassword } from '@/lib/auth';
-import { getStoreProvider } from '@/lib/store-provider';
+import { getStoreProviderAllWorkspaces } from '@/lib/store-provider'; // TODO(#1387 A.3): users are stored in settings.teammates which is per-workspace; users endpoint should be ws-scoped
 
 /**
  * POST /api/auth/users
@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const store = await getStoreProvider().read();
+    const store = await getStoreProviderAllWorkspaces().read();
     const users = store.settings?.users || [];
 
     // Check if user already exists
@@ -57,7 +57,7 @@ export async function POST(req: NextRequest) {
       users,
     };
 
-    await getStoreProvider().updateSettings(newSettings);
+    await getStoreProviderAllWorkspaces().updateSettings(newSettings);
 
     return NextResponse.json({
       ok: true,
@@ -85,7 +85,7 @@ export async function GET(req: NextRequest) {
   if (authError) return authError;
 
   try {
-    const store = await getStoreProvider().read();
+    const store = await getStoreProviderAllWorkspaces().read();
     const users = (store.settings?.users || []).map((u: any) => ({
       id: u.id,
       username: u.username,

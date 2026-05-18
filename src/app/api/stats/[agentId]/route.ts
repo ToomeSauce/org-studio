@@ -2,6 +2,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getStoreProvider } from '@/lib/store-provider';
+import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
 import { join } from 'path';
 import { readFileSync, existsSync } from 'fs';
 
@@ -81,7 +82,8 @@ export async function GET(
 
   try {
     // Read store data
-    const store = await getStoreProvider().read();
+    const workspaceId = await resolveWorkspaceIdForRequest(req);
+    const store = await getStoreProvider(workspaceId).read();
     const tasks = store.tasks || [];
 
     // Filter tasks for this agent, completed in last 30 days

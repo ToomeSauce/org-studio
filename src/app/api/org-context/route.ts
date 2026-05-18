@@ -14,11 +14,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { generateOrgMd, computeOrgMdMeta, AgentPerformance, TeamPerformance } from '@/lib/org-generator';
 import { generatePrinciples } from '@/lib/principles-generator';
 import { getStoreProvider } from '@/lib/store-provider';
+import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
 import { recordOrgRefresh } from '@/lib/org-context-refresh-tracker';
 
-async function readStore() {
+async function readStore(workspaceId: string) {
   try {
-    return await getStoreProvider().read();
+    return await getStoreProvider(workspaceId).read();
   } catch {
     return null;
   }
@@ -98,7 +99,8 @@ async function fetchMetrics(agentId?: string): Promise<{
 }
 
 export async function GET(request: NextRequest) {
-  const store = await readStore();
+  const workspaceId = await resolveWorkspaceIdForRequest(request);
+  const store = await readStore(workspaceId);
   if (!store) {
     return NextResponse.json({ error: 'Store not initialized' }, { status: 503 });
   }

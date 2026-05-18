@@ -165,8 +165,16 @@ async function cleanup() {
  */
 async function testStoreProviderCodePath() {
   console.log('\n🔍 Section: getStoreProvider() code path (#1387 A.1 target)');
-  todo(false, 'getStoreProvider() singleton pinned to default-workspace (95 callsites)', 'A.1-foundation');
-  todo(false, 'getStoreProviderAllWorkspaces() escape hatch not yet defined', 'A.1-foundation');
+  // Static check: confirm A.1 surface is in place by reading store-provider.ts source.
+  try {
+    const src = readFileSync(join(rootDir, 'src/lib/store-provider.ts'), 'utf-8');
+    const hasNewSig = /export function getStoreProvider\(workspaceId: string\)/.test(src);
+    const hasEscapeHatch = /export function getStoreProviderAllWorkspaces\(\)/.test(src);
+    assert(hasNewSig, 'store-provider.ts exports getStoreProvider(workspaceId: string)');
+    assert(hasEscapeHatch, 'store-provider.ts exports getStoreProviderAllWorkspaces() escape hatch');
+  } catch (e) {
+    assert(false, `static check of store-provider.ts failed: ${e.message}`);
+  }
   console.log('     Verified at build-time by TypeScript signature change.');
 }
 
@@ -502,7 +510,7 @@ try {
 
   if (todos > 0) {
     console.log('\n⚠️  Deferred TODOs (out-of-scope for slice A.1):');
-    console.log('   A.1-foundation: getStoreProvider() singleton (closes when A.1 lands)');
+    console.log('   (A.1-foundation closed by this slice — see store-provider.ts)');
     console.log('   A.3-hardcodes : hardcoded "default-workspace" constants in libs');
     console.log('   A.3-principles: principles-generator cross-workspace read');
     console.log('   A.3-auth      : auth.ts session workspace hardcodes');

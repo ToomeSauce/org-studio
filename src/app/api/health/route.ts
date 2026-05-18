@@ -12,7 +12,7 @@
  */
 import { NextResponse } from 'next/server';
 import { getRuntimeRegistry } from '@/lib/runtimes/registry';
-import { getStoreProvider } from '@/lib/store-provider';
+import { getStoreProviderAllWorkspaces } from '@/lib/store-provider'; // TODO(#1387 A.3): health endpoint is cross-workspace; consider per-workspace summaries
 
 const STUCK_TASK_THRESHOLD_MS = parseInt(process.env.STUCK_TASK_THRESHOLD_MIN || '30', 10) * 60 * 1000;
 
@@ -160,7 +160,7 @@ export async function GET() {
     // --- Stuck tasks (from store — works in both file and DB mode) ---
     let stuckTasks: any[] = [];
     try {
-      const store = await getStoreProvider().read();
+      const store = await getStoreProviderAllWorkspaces().read();
       stuckTasks = computeStuckTasks(store.tasks || [], store.projects || []);
     } catch {
       // Swallow

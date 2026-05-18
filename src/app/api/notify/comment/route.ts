@@ -20,6 +20,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 import { getStoreProvider } from '@/lib/store-provider';
+import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
 import { routeCommentNotifications } from '@/lib/notification-router';
 import { resolveTaskComponent, resolveTaskVersion } from '@/lib/notification-context';
 
@@ -44,7 +45,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Missing taskId or scope' }, { status: 400 });
   }
 
-  const store = await getStoreProvider().read();
+  const workspaceId = await resolveWorkspaceIdForRequest(request);
+  const store = await getStoreProvider(workspaceId).read();
   const teammates = store.settings?.teammates || [];
 
   // Locate the comment + task

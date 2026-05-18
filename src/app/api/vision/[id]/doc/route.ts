@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { rpc } from '@/lib/gateway-rpc';
 import { getStoreProvider } from '@/lib/store-provider';
+import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
 import { checkArchivedProject } from '@/lib/archived-project-compat';
 
 interface VisionDocResponse {
@@ -68,10 +69,10 @@ function parseRoadmapProgress(content: string): { currentVersion?: string; total
  * Resolve the file path for a project's vision doc.
  * Returns { absPath, content } or { absPath: null, content: null }.
  */
-async function resolveDocPath(projectId: string): Promise<{ absPath: string | null; content: string | null; visionDocPath?: string }> {
+async function resolveDocPath(projectId: string, workspaceId: string): Promise<{ absPath: string | null; content: string | null; visionDocPath?: string }> {
   let visionDocPath: string | undefined;
   try {
-    const store = await getStoreProvider().read();
+    const store = await getStoreProvider(workspaceId).read();
     const project = (store.projects || []).find((p: any) => p.id === projectId);
     visionDocPath = project?.visionDocPath;
   } catch { /* ignore errors */ }
@@ -105,9 +106,10 @@ export async function GET(
 ) {
   try {
     const { id: projectId } = await params;
+    const workspaceId = await resolveWorkspaceIdForRequest(req);
 
     // 410 compat: archived qa-fold projects
-    const store = await getStoreProvider().read();
+    const store = await getStoreProvider(workspaceId).read();
     const archCheck = checkArchivedProject(store.projects, projectId);
     if (archCheck.migrated) {
       return NextResponse.json(
@@ -144,7 +146,7 @@ export async function GET(
 
     // Fall back to filesystem
     if (!content) {
-      const { content: fsContent } = await resolveDocPath(projectId);
+      const { content: fsContent } = await resolveDocPath(projectId, workspaceId);
       content = fsContent;
       if (content) {
         console.info(`[VisionDoc] GET project=${projectId} source=filesystem len=${content.length}`);
@@ -197,6 +199,7 @@ export async function PUT(
 
   try {
     const { id: projectId } = await params;
+    const workspaceId = await resolveWorkspaceIdForRequest(req);
     const body = await req.json();
     const newContent = body?.content;
 
@@ -232,7 +235,7 @@ export async function PUT(
 
     // Fall back to filesystem if Postgres failed or not configured
     if (!savedToDb) {
-      const { absPath } = await resolveDocPath(projectId);
+      const { absPath } = await resolveDocPath(projectId, workspaceId);
       if (!absPath) {
         return NextResponse.json({ error: 'Could not resolve doc path' }, { status: 500 });
       }
@@ -255,7 +258,7 @@ export async function PUT(
     let project: any = null;
     let store: any = null;
     try {
-      store = await getStoreProvider().read();
+      store = await getStoreProvider(workspaceId).read();
       project = (store.projects || []).find((p: any) => p.id === projectId);
     } catch { /* non-fatal */ }
 

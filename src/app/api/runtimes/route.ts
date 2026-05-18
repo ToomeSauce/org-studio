@@ -10,12 +10,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getRuntimeRegistry } from '@/lib/runtimes/registry';
 import { getStoreProvider } from '@/lib/store-provider';
+import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
 import { auditRuntimeMetadata, logMismatches } from '@/lib/runtimes/audit';
 
 const DEFAULT_AGENT_COLORS = ['cyan', 'emerald', 'purple', 'blue', 'pink', 'orange'];
 
 export async function GET(request: NextRequest) {
   try {
+    const workspaceId = await resolveWorkspaceIdForRequest(request);
     const registry = await getRuntimeRegistry();
 
     // Discover all agents from all configured runtimes
@@ -26,7 +28,7 @@ export async function GET(request: NextRequest) {
 
     // Auto-scaffold: persist any newly discovered agents into the store
     try {
-      const store = await getStoreProvider().read();
+      const store = await getStoreProvider(workspaceId).read();
       const teammates = store?.settings?.teammates || [];
       const existingAgentIds = new Set(
         teammates.filter((t: any) => t.agentId).map((t: any) => t.agentId)
@@ -76,7 +78,7 @@ export async function GET(request: NextRequest) {
           }
         }
 
-        await getStoreProvider().updateSettings({ teammates: updatedTeammates, loops: updatedLoops });
+        await getStoreProvider(workspaceId).updateSettings({ teammates: updatedTeammates, loops: updatedLoops });
         console.log(`[Runtimes] Auto-scaffolded ${newAgents.length} new agent(s): ${newAgents.map(a => a.id).join(', ')}${loopsCreated ? ` (${loopsCreated} loop(s) created)` : ''}`);
       }
 
@@ -96,7 +98,7 @@ export async function GET(request: NextRequest) {
       // read is cheap.
       try {
         const discoveredIds = new Set(allAgents.map(a => a.id.toLowerCase()));
-        const freshStore = await getStoreProvider().read();
+        const freshStore = await getStoreProvider(workspaceId).read();
         const freshTeammates = freshStore?.settings?.teammates || [];
         let clearedCount = 0;
         const cleared = freshTeammates.map((tm: any) => {
@@ -107,7 +109,7 @@ export async function GET(request: NextRequest) {
           return rest;
         });
         if (clearedCount > 0) {
-          await getStoreProvider().updateSettings({ teammates: cleared });
+          await getStoreProvider(workspaceId).updateSettings({ teammates: cleared });
           console.log(`[Runtimes #1352] Auto-cleared loopDisabledAt on ${clearedCount} re-discovered agent(s)`);
         }
       } catch (clearErr) {
@@ -135,7 +137,7 @@ export async function GET(request: NextRequest) {
     // which is on the dashboard's hot path.
     let runtime_metadata_mismatches: any[] = [];
     try {
-      const auditStore = await getStoreProvider().read();
+      const auditStore = await getStoreProvider(workspaceId).read();
       const auditTeammates = auditStore?.settings?.teammates || [];
       runtime_metadata_mismatches = await auditRuntimeMetadata({
         agents: allAgents,

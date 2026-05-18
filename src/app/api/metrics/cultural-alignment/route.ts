@@ -1,5 +1,6 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getStoreProvider } from '@/lib/store-provider';
+import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
 
 interface KudosEntry {
   id: string;
@@ -50,10 +51,11 @@ const DEFAULT_PACT_VALUES: PactValueConfig[] = [
   { icon: '🤝', title: 'Teamwork', letter: 'T' },
 ];
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
     // --- Load PACT values from store ---
-    const provider = getStoreProvider();
+    const workspaceId = await resolveWorkspaceIdForRequest(request);
+    const provider = getStoreProvider(workspaceId);
     const store = await provider.read();
     const pactConfig: PactValueConfig[] =
       store?.settings?.values?.items || DEFAULT_PACT_VALUES;

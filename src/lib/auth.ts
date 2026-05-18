@@ -224,8 +224,9 @@ export async function resolveSessionUserId(rawUserId: string): Promise<string> {
 
   if (!_userIdMap || Date.now() - _userIdMapTs > USER_ID_MAP_TTL) {
     try {
-      const { getStoreProvider } = await import('@/lib/store-provider');
-      const store = await getStoreProvider().read();
+      // auth.ts: token validation runs before workspace context is established.
+      const { getStoreProviderAllWorkspaces } = await import('@/lib/store-provider');
+      const store = await getStoreProviderAllWorkspaces().read();
       const users = store.settings?.users || [];
       _userIdMap = new Map();
       for (const u of users as any[]) {

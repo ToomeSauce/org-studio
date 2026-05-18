@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 import { getStoreProvider } from '@/lib/store-provider';
+import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
 
 /**
  * GET /api/metrics/{agentId} — Get daily metrics for an agent
@@ -8,7 +9,8 @@ import { getStoreProvider } from '@/lib/store-provider';
  */
 export async function GET(request: NextRequest, { params }: { params: Promise<{ agentId: string }> }) {
   const { agentId } = await params;
-  const provider = getStoreProvider();
+  const workspaceId = await resolveWorkspaceIdForRequest(request);
+  const provider = getStoreProvider(workspaceId);
 
   if (!provider.getMetrics) {
     return NextResponse.json({ error: 'Metrics not available (requires PostgreSQL)' }, { status: 501 });
@@ -40,7 +42,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   if (scopeFail) return scopeFail;
 
   const { agentId } = await params;
-  const provider = getStoreProvider();
+  const workspaceId = await resolveWorkspaceIdForRequest(request);
+  const provider = getStoreProvider(workspaceId);
 
   if (!provider.upsertMetrics) {
     return NextResponse.json({ error: 'Metrics not available (requires PostgreSQL)' }, { status: 501 });

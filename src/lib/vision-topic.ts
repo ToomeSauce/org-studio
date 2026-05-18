@@ -11,7 +11,7 @@
  */
 
 import { Project } from './store';
-import { getStoreProvider } from './store-provider';
+import { getStoreProviderAllWorkspaces } from './store-provider'; // TODO(#1387 A.3): vision-topic is currently dead code; if revived, thread workspaceId through public APIs
 
 /** The supergroup where project topics are created */
 const TEAM_GROUP_ID = process.env.VISION_TOPIC_GROUP_ID || '';
@@ -261,7 +261,7 @@ function buildLeadsList(project: Project): string[] {
 /** Get the topic for a project from settings (Postgres-backed) */
 async function getProjectTopic(projectId: string): Promise<ProjectTopic | null> {
   try {
-    const store = await getStoreProvider().read();
+    const store = await getStoreProviderAllWorkspaces().read();
     const topics: ProjectTopic[] = store.settings?.projectTopics || [];
     return topics.find(t => t.projectId === projectId) || null;
   } catch {
@@ -272,7 +272,7 @@ async function getProjectTopic(projectId: string): Promise<ProjectTopic | null> 
 /** Save/update a project topic mapping in settings */
 async function saveProjectTopicMapping(topic: ProjectTopic): Promise<void> {
   try {
-    const store = await getStoreProvider().read();
+    const store = await getStoreProviderAllWorkspaces().read();
     const settings = store.settings || {};
     const topics: ProjectTopic[] = settings.projectTopics || [];
 
@@ -283,7 +283,7 @@ async function saveProjectTopicMapping(topic: ProjectTopic): Promise<void> {
       topics.push(topic);
     }
 
-    await getStoreProvider().updateSettings({ ...settings, projectTopics: topics });
+    await getStoreProviderAllWorkspaces().updateSettings({ ...settings, projectTopics: topics });
   } catch (e) {
     console.error('[Vision Topic] Failed to save topic mapping:', e);
   }

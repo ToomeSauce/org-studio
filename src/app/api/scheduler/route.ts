@@ -16,7 +16,7 @@ import { buildLoopPrompt, buildDispatchMessage, clearConsumedHandoffs } from '@/
 import type { AgentLoop } from '@/lib/store';
 import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 import { writeHeartbeat } from '@/lib/heartbeats';
-import { getStoreProvider, type StoreData } from '@/lib/store-provider';
+import { getStoreProviderAllWorkspaces, type StoreData } from '@/lib/store-provider';
 import {
   isTaskAnyDispatchEligible,
   isTaskWaiting,
@@ -60,12 +60,15 @@ const lastEscalateByAgent: Record<string, number> = {};
 
 const NOTIFY_CHAT_ID = process.env.NOTIFY_CHAT_ID || '';
 
+// Scheduler is fundamentally cross-workspace (cron-like; iterates all loops/teammates).
+// TODO(#1387 A.3): split scheduler into per-workspace ticks so each workspace's
+// loops/teammates run with their own scoped provider. For A.1, use the escape hatch.
 async function readStore(): Promise<StoreData> {
-  return await getStoreProvider().read();
+  return await getStoreProviderAllWorkspaces().read();
 }
 
 async function writeStore(store: StoreData): Promise<void> {
-  await getStoreProvider().write(store);
+  await getStoreProviderAllWorkspaces().write(store);
 }
 
 function getLoop(store: StoreData, loopId: string): AgentLoop | undefined {
@@ -263,7 +266,7 @@ async function escalateInactiveClaim(
   settingsTeammates: any[],
 ): Promise<{ level: number; reason: 'cooldown' | 'no-teammate' | 'acted' | 'stale-skip' }> {
   const now = Date.now();
-  const provider = getStoreProvider();
+  const provider = getStoreProviderAllWorkspaces(); // scheduler: cross-workspace; TODO(#1387 A.3) split per-ws
 
   // #1355 idempotency guard: re-read the task from the canonical store
   // before performing any writes. Between the sweep's snapshot and now,
@@ -429,7 +432,7 @@ async function sweepExpiredLeases(store: StoreData): Promise<{ bounced: number; 
   let bounced = 0;
   let skippedInactive = 0;
   let escalated = 0;
-  const provider = getStoreProvider();
+  const provider = getStoreProviderAllWorkspaces(); // scheduler: cross-workspace; TODO(#1387 A.3) split per-ws
 
   for (let i = 0; i < store.tasks.length; i++) {
     const t = store.tasks[i];

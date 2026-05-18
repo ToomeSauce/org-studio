@@ -1,5 +1,6 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getStoreProvider } from '@/lib/store-provider';
+import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
 
 const TZ = 'America/New_York';
 const STALL_THRESHOLD_MIN = 120;
@@ -42,8 +43,9 @@ function getLast30Days(): string[] {
   return days;
 }
 
-export async function GET() {
-  const provider = getStoreProvider();
+export async function GET(request: NextRequest) {
+  const workspaceId = await resolveWorkspaceIdForRequest(request);
+  const provider = getStoreProvider(workspaceId);
   const store = await provider.read();
   const tasks = store.tasks || [];
   const now = Date.now();
