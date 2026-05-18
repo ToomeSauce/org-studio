@@ -14,7 +14,7 @@
  * Pattern matches src/lib/update-task-validation.ts (#1195).
  */
 
-export type AuthMethod = 'session' | 'apikey' | 'noauth';
+export type AuthMethod = 'session' | 'apikey' | 'noauth' | 'agent-token';
 
 export interface AddCommentInput {
   comment?: {
@@ -76,6 +76,9 @@ export function validateAddComment(
 
   // #1217 Bug B: API-key callers must specify an explicit author. The global
   // API key has no human owner, so we refuse to silently substitute one.
+  // #1383: per-agent tokens DO carry a real userId (the token owner), so they
+  // are NOT subject to this rule — the route handler resolves author from
+  // the token's userId the same way it does for sessions.
   if (authMethod === 'apikey') {
     const author = trimOrEmpty(payload.comment.author);
     if (!author) {
@@ -104,7 +107,8 @@ export function resolveCommentAuthor(
 ): string {
   // For apikey/noauth, trust the payload exactly. Validation should have
   // already required a non-empty author for apikey.
-  if (authMethod !== 'session') {
+  // For session and agent-token, both have a real userId we can fall back to.
+  if (authMethod !== 'session' && authMethod !== 'agent-token') {
     return rawAuthor || 'Unknown';
   }
 

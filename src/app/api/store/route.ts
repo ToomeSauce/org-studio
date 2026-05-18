@@ -473,7 +473,7 @@ export async function POST(req: NextRequest) {
   // whether the rewrite runs at all (#1217 Bug B — apikey/noauth must NOT
   // rewrite, since the global API key has no real human owner).
   let requestUserId: string | null | undefined;
-  let requestAuthMethod: 'session' | 'apikey' | 'noauth' | undefined;
+  let requestAuthMethod: 'session' | 'apikey' | 'noauth' | 'agent-token' | undefined;
   try {
     const authCtx = await authenticateRequestWithContext(req);
     requestUserId = authCtx.context?.userId;

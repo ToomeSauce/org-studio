@@ -256,10 +256,34 @@ export function invalidateUserIdCache(): void {
  * silently rewritten to 'Basil' for any agent posting via Bearer token without
  * an explicit `comment.author`). Callers that need a UI-display fallback may
  * use `userId ?? 'basil'`, but ownership/attribution writes must NEVER do this.
+ *
+ * #1383: per-agent tokens (method === 'agent-token') DO carry a real userId
+ * (the token's owner) and a scope ('read' | 'write'). Write endpoints should
+ * use requireWriteScope(ctx) to reject read-only tokens.
  */
 export interface AuthContext {
   userId: string | null;
-  method: 'session' | 'apikey' | 'noauth';
+  method: 'session' | 'apikey' | 'noauth' | 'agent-token';
+  /** Only set when method === 'agent-token' (#1383). */
+  tokenScope?: 'read' | 'write';
+  /** Only set when method === 'agent-token' (#1383). For audit logging. */
+  tokenId?: string;
+}
+
+/**
+ * Guard for write endpoints: if the caller authenticated via a read-only
+ * per-agent token, return a 403. All other auth methods pass through (the
+ * global apikey is admin, sessions are full-scope, noauth is dev-mode).
+ * Returns null on pass, NextResponse on reject.
+ */
+export function requireWriteScope(ctx: AuthContext): NextResponse | null {
+  if (ctx.method === 'agent-token' && ctx.tokenScope === 'read') {
+    return NextResponse.json(
+      { error: 'insufficient_scope', message: 'This token has read-only scope. Mint a write-scope token for this endpoint.' },
+      { status: 403 },
+    );
+  }
+  return null;
 }
 
 /**
@@ -282,16 +306,32 @@ export async function authenticateRequest(req: NextRequest): Promise<NextRespons
     }
   }
 
-  // Try API key
+  // Try API key (global admin) OR per-agent token (#1383, behind flag)
   const apiKey = process.env.ORG_STUDIO_API_KEY;
-  if (apiKey) {
-    const authHeader = req.headers.get('authorization') || '';
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-    if (token === apiKey) {
-      return null; // Authenticated via API key
+  const authHeader = req.headers.get('authorization') || '';
+  const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+
+  if (apiKey || bearer) {
+    if (bearer && apiKey && bearer === apiKey) {
+      return null; // Authenticated via global API key
     }
-    // If API key is configured but doesn't match, reject
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+    // #1383: per-agent token path (behind ENABLE_PER_AGENT_TOKENS flag).
+    if (bearer) {
+      try {
+        const { perAgentTokensEnabled, verifyApiToken } = await import('@/lib/api-tokens');
+        if (perAgentTokensEnabled()) {
+          const record = await verifyApiToken(bearer);
+          if (record) return null; // Authenticated via per-agent token
+        }
+      } catch (e) {
+        console.warn('[auth] per-agent token verify failed:', (e as Error)?.message);
+      }
+    }
+
+    if (apiKey) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
   }
 
   // No auth configured — allow localhost dev mode
@@ -321,18 +361,48 @@ export async function authenticateRequestWithContext(
     }
   }
 
-  // Try API key
+  // Try API key (global admin) OR per-agent token (#1383, behind flag)
   const apiKey = process.env.ORG_STUDIO_API_KEY;
-  if (apiKey) {
-    const authHeader = req.headers.get('authorization') || '';
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-    if (token === apiKey) {
+  const authHeader = req.headers.get('authorization') || '';
+  const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+
+  if (apiKey || bearer) {
+    if (bearer && apiKey && bearer === apiKey) {
       // Global API key has no human owner — userId is null. Callers that need
       // a workspace-membership fallback should use `?? 'basil'` themselves.
       // See #1217 Bug B for why hardcoding 'basil' here was wrong.
       return { context: { userId: null, method: 'apikey' } };
     }
-    return { error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) };
+
+    // #1383: try per-agent token. Only when the feature flag is on, to avoid
+    // an extra DB roundtrip + to keep the auth surface unchanged during the
+    // pre-launch period. When off, this branch is a no-op and we fall through
+    // to the 401 below.
+    if (bearer) {
+      try {
+        const { perAgentTokensEnabled, verifyApiToken } = await import('@/lib/api-tokens');
+        if (perAgentTokensEnabled()) {
+          const record = await verifyApiToken(bearer);
+          if (record) {
+            return {
+              context: {
+                userId: record.userId,
+                method: 'agent-token',
+                tokenScope: record.scope,
+                tokenId: record.id,
+              },
+            };
+          }
+        }
+      } catch (e) {
+        // Token verify failure shouldn't 500 — just fall through to the 401.
+        console.warn('[auth] per-agent token verify failed:', (e as Error)?.message);
+      }
+    }
+
+    if (apiKey) {
+      return { error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) };
+    }
   }
 
   // No auth configured — allow localhost dev mode. No real user; null userId.
