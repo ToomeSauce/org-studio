@@ -56,9 +56,11 @@ export async function writeHeartbeat({
   try {
     const ws = workspaceId || 'default-workspace';
     await pool.query(
+      // #1388 A.4-schema: PK is (workspace_id, agent_id) — the same agent can
+      // heartbeat in multiple workspaces independently.
       `INSERT INTO org_studio_heartbeats (agent_id, loop_id, last_heartbeat, last_status, updated_at, workspace_id)
        VALUES ($1, $2, NOW(), $3, NOW(), $4)
-       ON CONFLICT (agent_id) DO UPDATE SET
+       ON CONFLICT (workspace_id, agent_id) DO UPDATE SET
          loop_id = EXCLUDED.loop_id,
          last_heartbeat = NOW(),
          last_status = EXCLUDED.last_status,

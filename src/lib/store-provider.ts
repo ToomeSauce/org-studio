@@ -702,8 +702,9 @@ export class PostgresStoreProvider implements StoreProvider {
       }
 
       // Update settings (scoped to workspace)
+      // #1388 A.4-schema: PK is (workspace_id, id) — settings rows are independent per workspace.
       await client.query(
-        'INSERT INTO org_studio_settings (id, data, workspace_id) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET data = $2',
+        'INSERT INTO org_studio_settings (id, data, workspace_id) VALUES ($1, $2, $3) ON CONFLICT (workspace_id, id) DO UPDATE SET data = $2',
         ['default', JSON.stringify(data.settings || {}), this.workspaceId]
       );
 
@@ -1130,8 +1131,9 @@ export class PostgresStoreProvider implements StoreProvider {
         : {};
       const updated = { ...current, ...updates };
 
+      // #1388 A.4-schema: PK is (workspace_id, id).
       await client.query(
-        'INSERT INTO org_studio_settings (id, data, workspace_id) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET data = $2',
+        'INSERT INTO org_studio_settings (id, data, workspace_id) VALUES ($1, $2, $3) ON CONFLICT (workspace_id, id) DO UPDATE SET data = $2',
         ['default', JSON.stringify(updated), this.workspaceId]
       );
 
@@ -1255,16 +1257,19 @@ export class PostgresStoreProvider implements StoreProvider {
       versions_completed, ...overflow
     } = metrics;
     const sectionVal = sectionId || null;
+    // #1388 A.4-schema: include workspace_id in the INSERT — the new unique
+    // index is (workspace_id, agent_id, date, COALESCE(section_id,'')) and
+    // workspace_id is now NOT NULL.
     await pool.query(`
       INSERT INTO org_studio_agent_metrics (
-        id, agent_id, date, section_id, tasks_completed, tasks_started, avg_duration_min,
+        id, agent_id, date, section_id, workspace_id, tasks_completed, tasks_started, avg_duration_min,
         median_duration_min, avg_gap_min, chain_rate, throughput, first_pass_rate,
         bounce_count, stall_count, comments_posted, mentions_received, mentions_sent,
         mention_response_min, kudos_count, flag_count, review_notes_rate, test_plan_rate,
         active_minutes, versions_completed, data, updated_at)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
-              $17, $18, $19, $20, $21, $22, $23, $24, $25, NOW())
-      ON CONFLICT (agent_id, date, COALESCE(section_id, '')) DO UPDATE SET
+              $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, NOW())
+      ON CONFLICT (workspace_id, agent_id, date, COALESCE(section_id, '')) DO UPDATE SET
         tasks_completed = EXCLUDED.tasks_completed,
         tasks_started = EXCLUDED.tasks_started,
         avg_duration_min = EXCLUDED.avg_duration_min,
@@ -1288,7 +1293,7 @@ export class PostgresStoreProvider implements StoreProvider {
         data = EXCLUDED.data,
         updated_at = NOW()
     `, [
-      id, agentId, date, sectionVal,
+      id, agentId, date, sectionVal, this.workspaceId,
       tasks_completed || 0, tasks_started || 0,
       avg_duration_min || null, median_duration_min || null, avg_gap_min || null,
       chain_rate || null, throughput || null, first_pass_rate || null,
@@ -1303,9 +1308,10 @@ export class PostgresStoreProvider implements StoreProvider {
 
   async getMetrics(agentId: string, opts?: { from?: string; to?: string; limit?: number; sectionId?: string }): Promise<any[]> {
     const pool = await this.getPool();
-    const conditions = ['agent_id = $1'];
-    const params: any[] = [agentId];
-    let paramIdx = 2;
+    // #1388 A.4-schema: filter by workspace_id (PK includes it now).
+    const conditions = ['workspace_id = $1', 'agent_id = $2'];
+    const params: any[] = [this.workspaceId, agentId];
+    let paramIdx = 3;
     if (opts?.from) { conditions.push(`date >= $${paramIdx}`); params.push(opts.from); paramIdx++; }
     if (opts?.to) { conditions.push(`date <= $${paramIdx}`); params.push(opts.to); paramIdx++; }
     // Section filtering: default (undefined) = agent-wide rows only (section_id IS NULL)
@@ -1353,9 +1359,10 @@ export class PostgresStoreProvider implements StoreProvider {
 
   async getTeamMetrics(opts?: { from?: string; to?: string; sectionId?: string }): Promise<any[]> {
     const pool = await this.getPool();
-    const conditions: string[] = [];
-    const params: any[] = [];
-    let paramIdx = 1;
+    // #1388 A.4-schema: scope to this workspace.
+    const conditions: string[] = ['workspace_id = $1'];
+    const params: any[] = [this.workspaceId];
+    let paramIdx = 2;
     if (opts?.from) { conditions.push(`date >= $${paramIdx}`); params.push(opts.from); paramIdx++; }
     if (opts?.to) { conditions.push(`date <= $${paramIdx}`); params.push(opts.to); paramIdx++; }
     // Section filtering for team metrics

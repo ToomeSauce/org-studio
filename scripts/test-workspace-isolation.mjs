@@ -277,27 +277,27 @@ async function testAgentMetrics() {
   const mColl1 = rid('m-coll1');
   const mColl2 = rid('m-coll2');
   try {
+    // #1388 A.4-schema: new unique key is (workspace_id, agent_id, date, COALESCE(section_id,'')).
     await pool.query(
       `INSERT INTO org_studio_agent_metrics (id, agent_id, date, tasks_completed, workspace_id, section_id)
        VALUES ($1, $2, $3, 1, $4, NULL)
-       ON CONFLICT (agent_id, date, COALESCE(section_id, '')) DO UPDATE SET tasks_completed = EXCLUDED.tasks_completed`,
+       ON CONFLICT (workspace_id, agent_id, date, COALESCE(section_id, '')) DO UPDATE SET tasks_completed = EXCLUDED.tasks_completed`,
       [mColl1, sharedAgent, today, WS_A]
     );
     await pool.query(
       `INSERT INTO org_studio_agent_metrics (id, agent_id, date, tasks_completed, workspace_id, section_id)
        VALUES ($1, $2, $3, 99, $4, NULL)
-       ON CONFLICT (agent_id, date, COALESCE(section_id, '')) DO UPDATE SET tasks_completed = EXCLUDED.tasks_completed`,
+       ON CONFLICT (workspace_id, agent_id, date, COALESCE(section_id, '')) DO UPDATE SET tasks_completed = EXCLUDED.tasks_completed`,
       [mColl2, sharedAgent, today, WS_B]
     );
     const both = await pool.query(`SELECT workspace_id, tasks_completed FROM org_studio_agent_metrics WHERE agent_id=$1`, [sharedAgent]);
     const wsACount = both.rows.filter(r => r.workspace_id === WS_A).length;
     const wsBCount = both.rows.filter(r => r.workspace_id === WS_B).length;
-    todo(wsACount === 1 && wsBCount === 1,
-      `agent_metrics: ON CONFLICT preserves both ws-a + ws-b rows for same (agent_id, date) — got ws-a=${wsACount}, ws-b=${wsBCount}`,
-      'A.4-schema'
+    assert(wsACount === 1 && wsBCount === 1,
+      `agent_metrics: ON CONFLICT preserves both ws-a + ws-b rows for same (agent_id, date) — got ws-a=${wsACount}, ws-b=${wsBCount}`
     );
   } catch (e) {
-    todo(false, `agent_metrics ON CONFLICT collision test errored: ${e.message}`, 'A.4-schema');
+    assert(false, `agent_metrics ON CONFLICT collision test errored: ${e.message}`);
   }
 }
 
@@ -377,36 +377,35 @@ async function testHeartbeats() {
     `INSERT INTO org_studio_heartbeats (agent_id, loop_id, last_heartbeat, last_status, updated_at, workspace_id)
      VALUES ($1, 'loop-1', NOW(), 'ok', NOW(), $2),
             ($3, 'loop-1', NOW(), 'ok', NOW(), $4)
-     ON CONFLICT (agent_id) DO UPDATE SET last_heartbeat = EXCLUDED.last_heartbeat`,
+     ON CONFLICT (workspace_id, agent_id) DO UPDATE SET last_heartbeat = EXCLUDED.last_heartbeat`,
     [agentA, WS_A, agentB, WS_B]
   );
   const r = await pool.query(`SELECT agent_id FROM org_studio_heartbeats WHERE workspace_id=$1 AND agent_id IN ($2,$3)`, [WS_A, agentA, agentB]);
   assert(r.rows.length === 1 && r.rows[0].agent_id === agentA, 'heartbeats: ws-a sees only its agent');
 
-  // ON CONFLICT bug: same agent_id across workspaces overwrites. (heartbeats.ts:52, audit finding #41)
+  // ON CONFLICT bug fixed by #1388 A.4-schema: PK is now (workspace_id, agent_id).
   const sharedAgent = rid('hb-shared');
   try {
     await pool.query(
       `INSERT INTO org_studio_heartbeats (agent_id, loop_id, last_heartbeat, last_status, updated_at, workspace_id)
        VALUES ($1, 'loop-A', NOW(), 'ok-A', NOW(), $2)
-       ON CONFLICT (agent_id) DO UPDATE SET workspace_id = EXCLUDED.workspace_id, last_status = EXCLUDED.last_status`,
+       ON CONFLICT (workspace_id, agent_id) DO UPDATE SET last_status = EXCLUDED.last_status`,
       [sharedAgent, WS_A]
     );
     await pool.query(
       `INSERT INTO org_studio_heartbeats (agent_id, loop_id, last_heartbeat, last_status, updated_at, workspace_id)
        VALUES ($1, 'loop-B', NOW(), 'ok-B', NOW(), $2)
-       ON CONFLICT (agent_id) DO UPDATE SET workspace_id = EXCLUDED.workspace_id, last_status = EXCLUDED.last_status`,
+       ON CONFLICT (workspace_id, agent_id) DO UPDATE SET last_status = EXCLUDED.last_status`,
       [sharedAgent, WS_B]
     );
     const both = await pool.query(`SELECT workspace_id FROM org_studio_heartbeats WHERE agent_id=$1`, [sharedAgent]);
     const wsACount = both.rows.filter(r => r.workspace_id === WS_A).length;
     const wsBCount = both.rows.filter(r => r.workspace_id === WS_B).length;
-    todo(wsACount === 1 && wsBCount === 1,
-      `heartbeats: ON CONFLICT preserves both ws-a + ws-b rows for same agent_id — got ws-a=${wsACount}, ws-b=${wsBCount}`,
-      'A.4-schema'
+    assert(wsACount === 1 && wsBCount === 1,
+      `heartbeats: ON CONFLICT preserves both ws-a + ws-b rows for same agent_id — got ws-a=${wsACount}, ws-b=${wsBCount}`
     );
   } catch (e) {
-    todo(false, `heartbeats ON CONFLICT collision test errored: ${e.message}`, 'A.4-schema');
+    assert(false, `heartbeats ON CONFLICT collision test errored: ${e.message}`);
   }
 }
 
@@ -441,29 +440,29 @@ async function testIncidents() {
 async function testSettings() {
   console.log('\n🔍 Section: org_studio_settings');
   const idShared = rid('settings');
-  // settings PK is just (id); ON CONFLICT (id) DO UPDATE blows away across workspaces (audit #75).
+  // #1388 A.4-schema: PK is now (workspace_id, id) — same settings.id can
+  // exist independently per workspace.
   try {
     await pool.query(
       `INSERT INTO org_studio_settings (id, data, updated_at, workspace_id)
        VALUES ($1, '{"who":"ws-a"}'::jsonb, NOW(), $2)
-       ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, workspace_id = EXCLUDED.workspace_id`,
+       ON CONFLICT (workspace_id, id) DO UPDATE SET data = EXCLUDED.data`,
       [idShared, WS_A]
     );
     await pool.query(
       `INSERT INTO org_studio_settings (id, data, updated_at, workspace_id)
        VALUES ($1, '{"who":"ws-b"}'::jsonb, NOW(), $2)
-       ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, workspace_id = EXCLUDED.workspace_id`,
+       ON CONFLICT (workspace_id, id) DO UPDATE SET data = EXCLUDED.data`,
       [idShared, WS_B]
     );
     const both = await pool.query(`SELECT workspace_id FROM org_studio_settings WHERE id=$1`, [idShared]);
     const wsACount = both.rows.filter(r => r.workspace_id === WS_A).length;
     const wsBCount = both.rows.filter(r => r.workspace_id === WS_B).length;
-    todo(wsACount === 1 && wsBCount === 1,
-      `settings: ON CONFLICT preserves both ws-a + ws-b rows for same settings.id — got ws-a=${wsACount}, ws-b=${wsBCount}`,
-      'A.4-schema'
+    assert(wsACount === 1 && wsBCount === 1,
+      `settings: ON CONFLICT preserves both ws-a + ws-b rows for same settings.id — got ws-a=${wsACount}, ws-b=${wsBCount}`
     );
   } catch (e) {
-    todo(false, `settings ON CONFLICT collision test errored: ${e.message}`, 'A.4-schema');
+    assert(false, `settings ON CONFLICT collision test errored: ${e.message}`);
   }
   // Also test plain scoped read assuming PK changes lands later.
   const idA = rid('s-a');
@@ -471,7 +470,7 @@ async function testSettings() {
   await pool.query(
     `INSERT INTO org_studio_settings (id, data, updated_at, workspace_id)
      VALUES ($1, '{"k":"A"}'::jsonb, NOW(), $2), ($3, '{"k":"B"}'::jsonb, NOW(), $4)
-     ON CONFLICT (id) DO NOTHING`,
+     ON CONFLICT (workspace_id, id) DO NOTHING`,
     [idA, WS_A, idB, WS_B]
   );
   const sa = await pool.query(`SELECT id FROM org_studio_settings WHERE workspace_id=$1 AND id IN ($2,$3)`, [WS_A, idA, idB]);
@@ -702,7 +701,7 @@ async function testLoginSelectorA4() {
   await pool.query(
     `INSERT INTO org_studio_settings (id, data, workspace_id)
      VALUES ($1, $2, $3)
-     ON CONFLICT (id) DO UPDATE SET data = $2`,
+     ON CONFLICT (workspace_id, id) DO UPDATE SET data = $2`,
     ['default', JSON.stringify(seededSettings), 'default-workspace'],
   );
 
@@ -916,7 +915,7 @@ try {
     console.log('   (A.3-auth closed by this slice — see auth.ts session lookups)');
     console.log('   (A.3-health closed by this slice — see /api/health/route.ts)');
     console.log('   (A.4-login closed by this slice — see /api/auth/login/route.ts + /login/page.tsx)');
-    console.log('   A.4-schema    : ON CONFLICT PK changes (agent_metrics, settings, heartbeats)');
+    console.log('   (A.4-schema closed by #1388 — see migrations/1388-a4-schema-workspace-id-conflict-keys.mjs)');
   }
 
   if (failed > 0) {
