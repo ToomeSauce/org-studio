@@ -603,6 +603,20 @@ export async function POST(
           if (shadowSync.touched) {
             await notifyProjectChange(client, projectId);
           }
+          // #1382 — nudge callers using upsert as a poor man's per-item
+          // editor toward the new PATCH endpoint. Heuristic: items provided
+          // and no version-level field was touched. Warn, don't break.
+          const looksLikeItemLevelEdit =
+            Array.isArray(items) &&
+            items.length > 0 &&
+            title == null &&
+            status == null &&
+            versionType == null &&
+            !ownerProvided &&
+            !META_KEYS.some((k) => metaProvided[k]);
+          const warning = looksLikeItemLevelEdit
+            ? 'Upsert was used for item-level edits (no version-level fields touched). Prefer PATCH /api/roadmap/{projectId}/versions/{version}/items — race-safe per-item add/update/remove instead of replace-all. (#1382)'
+            : undefined;
           return NextResponse.json({
             action: 'upserted',
             version,
@@ -615,6 +629,7 @@ export async function POST(
             // mint has been live for a while, the response just didn't surface it.
             items: itemsWithIds,
             shadowSync,
+            ...(warning ? { warning } : {}),
           });
         } else if (action === 'delete') {
           await client.query(
