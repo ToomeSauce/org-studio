@@ -102,7 +102,7 @@ function makeReq(c: Case): NextRequest {
     method: c.method,
     headers: { 'content-type': 'application/json', authorization: 'Bearer fake-read-scope-token' },
   };
-  if (c.body !== undefined && c.method !== 'GET') {
+  if (c.body !== undefined) {
     init.body = JSON.stringify(c.body);
   }
   return new NextRequest(url, init);
