@@ -1,7 +1,7 @@
 // no-auth: pre-auth (credentials exchange) (#1386 audit)
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyPassword, createSession, getSessionTokenFromCookie } from '@/lib/auth';
-import { getStoreProvider } from '@/lib/store-provider';
+import { getStoreProviderAllWorkspaces } from '@/lib/store-provider'; // login: pre-workspace bootstrap
 import { lookupUserWorkspace, WORKSPACE_COOKIE_KEY } from '@/lib/workspace-auth';
 
 /**
@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Get users from settings
-    const store = await getStoreProvider().read();
+    const store = await getStoreProviderAllWorkspaces().read();
     const users = store.settings?.users || [];
     
     // Find user by username

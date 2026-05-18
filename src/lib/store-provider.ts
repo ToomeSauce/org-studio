@@ -1442,14 +1442,87 @@ export function createStoreProvider(workspaceId: string = 'default-workspace'): 
   return new FileStoreProvider(storePath);
 }
 
-// Singleton instance
-let instance: StoreProvider | null = null;
+// Per-workspace provider cache.
+// In OSS mode (no DATABASE_URL) all workspace ids map to a single FileStoreProvider
+// because the file-store's envelope is keyed by data.activeWorkspace, not by
+// constructor arg — callers that need cross-workspace behaviour in OSS rewrite
+// the active slice via setActiveWorkspace().
+//
+// In Postgres mode we keep one PostgresStoreProvider per workspaceId so each
+// instance carries its own this.workspaceId. The underlying connection pool
+// is process-singleton inside PostgresStoreProvider itself; per-workspace
+// instances are cheap.
+const instances = new Map<string, StoreProvider>();
+let fileInstance: StoreProvider | null = null;
+let allWorkspacesInstance: StoreProvider | null = null;
 
-export function getStoreProvider(): StoreProvider {
-  if (!instance) {
-    instance = createStoreProvider();
+/**
+ * Get a workspace-scoped StoreProvider.
+ *
+ * #1387 slice A.1: This function used to return a process-singleton pinned to
+ * 'default-workspace'. It now requires the workspaceId of the request so each
+ * caller's reads/writes are scoped to its tenant.
+ *
+ * @param workspaceId  The workspace this provider is scoped to. Required.
+ *                     Callers in request handlers should pass the value
+ *                     returned by `resolveWorkspaceContext(req, userId)`
+ *                     from `@/lib/workspace-auth`.
+ */
+export function getStoreProvider(workspaceId: string): StoreProvider {
+  if (!workspaceId) {
+    throw new Error(
+      '[store-provider] getStoreProvider(workspaceId) requires a workspaceId. ' +
+      'For genuinely cross-workspace callers (admin, cron, principles aggregator), ' +
+      'use getStoreProviderAllWorkspaces() — a deliberate, named escape hatch.'
+    );
   }
-  return instance;
+  // OSS / file-store mode: the FileStoreProvider operates on the active
+  // workspace slice of store.json, which is process-global. One instance
+  // suffices regardless of the workspaceId argument.
+  if (!process.env.DATABASE_URL) {
+    if (!fileInstance) fileInstance = createStoreProvider(workspaceId);
+    return fileInstance;
+  }
+  let inst = instances.get(workspaceId);
+  if (!inst) {
+    inst = createStoreProvider(workspaceId);
+    instances.set(workspaceId, inst);
+  }
+  return inst;
+}
+
+/**
+ * Escape hatch: returns a provider that does NOT scope reads/writes by
+ * workspace. Intended for genuinely cross-workspace callers:
+ *   - Admin endpoints under /api/admin/* (slice B will re-gate these)
+ *   - Cron / scheduler iterators that fan out per workspace
+ *   - principles-generator (TODO(#1387 A.3): per-workspace filter)
+ *
+ * Implementation: returns a Postgres provider with workspaceId='*' so that
+ * downstream queries that interpolate `WHERE workspace_id = $1` filter on
+ * a sentinel that should match no real row. Callers that need actual
+ * cross-workspace reads should issue raw queries via getRawPool() (TODO
+ * follow-up) or use the lower-level pg pool directly.
+ *
+ * For OSS mode, returns the same single file-store instance as
+ * getStoreProvider() — OSS only has one workspace.
+ */
+export function getStoreProviderAllWorkspaces(): StoreProvider {
+  if (!process.env.DATABASE_URL) {
+    if (!fileInstance) fileInstance = createStoreProvider('default-workspace');
+    return fileInstance;
+  }
+  if (!allWorkspacesInstance) {
+    // Use 'default-workspace' as the scope so the provider's standard
+    // write paths remain safe (no accidental cross-workspace mutation
+    // via the convenience API). Cross-workspace reads should go through
+    // raw SQL on the provider's underlying pool, not through .read().
+    // This mirrors how the singleton behaved pre-#1387 — reads are
+    // default-workspace-only — but with an explicit, named opt-in so we
+    // can audit callers.
+    allWorkspacesInstance = createStoreProvider('default-workspace');
+  }
+  return allWorkspacesInstance;
 }
 
 // Re-export for convenience

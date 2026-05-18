@@ -13,6 +13,7 @@ import { join } from 'path';
 import { rpc } from '@/lib/gateway-rpc';
 import { buildLaunchMessage } from '@/lib/vision-cron';
 import { getStoreProvider } from '@/lib/store-provider';
+import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
 import { ensureLaunchPreconditions } from '@/lib/launch-prep';
 
 export const dynamic = 'force-dynamic';
@@ -69,7 +70,8 @@ export async function POST(
 
   try {
     const { id: projectId } = await params;
-    const store = await getStoreProvider().read();
+    const workspaceId = await resolveWorkspaceIdForRequest(req);
+    const store = await getStoreProvider(workspaceId).read();
 
     const project = store.projects.find((p: any) => p.id === projectId);
     if (!project) {
@@ -144,7 +146,7 @@ export async function POST(
 
       // Update state directly — clear _launchIntent if it existed
       const { _launchIntent, ...restAutonomy } = (project.autonomy || {});
-      await getStoreProvider().updateProject(projectId, {
+      await getStoreProvider(workspaceId).updateProject(projectId, {
         autonomy: {
           ...restAutonomy,
           pendingVersion: 'awaiting_agent_response',
@@ -157,7 +159,7 @@ export async function POST(
 
     } else {
       // Cloud/remote mode: write intent — local LISTEN will pick it up
-      await getStoreProvider().updateProject(projectId, {
+      await getStoreProvider(workspaceId).updateProject(projectId, {
         autonomy: {
           ...(project.autonomy || {}),
           pendingVersion: 'needs_launch',

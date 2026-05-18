@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getStoreProvider } from '@/lib/store-provider';
+import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
 
 /**
  * GET /api/metrics/team — Get aggregated team metrics
  * Query params: from, to
  */
 export async function GET(request: NextRequest) {
-  const provider = getStoreProvider();
+  const workspaceId = await resolveWorkspaceIdForRequest(request);
+  const provider = getStoreProvider(workspaceId);
 
   if (!provider.getTeamMetrics) {
     return NextResponse.json({ error: 'Metrics not available (requires PostgreSQL)' }, { status: 501 });

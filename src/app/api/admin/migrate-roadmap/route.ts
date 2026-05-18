@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getStoreProvider } from '@/lib/store-provider';
+import { getStoreProviderAllWorkspaces } from '@/lib/store-provider';
 import { versionSortKey } from '@/lib/version-utils';
 import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 
@@ -34,7 +34,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const storeProvider = getStoreProvider();
+    // Admin endpoint: cross-workspace migration. Use escape hatch.
+    // TODO(#1387 slice B): re-gate admin endpoints with proper RBAC.
+    const storeProvider = getStoreProviderAllWorkspaces();
 
     // We need direct pool access, which isn't exposed by storeProvider
     // So we'll create a separate connection

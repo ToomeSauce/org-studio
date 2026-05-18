@@ -13,7 +13,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { sendToAgent } from '@/lib/runtimes/registry';
 import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
-import { getStoreProvider, type StoreData } from '@/lib/store-provider';
+import { getStoreProviderAllWorkspaces, type StoreData } from '@/lib/store-provider'; // TODO(#1387 A.3): outbox drain should iterate per-workspace
 import { clearInFlightAgent } from '@/app/api/scheduler/route';
 
 interface DrainRequest {
@@ -28,7 +28,7 @@ interface DrainRequest {
 }
 
 async function readStore(): Promise<StoreData> {
-  return await getStoreProvider().read();
+  return await getStoreProviderAllWorkspaces().read();
 }
 
 export async function POST(request: NextRequest) {

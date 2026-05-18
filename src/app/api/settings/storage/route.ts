@@ -23,8 +23,9 @@ export async function GET() {
 
     // Test connection
     try {
-      const { getStoreProvider } = await import('@/lib/store-provider');
-      const provider = getStoreProvider();
+      // Connectivity check only — use escape hatch (no workspace context).
+      const { getStoreProviderAllWorkspaces } = await import('@/lib/store-provider');
+      const provider = getStoreProviderAllWorkspaces();
       const store = await provider.read();
       connected = !!(store && store.projects);
     } catch {

@@ -1,9 +1,13 @@
 /**
- * Scheduler helpers — prompt builder for agent work loops
+ * Scheduler helpers — prompt builder for agent work loops.
+ *
+ * TODO(#1387 A.3): scheduler is currently cross-workspace by construction
+ * (uses getStoreProviderAllWorkspaces()). Split into per-workspace ticks so
+ * each workspace's loops/teammates run isolated with their own provider.
  */
 import { AgentLoop } from '@/lib/store';
 import type { PromptSection } from '@/lib/store';
-import { getStoreProvider } from './store-provider';
+import { getStoreProviderAllWorkspaces } from "./store-provider";
 import { agentOwnedSections, agentHasTaskAccess, isDefaultMainSection } from './section-access';
 import { getEligibleBacklogFifo } from './dispatch-gate';
 
@@ -539,7 +543,7 @@ export function getEffectiveSections(loop: AgentLoop, role?: string): PromptSect
  */
 async function getPendingHandoffs(agentId: string, agentName: string): Promise<{ text: string; taskIds: string[] }> {
   try {
-    const store = await getStoreProvider().read();
+    const store = await getStoreProviderAllWorkspaces().read();
     const tasks = store.tasks || [];
     const nameLower = agentName.toLowerCase();
     const blocks: string[] = [];
@@ -574,7 +578,7 @@ async function getPendingHandoffs(agentId: string, agentName: string): Promise<{
  */
 async function getRecentDmInbox(agentId: string, agentName: string): Promise<string> {
   try {
-    const provider = getStoreProvider();
+    const provider = getStoreProviderAllWorkspaces();
     if (typeof (provider as any).listDmThreads !== 'function') {
       return '(No DM threads available with current storage provider)';
     }
@@ -621,7 +625,7 @@ async function getRecentDmInbox(agentId: string, agentName: string): Promise<str
 export async function clearConsumedHandoffs(taskIds: string[]): Promise<void> {
   if (taskIds.length === 0) return;
   try {
-    const store = await getStoreProvider().read();
+    const store = await getStoreProviderAllWorkspaces().read();
     let changed = false;
     for (const t of store.tasks) {
       if (taskIds.includes(t.id) && t.devHandoff) {
@@ -630,7 +634,7 @@ export async function clearConsumedHandoffs(taskIds: string[]): Promise<void> {
       }
     }
     if (changed) {
-      await getStoreProvider().write(store);
+      await getStoreProviderAllWorkspaces().write(store);
     }
   } catch (e) {
     console.warn('clearConsumedHandoffs error:', e);

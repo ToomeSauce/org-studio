@@ -115,8 +115,10 @@ async function loadWorkspaceData(): Promise<{
 
   // Fallback: read from store settings
   try {
-    const { getStoreProvider } = await import('@/lib/store-provider');
-    const store = await getStoreProvider().read();
+    // Loading the workspace registry itself — use the cross-workspace escape
+    // hatch since by construction this code has no workspace context yet.
+    const { getStoreProviderAllWorkspaces } = await import('@/lib/store-provider');
+    const store = await getStoreProviderAllWorkspaces().read();
     const settings = store.settings || {};
 
     _workspacesCache = (settings.workspaces as Workspace[]) || [
@@ -425,4 +427,28 @@ export function withWorkspaceCookie(
 ): NextResponse {
   response.headers.set('Set-Cookie', createWorkspaceCookie(workspaceId));
   return response;
+}
+
+/**
+ * Convenience: resolve a workspaceId for a request, with bootstrap fallback.
+ *
+ * Added for #1387 slice A.1. Use this when a handler only needs the
+ * workspaceId string (e.g. to pass to `getStoreProvider(workspaceId)`) and
+ * doesn't need the full WorkspaceContext or error response handling.
+ *
+ * Falls back to 'default-workspace' on any error (matches the
+ * resolveRequestWorkspace pattern in src/app/api/store/route.ts).
+ *
+ * For request handlers that need to surface NotFound/Forbidden errors to
+ * the client, use `resolveWorkspaceContext` directly instead.
+ */
+export async function resolveWorkspaceIdForRequest(req: NextRequest): Promise<string> {
+  try {
+    const { authenticateRequestWithContext } = await import('@/lib/auth');
+    const authResult = await authenticateRequestWithContext(req);
+    const userId = authResult.context?.userId ?? 'basil';
+    const wsResult = await resolveWorkspaceContext(req, userId);
+    if (wsResult.context) return wsResult.context.id;
+  } catch {}
+  return 'default-workspace';
 }

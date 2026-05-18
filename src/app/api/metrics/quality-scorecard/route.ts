@@ -1,5 +1,6 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getStoreProvider } from '@/lib/store-provider';
+import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
 
 const STATUS_ORDER: Record<string, number> = {
   backlog: 0,
@@ -27,9 +28,10 @@ function getDoneTimestamp(statusHistory: { status: string; timestamp: number }[]
   return null;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const provider = getStoreProvider();
+    const workspaceId = await resolveWorkspaceIdForRequest(request);
+    const provider = getStoreProvider(workspaceId);
     const store = await provider.read();
     const tasks = store.tasks || [];
 

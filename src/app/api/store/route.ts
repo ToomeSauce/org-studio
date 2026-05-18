@@ -125,7 +125,7 @@ async function resolveAgentModel(agentName: string, store: StoreData): Promise<s
 }
 
 /** Generate next ticket number for a new task.
- *  @deprecated #863 — use getStoreProvider().allocateTicketNumber() which is atomic.
+ *  @deprecated #863 — use getStoreProvider(workspace.id).allocateTicketNumber() which is atomic.
  *  Kept only as an emergency fallback if the provider call throws.
  */
 function getNextTicketNumberFallback(store: StoreData): number {
@@ -141,13 +141,13 @@ const GATEWAY_TOKEN = process.env.GATEWAY_TOKEN || '';
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || process.env.NOTIFY_CHAT_ID || '';
 
-// Async wrappers for StoreProvider
-async function readStore() {
-  return await getStoreProvider().read();
+// Async wrappers for StoreProvider — workspace-scoped per #1387 A.1.
+async function readStore(workspaceId: string) {
+  return await getStoreProvider(workspaceId).read();
 }
 
-async function writeStore(data: any) {
-  return await getStoreProvider().write(data);
+async function writeStore(workspaceId: string, data: any) {
+  return await getStoreProvider(workspaceId).write(data);
 }
 
 /** Check if a task is stuck and fire event-driven trigger if so. Piggyback detection. */
@@ -427,13 +427,13 @@ async function resolveRequestWorkspace(req: NextRequest): Promise<WorkspaceConte
 
 export async function GET(req: NextRequest) {
   try {
-    const data = await readStore();
-    piggybackStuckCheck(data);
-
     // Workspace filtering — transparent: single-workspace users see everything
     const wsOrError = await resolveRequestWorkspace(req);
     if (wsOrError instanceof NextResponse) return wsOrError;
     const workspace = wsOrError;
+    const data = await readStore(workspace.id);
+    piggybackStuckCheck(data);
+
     const filteredTasks = filterByWorkspace(data.tasks, workspace.id);
 
     // #1293 phase 1 — strip inline task.comments[] from the snapshot and
@@ -492,7 +492,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const { action, ...payload } = body;
-    const store = await readStore();
+    const store = await readStore(workspace.id);
 
     switch (action) {
       case 'addTask': {
@@ -743,7 +743,7 @@ export async function POST(req: NextRequest) {
         // #863: atomic allocation via provider (Postgres sequence / file-mode mutex).
         let ticketNumber: number;
         try {
-          ticketNumber = await getStoreProvider().allocateTicketNumber();
+          ticketNumber = await getStoreProvider(workspace.id).allocateTicketNumber();
         } catch (e: any) {
           console.error('[TicketNumber] allocateTicketNumber failed, using fallback:', e?.message);
           ticketNumber = getNextTicketNumberFallback(store);
@@ -831,7 +831,7 @@ export async function POST(req: NextRequest) {
           task.sortOrder = maxSort + 1000;
         }
         // PERF: Use targeted provider.createTask() instead of full store write
-        await getStoreProvider().createTask(task);
+        await getStoreProvider(workspace.id).createTask(task);
 
         // #1351 slice 2 — fire-and-forget duplicate-detection hook.
         // Scores the just-created task against the project's linked repos
@@ -850,7 +850,7 @@ export async function POST(req: NextRequest) {
                 allTasks: store.tasks || [],
               });
               if (matches && matches.length > 0) {
-                await getStoreProvider().updateTask(task.id, {
+                await getStoreProvider(workspace.id).updateTask(task.id, {
                   possibly_already_shipped: matches,
                 } as any);
                 console.info(
@@ -1162,7 +1162,7 @@ export async function POST(req: NextRequest) {
           // of returning a misleading ok:true. Silent failures were breaking the
           // autonomous delivery chain (agents left stuck in in-progress).
           try {
-            await getStoreProvider().updateTask(payload.id, updates);
+            await getStoreProvider(workspace.id).updateTask(payload.id, updates);
           } catch (providerErr: any) {
             console.error(`[updateTask] provider write failed for ${payload.id}:`, providerErr?.message);
             throw providerErr;
@@ -1195,7 +1195,7 @@ export async function POST(req: NextRequest) {
                 });
                 // Always write back (even an empty array) so stale matches
                 // from a previous title don't linger after an edit.
-                await getStoreProvider().updateTask(taskForHook.id, {
+                await getStoreProvider(workspace.id).updateTask(taskForHook.id, {
                   possibly_already_shipped: matches || [],
                 } as any);
                 console.info(
@@ -1220,7 +1220,7 @@ export async function POST(req: NextRequest) {
         // notifications). This turns the silent no-op into either success or a clear error.
         if (!taskMatched) {
           try {
-            const provider = getStoreProvider();
+            const provider = getStoreProvider(workspace.id);
             // Read-your-writes fallback: fetch fresh state and retry the mutate.
             const fresh = await provider.read();
             const freshTask = fresh.tasks.find((t: any) => t.id === payload.id);
@@ -1344,7 +1344,7 @@ export async function POST(req: NextRequest) {
               };
 
               try {
-                await getStoreProvider().updateTask(t.id, updates);
+                await getStoreProvider(workspace.id).updateTask(t.id, updates);
                 console.log(
                   `[Auto-unblock] #${t.ticketNumber} → backlog (all blockers [${clearedBy.join(',')}] done)`
                 );
@@ -1356,7 +1356,7 @@ export async function POST(req: NextRequest) {
               // Post system comment on the unblocked task
               try {
                 const blockerList = clearedBy.map(n => `#${n}`).join(', ');
-                await getStoreProvider().addComment(t.id, {
+                await getStoreProvider(workspace.id).addComment(t.id, {
                   id: Math.random().toString(36).slice(2, 10) + Date.now().toString(36),
                   createdAt: Date.now(),
                   author: 'System',
@@ -1446,7 +1446,7 @@ export async function POST(req: NextRequest) {
 
                   if (anchor) {
                     try {
-                      await getStoreProvider().addComment(anchor.id, {
+                      await getStoreProvider(workspace.id).addComment(anchor.id, {
                         id: Math.random().toString(36).slice(2, 10) + Date.now().toString(36),
                         createdAt: Date.now(),
                         author: 'System',
@@ -1515,7 +1515,7 @@ export async function POST(req: NextRequest) {
                 }
 
                 // Persist all updates
-                await getStoreProvider().updateProject(versionCompletionTriggered.projectId, updates);
+                await getStoreProvider(workspace.id).updateProject(versionCompletionTriggered.projectId, updates);
               }
             } catch (e) {
               console.error('[Version Dispatch] Completion error:', e);
@@ -1534,7 +1534,7 @@ export async function POST(req: NextRequest) {
         }
         // Changed to archive instead of delete
         // PERF: Use targeted provider.updateTask() instead of full store write
-        await getStoreProvider().updateTask(payload.id, {
+        await getStoreProvider(workspace.id).updateTask(payload.id, {
           isArchived: true,
           archivedAt: Date.now(),
           archivedBy: payload.by || 'unknown',
@@ -1544,7 +1544,7 @@ export async function POST(req: NextRequest) {
 
       case 'unarchiveTask': {
         // PERF: Use targeted provider.updateTask() instead of full store write
-        await getStoreProvider().updateTask(payload.id, {
+        await getStoreProvider(workspace.id).updateTask(payload.id, {
           isArchived: false,
           archivedAt: undefined,
           archivedBy: undefined,
@@ -1554,7 +1554,7 @@ export async function POST(req: NextRequest) {
 
       case 'permanentlyDeleteTask': {
         // PERF: Use targeted provider.deleteTask() instead of full store write
-        await getStoreProvider().deleteTask(payload.id);
+        await getStoreProvider(workspace.id).deleteTask(payload.id);
         return NextResponse.json({ ok: true });
       }
 
@@ -1582,7 +1582,7 @@ export async function POST(req: NextRequest) {
         }
 
         // PERF: Use targeted provider.createProject() instead of full store write
-        await getStoreProvider().createProject(project);
+        await getStoreProvider(workspace.id).createProject(project);
         return NextResponse.json({ ok: true, project });
       }
 
@@ -1601,7 +1601,7 @@ export async function POST(req: NextRequest) {
         const devOwnerChanged = newDevOwner && oldProject?.devOwner && newDevOwner !== oldProject.devOwner;
 
         // PERF: Use targeted provider.updateProject() instead of full store write
-        await getStoreProvider().updateProject(payload.id, payload.updates);
+        await getStoreProvider(workspace.id).updateProject(payload.id, payload.updates);
         console.log('[API:store:updateProject] completed for', payload.id);
 
         // #1224: project-level autonomy.approvedThrough was a legacy bridge
@@ -1630,7 +1630,7 @@ export async function POST(req: NextRequest) {
                 if (result.promoted) {
                   console.log(`[ApprovedThrough] Promoted ${payload.id}: ${result.from} → ${result.to} (${result.movedTasks} tasks → backlog)`);
                   // Trigger scheduler for devOwner
-                  const freshStore = await getStoreProvider().read();
+                  const freshStore = await getStoreProvider(workspace.id).read();
                   const proj = freshStore.projects.find((p: any) => p.id === payload.id);
                   if (proj?.devOwner && result.movedTasks > 0) {
                     triggerAgentLoop(proj.devOwner, freshStore);
@@ -1667,7 +1667,7 @@ export async function POST(req: NextRequest) {
                   const result = await promoteProjectToNextVersion(payload.id, client);
                   if (result.promoted) {
                     console.log(`[ProjectState] Restart promote ${payload.id}: ${result.from} → ${result.to} (${result.movedTasks} tasks → backlog)`);
-                    const freshStore = await getStoreProvider().read();
+                    const freshStore = await getStoreProvider(workspace.id).read();
                     const proj = freshStore.projects.find((p: any) => p.id === payload.id);
                     if (proj?.devOwner && result.movedTasks > 0) {
                       triggerAgentLoop(proj.devOwner, freshStore);
@@ -1696,7 +1696,7 @@ export async function POST(req: NextRequest) {
           for (const task of projectTasks) {
             // Skip done tasks — they stay credited to whoever completed them
             if (task.status === 'done') continue;
-            await getStoreProvider().updateTask(task.id, { assignee: newDevOwner });
+            await getStoreProvider(workspace.id).updateTask(task.id, { assignee: newDevOwner });
           }
           if (projectTasks.filter((t: any) => t.status !== 'done').length > 0) {
             console.log(`[DevOwner] Reassigned ${projectTasks.filter((t: any) => t.status !== 'done').length} active task(s) from ${oldProject.devOwner} to ${newDevOwner} (skipped ${projectTasks.filter((t: any) => t.status === 'done').length} done)`);
@@ -1774,7 +1774,7 @@ export async function POST(req: NextRequest) {
         }
         comps[compIdx] = newComp;
 
-        await getStoreProvider().updateProject(projectId, { [compsKey]: comps } as any);
+        await getStoreProvider(workspace.id).updateProject(projectId, { [compsKey]: comps } as any);
         console.log(
           `[API:store:updateComponent] ${projectId}/${targetComponentId}`,
           JSON.stringify(compUpdates).slice(0, 200),
@@ -1807,7 +1807,7 @@ export async function POST(req: NextRequest) {
                   console.log(
                     `[ComponentApproval] Promoted ${projectId}: ${result.from} → ${result.to} (${result.movedTasks} tasks → backlog)`,
                   );
-                  const freshStore = await getStoreProvider().read();
+                  const freshStore = await getStoreProvider(workspace.id).read();
                   const proj = freshStore.projects.find((p: any) => p.id === projectId);
                   // Trigger the component's owner if known, else any project devOwner.
                   // #1214: when the promote moved tasks to a specific version
@@ -1854,7 +1854,7 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ error: 'Forbidden — project belongs to another workspace' }, { status: 403 });
         }
         // PERF: Use targeted provider.deleteProject() instead of full store write
-        await getStoreProvider().deleteProject(payload.id);
+        await getStoreProvider(workspace.id).deleteProject(payload.id);
         return NextResponse.json({ ok: true });
       }
 
@@ -1917,7 +1917,7 @@ export async function POST(req: NextRequest) {
         };
         // PERF: Use targeted provider.addComment() instead of full store write
         // But also update lastActivityAt on the task
-        await getStoreProvider().addComment(commentScope, comment);
+        await getStoreProvider(workspace.id).addComment(commentScope, comment);
         if (task) {
           // #1352 — If this is an active claim (in-progress + lease set),
           // extend the lease idempotently to now + 60min. Comment activity
@@ -1930,7 +1930,7 @@ export async function POST(req: NextRequest) {
           if (task.status === 'in-progress' && task.claim_lease_expires_at) {
             activityUpdate.claim_lease_expires_at = Date.now() + 60 * 60 * 1000;
           }
-          await getStoreProvider().updateTask(commentScope.taskId, activityUpdate);
+          await getStoreProvider(workspace.id).updateTask(commentScope.taskId, activityUpdate);
         }
 
         // --- Unified notification routing (async, best-effort) ---
@@ -2039,7 +2039,7 @@ export async function POST(req: NextRequest) {
 
       case 'listComments': {
         if (!payload.scope) return NextResponse.json({ error: 'Missing scope' }, { status: 400 });
-        const provider = getStoreProvider();
+        const provider = getStoreProvider(workspace.id);
         if (typeof (provider as any).listComments !== 'function') {
           return NextResponse.json({ error: 'listComments not supported by current provider' }, { status: 501 });
         }
@@ -2051,7 +2051,7 @@ export async function POST(req: NextRequest) {
       }
 
       case 'listDmThreads': {
-        const provider = getStoreProvider();
+        const provider = getStoreProvider(workspace.id);
         if (typeof (provider as any).listDmThreads !== 'function') {
           return NextResponse.json({ threads: [] }); // graceful fallback
         }
@@ -2072,7 +2072,7 @@ export async function POST(req: NextRequest) {
         
         // PERF: Use targeted provider methods instead of full store write
         // Add the handoff comment
-        await getStoreProvider().addComment(payload.taskId, {
+        await getStoreProvider(workspace.id).addComment(payload.taskId, {
           id: commentId,
           author: payload.author,
           content: `📋 **Handoff Note** (will be injected into ${task.assignee || 'agent'}'s next loop):\n\n${payload.message}`,
@@ -2081,7 +2081,7 @@ export async function POST(req: NextRequest) {
         });
         
         // Update task with devHandoff and clear loop pause
-        await getStoreProvider().updateTask(payload.taskId, {
+        await getStoreProvider(workspace.id).updateTask(payload.taskId, {
           devHandoff: {
             message: payload.message,
             author: payload.author,
@@ -2117,7 +2117,7 @@ export async function POST(req: NextRequest) {
 
       case 'updateSettings': {
         // PERF: Use targeted provider.updateSettings() instead of full store write
-        await getStoreProvider().updateSettings(payload.settings);
+        await getStoreProvider(workspace.id).updateSettings(payload.settings);
         return NextResponse.json({ ok: true });
       }
 
@@ -2147,9 +2147,9 @@ export async function POST(req: NextRequest) {
         
         // Write both teammates and loops together if loop was created
         if (loopCreated) {
-          await getStoreProvider().updateSettings({ teammates, loops });
+          await getStoreProvider(workspace.id).updateSettings({ teammates, loops });
         } else {
-          await getStoreProvider().updateSettings({ teammates });
+          await getStoreProvider(workspace.id).updateSettings({ teammates });
         }
         return NextResponse.json({ ok: true, teammate });
       }
@@ -2170,7 +2170,7 @@ export async function POST(req: NextRequest) {
           }
           teammates[idx] = merged;
           // PERF: Use targeted provider.updateSettings() instead of full store write
-          await getStoreProvider().updateSettings({ teammates });
+          await getStoreProvider(workspace.id).updateSettings({ teammates });
         }
         return NextResponse.json({ ok: true });
       }
@@ -2178,13 +2178,13 @@ export async function POST(req: NextRequest) {
       case 'removeTeammate': {
         const teammates = (store.settings?.teammates || []).filter((t: any) => t.id !== payload.id);
         // PERF: Use targeted provider.updateSettings() instead of full store write
-        await getStoreProvider().updateSettings({ teammates });
+        await getStoreProvider(workspace.id).updateSettings({ teammates });
         return NextResponse.json({ ok: true });
       }
 
       case 'updateValues': {
         // PERF: Use targeted provider.updateSettings() instead of full store write
-        await getStoreProvider().updateSettings({ values: payload.values });
+        await getStoreProvider(workspace.id).updateSettings({ values: payload.values });
         return NextResponse.json({ ok: true });
       }
 
@@ -2194,7 +2194,7 @@ export async function POST(req: NextRequest) {
         const loop = { id, ...payload.loop };
         loops.push(loop);
         // PERF: Use targeted provider.updateSettings() instead of full store write
-        await getStoreProvider().updateSettings({ loops });
+        await getStoreProvider(workspace.id).updateSettings({ loops });
         return NextResponse.json({ ok: true, loop: { ...loop, id } });
       }
 
@@ -2204,7 +2204,7 @@ export async function POST(req: NextRequest) {
         if (idx >= 0) {
           loops[idx] = { ...loops[idx], ...payload.updates };
           // PERF: Use targeted provider.updateSettings() instead of full store write
-          await getStoreProvider().updateSettings({ loops });
+          await getStoreProvider(workspace.id).updateSettings({ loops });
         }
         return NextResponse.json({ ok: true });
       }
@@ -2212,13 +2212,13 @@ export async function POST(req: NextRequest) {
       case 'deleteLoop': {
         const loops = (store.settings?.loops || []).filter((l: any) => l.id !== payload.id);
         // PERF: Use targeted provider.updateSettings() instead of full store write
-        await getStoreProvider().updateSettings({ loops });
+        await getStoreProvider(workspace.id).updateSettings({ loops });
         return NextResponse.json({ ok: true });
       }
 
       case 'updateLoopPreamble': {
         // PERF: Use targeted provider.updateSettings() instead of full store write
-        await getStoreProvider().updateSettings({ loopPreamble: payload.loopPreamble });
+        await getStoreProvider(workspace.id).updateSettings({ loopPreamble: payload.loopPreamble });
         return NextResponse.json({ ok: true });
       }
 
@@ -2238,7 +2238,7 @@ export async function POST(req: NextRequest) {
         const oldQaLead = store.settings?.qaLead || null;
 
         // PERF: Use targeted provider.updateSettings() instead of full store write
-        await getStoreProvider().updateSettings({ qaLead: newQaLead });
+        await getStoreProvider(workspace.id).updateSettings({ qaLead: newQaLead });
 
         // If QA lead was cleared, move any tasks in 'qa' back to 'in-progress'
         if (!newQaLead && oldQaLead) {
@@ -2249,13 +2249,13 @@ export async function POST(req: NextRequest) {
               history.push({ status: 'in-progress', timestamp: Date.now(), by: 'System' });
               
               // Update task with new status
-              await getStoreProvider().updateTask(t.id, {
+              await getStoreProvider(workspace.id).updateTask(t.id, {
                 status: 'in-progress',
                 statusHistory: history,
               });
               
               // Add system comment
-              await getStoreProvider().addComment(t.id, {
+              await getStoreProvider(workspace.id).addComment(t.id, {
                 id: Math.random().toString(36).slice(2, 10) + Date.now().toString(36),
                 createdAt: Date.now(),
                 author: 'System',
@@ -2274,7 +2274,7 @@ export async function POST(req: NextRequest) {
         if (!project) return NextResponse.json({ error: 'Project not found' }, { status: 404 });
 
         const guardrails = payload.guardrails || '';
-        await getStoreProvider().updateProject(payload.projectId, { guardrails });
+        await getStoreProvider(workspace.id).updateProject(payload.projectId, { guardrails });
         const updatedProject = { ...project, guardrails };
         return NextResponse.json({ ok: true, project: updatedProject });
       }
@@ -2330,7 +2330,7 @@ export async function POST(req: NextRequest) {
             );
           }
         }
-        const section = await getStoreProvider().addSection(payload.projectId, {
+        const section = await getStoreProvider(workspace.id).addSection(payload.projectId, {
           name: payload.section?.name || 'New Section',
           owner: sectionOwner,
           outcomes: payload.section?.outcomes || '',
@@ -2362,7 +2362,7 @@ export async function POST(req: NextRequest) {
             );
           }
         }
-        await getStoreProvider().updateSection(payload.projectId, payload.sectionId, payload.updates || {});
+        await getStoreProvider(workspace.id).updateSection(payload.projectId, payload.sectionId, payload.updates || {});
         return NextResponse.json({ ok: true });
       }
 
@@ -2380,11 +2380,11 @@ export async function POST(req: NextRequest) {
               (t: any) => t.projectId === payload.projectId && t.sectionId === payload.sectionId
             );
             for (const t of tasksToReassign) {
-              await getStoreProvider().updateTask(t.id, { sectionId: reassignToId });
+              await getStoreProvider(workspace.id).updateTask(t.id, { sectionId: reassignToId });
             }
           }
 
-          await getStoreProvider().deleteSection(payload.projectId, payload.sectionId);
+          await getStoreProvider(workspace.id).deleteSection(payload.projectId, payload.sectionId);
           return NextResponse.json({ ok: true });
         } catch (e: any) {
           if (e.message === 'Cannot delete the last section') {
@@ -2395,7 +2395,7 @@ export async function POST(req: NextRequest) {
       }
 
       case 'reorderSections': {
-        await getStoreProvider().reorderSections(payload.projectId, payload.sectionIds || []);
+        await getStoreProvider(workspace.id).reorderSections(payload.projectId, payload.sectionIds || []);
         return NextResponse.json({ ok: true });
       }
 
@@ -2403,7 +2403,7 @@ export async function POST(req: NextRequest) {
         if (!payload.projectId || !payload.sectionId) {
           return NextResponse.json({ error: 'Missing projectId or sectionId' }, { status: 400 });
         }
-        await getStoreProvider().purgeSection(payload.projectId, payload.sectionId);
+        await getStoreProvider(workspace.id).purgeSection(payload.projectId, payload.sectionId);
         return NextResponse.json({ ok: true });
       }
 

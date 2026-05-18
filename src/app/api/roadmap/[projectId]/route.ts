@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getStoreProvider } from '@/lib/store-provider';
+import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
 import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 import { checkArchivedProject } from '@/lib/archived-project-compat';
 import { versionSortKey, compareVersions, isValidVersion } from '@/lib/version-utils';
@@ -42,9 +43,10 @@ export async function GET(
 ) {
   try {
     const { projectId } = await params;
+    const workspaceId = await resolveWorkspaceIdForRequest(req);
 
     // 410 compat: archived qa-fold projects
-    const store = await getStoreProvider().read();
+    const store = await getStoreProvider(workspaceId).read();
     const archCheck = checkArchivedProject(store.projects, projectId);
     if (archCheck.migrated) {
       return NextResponse.json(
@@ -53,7 +55,7 @@ export async function GET(
       );
     }
 
-    const storeProvider = getStoreProvider();
+    const storeProvider = getStoreProvider(workspaceId);
 
     // Check if using Postgres
     if (process.env.DATABASE_URL) {
@@ -157,6 +159,7 @@ export async function POST(
 ) {
   try {
     const { projectId } = await params;
+    const workspaceId = await resolveWorkspaceIdForRequest(req);
     const body = await req.json();
     const { action, version, title, status, items, order, versionType, originalVersion } = body;
     // #1214: owner is OPTIONAL on the wire. When omitted, we preserve the
@@ -224,7 +227,7 @@ export async function POST(
     if (scopeFail) return scopeFail;
 
     // 410 compat: archived qa-fold projects
-    const storeForArchiveCheck = await getStoreProvider().read();
+    const storeForArchiveCheck = await getStoreProvider(workspaceId).read();
     const archPostCheck = checkArchivedProject(storeForArchiveCheck.projects, projectId);
     if (archPostCheck.migrated) {
       return NextResponse.json(
