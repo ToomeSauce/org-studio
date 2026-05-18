@@ -38,17 +38,23 @@ export async function writeHeartbeat({
   agentId,
   loopId,
   status,
+  workspaceId,
 }: {
   agentId: string;
   loopId?: string;
   status?: string;
+  /**
+   * #1387 A.3: workspace_id resolved by caller. Defaults to 'default-workspace'
+   * for legacy callsites that haven't been threaded yet (today: scheduler
+   * cross-workspace cron).
+   */
+  workspaceId?: string;
 }): Promise<void> {
   const pool = await getPool();
   if (!pool) return;
 
   try {
-    // TODO(v0.17-multi-workspace): resolve workspace from agent context when available
-    const workspaceId = 'default-workspace';
+    const ws = workspaceId || 'default-workspace';
     await pool.query(
       `INSERT INTO org_studio_heartbeats (agent_id, loop_id, last_heartbeat, last_status, updated_at, workspace_id)
        VALUES ($1, $2, NOW(), $3, NOW(), $4)
@@ -57,7 +63,7 @@ export async function writeHeartbeat({
          last_heartbeat = NOW(),
          last_status = EXCLUDED.last_status,
          updated_at = NOW()`,
-      [agentId, loopId || null, status || null, workspaceId]
+      [agentId, loopId || null, status || null, ws]
     );
   } catch (e: any) {
     // Swallow — heartbeat failures must never break the scheduler

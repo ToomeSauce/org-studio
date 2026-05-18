@@ -43,9 +43,13 @@ function loadKudosFromFile(): Kudos[] {
 }
 
 /**
- * Try to load from PostgreSQL; fallback to file
+ * Try to load from PostgreSQL; fallback to file.
+ *
+ * #1387 A.3: filter by workspace_id so a team in workspace A can't see
+ * (or be influenced by) kudos from workspace B. Callers that don't yet
+ * pass a workspace fall back to 'default-workspace' for OSS compatibility.
  */
-async function loadKudosFromDB(): Promise<Kudos[]> {
+async function loadKudosFromDB(workspaceId: string = 'default-workspace'): Promise<Kudos[]> {
   if (!process.env.DATABASE_URL) {
     return loadKudosFromFile();
   }
@@ -58,8 +62,9 @@ async function loadKudosFromDB(): Promise<Kudos[]> {
       `SELECT id, agent_id as "agentId", given_by as "givenBy", value_tags as "valueTags",
               note, type, auto_detected as "autoDetected", confirmed, created_at as "createdAt"
        FROM org_studio_kudos
-       WHERE confirmed = true
-       ORDER BY created_at DESC`
+       WHERE confirmed = true AND workspace_id = $1
+       ORDER BY created_at DESC`,
+      [workspaceId]
     );
     await pool.end();
 
@@ -164,8 +169,11 @@ function extractCustomPrinciples(kudos: Kudos[]): OperatingPrinciple[] {
  * before generating a principle. Flag-derived principles sort first
  * (corrective feedback is more urgent).
  */
-export async function generatePrinciples(agentId: string): Promise<OperatingPrinciple[]> {
-  const allKudos = await loadKudosFromDB();
+export async function generatePrinciples(
+  agentId: string,
+  workspaceId: string = 'default-workspace',
+): Promise<OperatingPrinciple[]> {
+  const allKudos = await loadKudosFromDB(workspaceId);
 
   // Case-insensitive match — DB may store mixed-case agent IDs
   const agentKudos = allKudos.filter(

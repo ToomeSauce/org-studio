@@ -155,6 +155,23 @@ export function invalidateWorkspaceCache(): void {
   _cacheTs = 0;
 }
 
+/**
+ * #1387 A.3 — Enumerate every workspace_id known to the system.
+ *
+ * For background workers / crons that fundamentally have no request context
+ * (outbox, vision-cron, heartbeat housekeeping). Callers should iterate the
+ * returned ids and pass each one through a per-workspace `getStoreProvider`
+ * or scoped SQL.
+ *
+ * OSS mode (no DATABASE_URL): always returns `['default-workspace']`.
+ * Postgres mode: reads `org_studio_workspaces` via the shared cache.
+ */
+export async function listAllWorkspaceIds(): Promise<string[]> {
+  const { workspaces } = await loadWorkspaceData();
+  if (!workspaces.length) return [DEFAULT_WORKSPACE_ID];
+  return workspaces.map((w) => w.id);
+}
+
 // ── WORKSPACE_ENFORCE feature flag ─────────────────────────────────────
 
 /**

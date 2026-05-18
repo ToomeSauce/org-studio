@@ -33,6 +33,15 @@ export interface EnqueueOutboxParams {
   sessionKey: string;
   idempotencyKey: string;
   onCompleteKind?: string; // 'redispatch' — stored in payload for worker to re-hydrate
+  /**
+   * Workspace this outbox row belongs to. Required when DATABASE_URL is set
+   * (cloud / Postgres path); ignored in OSS file-mode. Defaults to
+   * 'default-workspace' so existing single-workspace callers keep working.
+   *
+   * #1387 A.3: scheduler fireOneShot resolves this from the agent loop's
+   * workspace (cross-workspace cron iterates all workspaces).
+   */
+  workspaceId?: string;
 }
 
 /**
@@ -61,8 +70,9 @@ export async function enqueueOutbox(params: EnqueueOutboxParams): Promise<string
     ...(params.onCompleteKind ? { onCompleteKind: params.onCompleteKind } : {}),
   };
 
-  // TODO(v0.17-multi-workspace): resolve workspace from request context when available
-  const workspaceId = 'default-workspace';
+  // #1387 A.3: workspace_id supplied by caller; fall back to default-workspace
+  // only for legacy single-workspace OSS callsites that haven't been threaded yet.
+  const workspaceId = params.workspaceId || 'default-workspace';
 
   await pool.query(
     `INSERT INTO org_studio_outbox (id, idempotency_key, agent_id, payload, status, attempts, next_attempt_at, created_at, updated_at, workspace_id)

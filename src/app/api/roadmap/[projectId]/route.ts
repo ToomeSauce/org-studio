@@ -70,7 +70,7 @@ export async function GET(
            FROM org_studio_roadmap_versions
            WHERE project_id = $1 AND workspace_id = $2
            ORDER BY sort_order ASC, version ASC`,
-          [projectId, 'default-workspace'] // TODO(v0.17-multi-workspace): resolve from request context
+          [projectId, workspaceId]
         );
 
         const versions: RoadmapVersion[] = result.rows.map((row: any) => {
@@ -252,7 +252,7 @@ export async function POST(
             originalVersion.length > 0 &&
             originalVersion !== version;
           if (isRename) {
-            const ws = 'default-workspace';
+            const ws = workspaceId;
             const oldId = rvDerivedId(projectId, originalVersion);
             const newId = rvDerivedId(projectId, version);
             const newSortOrder = versionSortKey(version);
@@ -428,8 +428,9 @@ export async function POST(
                 'rename',
                 version,
                 originalVersion,
+                workspaceId,
               );
-              await notifyProjectChange(client, projectId);
+              await notifyProjectChange(client, projectId, workspaceId);
 
               return NextResponse.json({
                 action: 'renamed',
@@ -472,7 +473,7 @@ export async function POST(
           // a measurement-update system comment when only metricCurrent changed.
           const existingMetaRes = await client.query(
             `SELECT meta FROM org_studio_roadmap_versions WHERE project_id = $1 AND version = $2 AND workspace_id = $3 LIMIT 1`,
-            [projectId, version, 'default-workspace'],
+            [projectId, version, workspaceId],
           );
           const existingMeta: any = (existingMetaRes.rows[0]?.meta && typeof existingMetaRes.rows[0].meta === 'object')
             ? existingMetaRes.rows[0].meta
@@ -549,7 +550,7 @@ export async function POST(
               sortOrder,
               Date.now(),
               resolvedVersionType,
-              'default-workspace',
+              workspaceId,
               ownerProvided ? ownerValue : null,
               anyProvided ? metaJson : null,
             ]
@@ -601,12 +602,12 @@ export async function POST(
             console.warn('[Roadmap] Shadow sync failed (non-fatal, reconcile cron will heal):', (e as any)?.message || e);
           }
 
-          await notifyRoadmapChange(client, projectId, action, version);
+          await notifyRoadmapChange(client, projectId, action, version, undefined, workspaceId);
           // #1314: emit project_update too so the cached store refreshes the
           // shadow we just rewrote (roadmap_update alone doesn't reload
           // project.sections jsonb on the server-side cache).
           if (shadowSync.touched) {
-            await notifyProjectChange(client, projectId);
+            await notifyProjectChange(client, projectId, workspaceId);
           }
           // #1382 — nudge callers using upsert as a poor man's per-item
           // editor toward the new PATCH endpoint. Heuristic: items provided
@@ -639,7 +640,7 @@ export async function POST(
         } else if (action === 'delete') {
           await client.query(
             'DELETE FROM org_studio_roadmap_versions WHERE project_id = $1 AND version = $2 AND workspace_id = $3',
-            [projectId, version, 'default-workspace']
+            [projectId, version, workspaceId]
           );
 
           // #1314: also strip the version from project shadows so the UI
@@ -653,9 +654,9 @@ export async function POST(
             console.warn('[Roadmap] Shadow sync (delete) failed (non-fatal):', (e as any)?.message || e);
           }
 
-          await notifyRoadmapChange(client, projectId, action, version);
+          await notifyRoadmapChange(client, projectId, action, version, undefined, workspaceId);
           if (shadowSync.touched) {
-            await notifyProjectChange(client, projectId);
+            await notifyProjectChange(client, projectId, workspaceId);
           }
           return NextResponse.json({ action: 'deleted', version, shadowSync });
         } else if (action === 'reorder') {
@@ -664,11 +665,11 @@ export async function POST(
           for (let i = 0; i < order.length; i++) {
             await client.query(
               'UPDATE org_studio_roadmap_versions SET sort_order = $1 WHERE project_id = $2 AND version = $3 AND workspace_id = $4',
-              [i + 1, projectId, order[i], 'default-workspace']
+              [i + 1, projectId, order[i], workspaceId]
             );
           }
 
-          await notifyRoadmapChange(client, projectId, action);
+          await notifyRoadmapChange(client, projectId, action, undefined, undefined, workspaceId);
           return NextResponse.json({ action: 'reordered', order });
         }
 
@@ -706,6 +707,7 @@ async function notifyRoadmapChange(
   action: string,
   version?: string,
   originalVersion?: string,
+  workspaceId: string = 'default-workspace',
 ): Promise<void> {
   try {
     const payload = JSON.stringify({
@@ -718,7 +720,7 @@ async function notifyRoadmapChange(
       ...(originalVersion ? { originalVersion } : {}),
       timestamp: Date.now(),
       source: 'roadmap-route',
-      workspace_id: 'default-workspace',
+      workspace_id: workspaceId,
     });
     await client.query(
       `NOTIFY org_studio_change, '${payload.replace(/'/g, "''")}'`,
@@ -736,6 +738,7 @@ async function notifyRoadmapChange(
 async function notifyProjectChange(
   client: any,
   projectId: string,
+  workspaceId: string = 'default-workspace',
 ): Promise<void> {
   try {
     const payload = JSON.stringify({
@@ -743,7 +746,7 @@ async function notifyProjectChange(
       projectId,
       timestamp: Date.now(),
       source: 'roadmap-route',
-      workspace_id: 'default-workspace',
+      workspace_id: workspaceId,
     });
     await client.query(
       `NOTIFY org_studio_change, '${payload.replace(/'/g, "''")}'`,
