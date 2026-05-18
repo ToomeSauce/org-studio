@@ -106,6 +106,8 @@ export async function GET(
           }
         } catch {}
         const taskStatusById = new Map(allTasks.map((t: any) => [t.id, t.status]));
+        // #1381 — also map taskId → ticketNumber so we can render (#NNN) server-side.
+        const taskNumberById = new Map(allTasks.map((t: any) => [t.id, t.ticketNumber]));
 
         // Now override done on each item based on linked task
         for (const ver of versions) {
@@ -113,6 +115,20 @@ export async function GET(
             if (item.taskId) {
               const taskStatus = taskStatusById.get(item.taskId);
               item.done = taskStatus === 'done';
+              // #1381 — surface taskTicketNumber + a server-rendered displayTitle
+              // so UI sites no longer need to keep (#NNN) baked into the stored
+              // title string. We also strip any already-baked (#NNN) suffix from
+              // the rendered string to avoid double-rendering during the
+              // transition window (some legacy items have "Foo (#577)" in
+              // their stored title from the old manual workflow).
+              const tn = taskNumberById.get(item.taskId);
+              if (typeof tn === 'number') {
+                (item as any).taskTicketNumber = tn;
+                const baseTitle = typeof item.title === 'string'
+                  ? item.title.replace(/\s*\(#\d+\)\s*$/, '')
+                  : '';
+                (item as any).displayTitle = baseTitle ? `${baseTitle} (#${tn})` : `(#${tn})`;
+              }
             }
             // If no taskId, keep whatever done value was stored (backward compat)
           }

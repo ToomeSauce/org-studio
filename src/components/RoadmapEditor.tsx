@@ -4,6 +4,7 @@ import { useState, useCallback } from 'react';
 import { Pencil, Trash2, X, Plus, Check, ChevronRight } from 'lucide-react';
 import { clsx } from 'clsx';
 import { compareVersions } from '@/lib/version-utils';
+import { roadmapItemDisplayTitle, roadmapItemEditableTitle } from '@/lib/roadmap-item-display';
 
 interface RoadmapItem {
   title: string;
@@ -392,7 +393,7 @@ export function RoadmapEditor({ projectId, versions, onVersionsChange }: Roadmap
                                 />
                                 <input
                                   type="text"
-                                  value={item.title}
+                                  value={roadmapItemEditableTitle(item)}
                                   onChange={(e) => {
                                     const newItems = [...editForm.items];
                                     newItems[idx].title = e.target.value;
@@ -480,7 +481,7 @@ export function RoadmapEditor({ projectId, versions, onVersionsChange }: Roadmap
                                     item.done ? 'font-normal text-[var(--text-tertiary)]' : 'font-semibold text-[var(--text-primary)]'
                                   )}
                                 >
-                                  {item.title}
+                                  {roadmapItemDisplayTitle(item)}
                                 </span>
                               </div>
                             ))}

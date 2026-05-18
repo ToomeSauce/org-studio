@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { ChevronRight, Plus, Pencil, Trash2, X, Check } from 'lucide-react';
 import { clsx } from 'clsx';
 import { compareVersions } from '@/lib/version-utils';
+import { roadmapItemDisplayTitle, roadmapItemEditableTitle } from '@/lib/roadmap-item-display';
 
 /**
  * RoadmapWithApprovalHorizon
@@ -716,7 +717,7 @@ export function RoadmapWithApprovalHorizon({
               />
               <input
                 type="text"
-                value={item.title}
+                value={roadmapItemEditableTitle(item)}
                 onChange={(e) => {
                   const newItems = [...editForm.items];
                   newItems[idx].title = e.target.value;
@@ -1034,7 +1035,7 @@ export function RoadmapWithApprovalHorizon({
                               item.done ? 'text-[var(--text-muted)]' : 'text-[var(--text-primary)]'
                             )}
                           >
-                            {item.title}
+                            {roadmapItemDisplayTitle(item)}
                           </span>
                         </div>
                       );
@@ -1338,14 +1339,14 @@ export function RoadmapWithApprovalHorizon({
                             : 'text-[var(--text-primary)]'
                           )}
                         >
-                          {item.title}
+                          {roadmapItemDisplayTitle(item)}
                           {taskStatus && taskStatus !== 'done' && taskStatus !== 'backlog' && (
                             <span className="ml-1.5 text-xs opacity-70">({taskStatus})</span>
                           )}
                         </a>
                       ) : (
                         <span className={item.done ? 'text-[var(--text-muted)]' : 'text-[var(--text-primary)] font-medium'}>
-                          {item.title}
+                          {roadmapItemDisplayTitle(item)}
                         </span>
                       )}
                     </div>

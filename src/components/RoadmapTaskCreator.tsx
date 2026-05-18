@@ -3,12 +3,16 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Plus, Check, Loader, ExternalLink } from 'lucide-react';
 import { clsx } from 'clsx';
+import { roadmapItemDisplayTitle, roadmapItemEditableTitle } from '@/lib/roadmap-item-display';
 
 interface RoadmapItem {
   id?: string;
   title: string;
   done: boolean;
   taskId?: string | null;
+  // #1381 — server-rendered display title with (#NNN) suffix.
+  displayTitle?: string;
+  taskTicketNumber?: number;
 }
 
 interface RoadmapVersion {
@@ -31,7 +35,7 @@ interface CreateTaskDialogProps {
 }
 
 function CreateTaskDialog({ item, version, projectId, teammates, onCreated, onCancel }: CreateTaskDialogProps) {
-  const [title, setTitle] = useState(item.title || '');
+  const [title, setTitle] = useState(roadmapItemEditableTitle(item));
   const [assignee, setAssignee] = useState(teammates[0] || '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -225,7 +229,7 @@ export default function RoadmapTaskCreator({
                 <div key={item.id || itemKey} className="flex items-center gap-2 text-sm">
                   <input type="checkbox" checked={item.done} readOnly className="mt-0" />
                   <span className={clsx('flex-1', item.done && 'line-through text-[var(--text-muted)]')}>
-                    {item.title}
+                    {roadmapItemDisplayTitle(item)}
                   </span>
                   {hasTask ? (
                     <span className="text-[10px] text-[var(--success)] flex items-center gap-1">
