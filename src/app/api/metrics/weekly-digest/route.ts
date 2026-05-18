@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 import { generateWeeklyDigest, formatDigestMarkdown } from '@/lib/weekly-digest';
 import { isTelegramCommsEnabled } from '@/lib/telegram-guard';
 
@@ -24,6 +25,12 @@ export async function GET() {
  * Returns { ok: true, digest, telegramSent: boolean }
  */
 export async function POST(req: NextRequest) {
+  // #1386 Phase 2: require auth + write-scope.
+  const authCtx = await authenticateRequestWithContext(req);
+  if (authCtx.error) return authCtx.error;
+  const scopeFail = requireWriteScope(authCtx.context);
+  if (scopeFail) return scopeFail;
+
   try {
     const body = await req.json().catch(() => ({}));
     const { action } = body;

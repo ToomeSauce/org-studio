@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticateRequest, authenticateRequestWithContext, getSession, getSessionTokenFromCookie } from '@/lib/auth';
+import { authenticateRequest, authenticateRequestWithContext, requireWriteScope, getSession, getSessionTokenFromCookie } from '@/lib/auth';
 import {
   getUserWorkspaces,
   resolveWorkspaceContext,
@@ -47,8 +47,10 @@ export async function GET(req: NextRequest) {
  * Invalidate cache: { action: 'invalidate-cache' }
  */
 export async function POST(req: NextRequest) {
-  const authError = await authenticateRequest(req);
-  if (authError) return authError;
+  const authCtx = await authenticateRequestWithContext(req);
+  if (authCtx.error) return authCtx.error;
+  const scopeFail = requireWriteScope(authCtx.context);
+  if (scopeFail) return scopeFail;
 
   const body = await req.json();
   const { action } = body;

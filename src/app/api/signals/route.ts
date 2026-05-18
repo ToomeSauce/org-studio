@@ -1,6 +1,7 @@
 'use server';
 
 import { NextRequest, NextResponse } from 'next/server';
+import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 import { join } from 'path';
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
 import { detectSignals, DetectedSignal } from '@/lib/signal-detector';
@@ -164,6 +165,12 @@ async function handleGET(req: NextRequest) {
  * Body: { action: "confirm" | "dismiss", signalId }
  */
 async function handlePOST(req: NextRequest) {
+  // #1386 Phase 2: require auth + write-scope.
+  const authCtx = await authenticateRequestWithContext(req);
+  if (authCtx.error) return authCtx.error;
+  const scopeFail = requireWriteScope(authCtx.context);
+  if (scopeFail) return scopeFail;
+
   try {
     const body = await req.json();
     const { action, signalId } = body;

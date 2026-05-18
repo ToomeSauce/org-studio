@@ -1,3 +1,4 @@
+// no-auth: pre-auth (clears session cookie) (#1386 audit)
 import { NextRequest, NextResponse } from 'next/server';
 import { destroySession, getSessionTokenFromCookie } from '@/lib/auth';
 

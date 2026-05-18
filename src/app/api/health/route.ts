@@ -1,3 +1,4 @@
+// no-auth: public health probe (no PII, no writes) (#1386 audit)
 /**
  * GET /api/health — Aggregated system health endpoint for the Health dashboard.
  *

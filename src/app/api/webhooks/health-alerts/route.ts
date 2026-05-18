@@ -1,3 +1,4 @@
+// no-auth: external webhook, verified via signature not Bearer (#1386 audit)
 /**
  * /api/webhooks/health-alerts — Health alert webhook (v0.15)
  *

@@ -1,3 +1,4 @@
+// no-auth: pre-auth (credentials exchange) (#1386 audit)
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyPassword, createSession, getSessionTokenFromCookie } from '@/lib/auth';
 import { getStoreProvider } from '@/lib/store-provider';

@@ -7,6 +7,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { rpc } from '@/lib/gateway-rpc';
@@ -60,6 +61,12 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  // #1386 Phase 2: require auth + write-scope.
+  const authCtx = await authenticateRequestWithContext(req);
+  if (authCtx.error) return authCtx.error;
+  const scopeFail = requireWriteScope(authCtx.context);
+  if (scopeFail) return scopeFail;
+
   try {
     const { id: projectId } = await params;
     const store = await getStoreProvider().read();

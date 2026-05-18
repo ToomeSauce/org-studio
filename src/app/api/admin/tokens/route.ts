@@ -13,6 +13,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { listApiTokens, mintApiToken } from '@/lib/api-tokens';
+import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 
 /** Require the global admin API key, NOT a per-agent token. */
 function requireAdmin(req: NextRequest): NextResponse | null {
@@ -56,6 +57,12 @@ function sanitizeRecord(r: any) {
 export async function POST(req: NextRequest) {
   const adminErr = requireAdmin(req);
   if (adminErr) return adminErr;
+  // #1386 Phase 2: defense-in-depth — also enforce write scope.
+  const authCtx = await authenticateRequestWithContext(req);
+  if (!authCtx.error) {
+    const scopeFail = requireWriteScope(authCtx.context);
+    if (scopeFail) return scopeFail;
+  }
   const pgErr = requirePostgres();
   if (pgErr) return pgErr;
 

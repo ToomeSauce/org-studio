@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getStoreProvider } from '@/lib/store-provider';
-import { authenticateRequest } from '@/lib/auth';
+import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 import { checkArchivedProject } from '@/lib/archived-project-compat';
 import { versionSortKey, compareVersions, isValidVersion } from '@/lib/version-utils';
 import { renameVersionInProjectData, rvDerivedId } from '@/lib/roadmap-rename';
@@ -216,10 +216,12 @@ export async function POST(
     }
 
     // Authenticate request (supports both session cookies and API keys)
-    const authError = await authenticateRequest(req);
-    if (authError) {
-      return authError;
+    const authCtx = await authenticateRequestWithContext(req);
+    if (authCtx.error) {
+      return authCtx.error;
     }
+    const scopeFail = requireWriteScope(authCtx.context);
+    if (scopeFail) return scopeFail;
 
     // 410 compat: archived qa-fold projects
     const storeForArchiveCheck = await getStoreProvider().read();

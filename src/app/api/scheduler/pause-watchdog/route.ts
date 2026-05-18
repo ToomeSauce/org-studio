@@ -23,7 +23,7 @@
  *   Lists currently active pauses.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticateRequest } from '@/lib/auth';
+import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 
 const MAX_MINUTES = 240; // 4 hours hard cap
 
@@ -56,8 +56,10 @@ async function ensureSchema(pool: any) {
 }
 
 export async function POST(request: NextRequest) {
-  const authError = await authenticateRequest(request);
-  if (authError) return authError;
+  const authCtx = await authenticateRequestWithContext(request);
+  if (authCtx.error) return authCtx.error;
+  const scopeFail = requireWriteScope(authCtx.context);
+  if (scopeFail) return scopeFail;
 
   try {
     const body = await request.json();

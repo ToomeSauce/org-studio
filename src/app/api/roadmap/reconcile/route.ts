@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticateRequest } from '@/lib/auth';
+import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 import { reconcileRoadmapItemDone } from '@/lib/roadmap-sync';
 
 /**
@@ -14,8 +14,10 @@ import { reconcileRoadmapItemDone } from '@/lib/roadmap-sync';
  * Bearer-token auth via standard ORG_STUDIO_API_KEY flow.
  */
 export async function POST(req: NextRequest) {
-  const authError = await authenticateRequest(req);
-  if (authError) return authError;
+  const authCtx = await authenticateRequestWithContext(req);
+  if (authCtx.error) return authCtx.error;
+  const scopeFail = requireWriteScope(authCtx.context);
+  if (scopeFail) return scopeFail;
 
   let projectId: string | undefined;
   try {

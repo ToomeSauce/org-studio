@@ -14,7 +14,7 @@ import { sendToAgent } from '@/lib/runtimes/registry';
 import { enqueueOutbox } from '@/lib/outbox';
 import { buildLoopPrompt, buildDispatchMessage, clearConsumedHandoffs } from '@/lib/scheduler';
 import type { AgentLoop } from '@/lib/store';
-import { authenticateRequest } from '@/lib/auth';
+import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 import { writeHeartbeat } from '@/lib/heartbeats';
 import { getStoreProvider, type StoreData } from '@/lib/store-provider';
 import {
@@ -756,8 +756,10 @@ async function fireOneShot(store: StoreData, loop: AgentLoop): Promise<string | 
 }
 
 export async function POST(request: NextRequest) {
-  const authError = await authenticateRequest(request);
-  if (authError) return authError;
+  const authCtx = await authenticateRequestWithContext(request);
+  if (authCtx.error) return authCtx.error;
+  const scopeFail = requireWriteScope(authCtx.context);
+  if (scopeFail) return scopeFail;
 
   try {
     const body = await request.json();

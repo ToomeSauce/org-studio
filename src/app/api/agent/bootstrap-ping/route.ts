@@ -11,9 +11,16 @@
  *   ?drift=true  — includes drift check (compares reported vs source SHAs).
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 import { recordBootstrapPing, listBootstrapPings, checkBootstrapDrift } from '@/lib/bootstrap-pings';
 
 export async function POST(request: NextRequest) {
+  // #1386 Phase 2: require auth + write-scope.
+  const authCtx = await authenticateRequestWithContext(request);
+  if (authCtx.error) return authCtx.error;
+  const scopeFail = requireWriteScope(authCtx.context);
+  if (scopeFail) return scopeFail;
+
   try {
     const body = await request.json().catch(() => ({}));
     const agentId = String(body.agentId || body.agent || '').trim();

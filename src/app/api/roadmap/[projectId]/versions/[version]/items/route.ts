@@ -31,7 +31,7 @@
  */
 
 import { NextResponse, NextRequest } from 'next/server';
-import { authenticateRequest } from '@/lib/auth';
+import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 import { syncProjectShadowVersion } from '@/lib/roadmap-sync';
 
 const WORKSPACE_ID = 'default-workspace';
@@ -81,8 +81,10 @@ export async function PATCH(
   try {
     const { projectId, version } = await params;
 
-    const authError = await authenticateRequest(req);
-    if (authError) return authError;
+    const authCtx = await authenticateRequestWithContext(req);
+    if (authCtx.error) return authCtx.error;
+    const scopeFail = requireWriteScope(authCtx.context);
+    if (scopeFail) return scopeFail;
 
     if (!process.env.DATABASE_URL) {
       return NextResponse.json(
