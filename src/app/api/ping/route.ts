@@ -1,3 +1,4 @@
+// no-auth: public ping (#1386 audit)
 /**
  * POST /api/ping — Send a message to any agent, routed through the runtime registry.
  * 

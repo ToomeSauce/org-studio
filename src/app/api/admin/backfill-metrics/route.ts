@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticateRequest } from '@/lib/auth';
+import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 
 /**
  * POST /api/metrics/backfill — Trigger metrics computation for a specific date
@@ -8,8 +8,10 @@ import { authenticateRequest } from '@/lib/auth';
  * Uses the global computeDailyMetrics function exposed by server.mjs
  */
 export async function POST(request: NextRequest) {
-  const authError = await authenticateRequest(request);
-  if (authError) return authError;
+  const authCtx = await authenticateRequestWithContext(request);
+  if (authCtx.error) return authCtx.error;
+  const scopeFail = requireWriteScope(authCtx.context);
+  if (scopeFail) return scopeFail;
 
   try {
     const { date } = await request.json();

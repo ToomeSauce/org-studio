@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticateRequest, authenticateRequestWithContext, getSession, getSessionTokenFromCookie } from '@/lib/auth';
+import { authenticateRequest, authenticateRequestWithContext, requireWriteScope, getSession, getSessionTokenFromCookie } from '@/lib/auth';
 import { rpc } from '@/lib/gateway-rpc';
 import { getStoreProvider, type StoreData } from '@/lib/store-provider';
 import { parseMentions } from '@/lib/mention-notifier';
@@ -476,8 +476,12 @@ export async function POST(req: NextRequest) {
   let requestAuthMethod: 'session' | 'apikey' | 'noauth' | 'agent-token' | undefined;
   try {
     const authCtx = await authenticateRequestWithContext(req);
-    requestUserId = authCtx.context?.userId;
-    requestAuthMethod = authCtx.context?.method;
+    if (!authCtx.error) {
+      const scopeFail = requireWriteScope(authCtx.context);
+      if (scopeFail) return scopeFail;
+      requestUserId = authCtx.context.userId;
+      requestAuthMethod = authCtx.context.method;
+    }
   } catch { /* best-effort */ }
 
   // Resolve workspace context for this request

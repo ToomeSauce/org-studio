@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 import { getStoreProvider } from '@/lib/store-provider';
 
 /**
@@ -32,6 +33,12 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
  * Body: { date: "YYYY-MM-DD", metrics: { ... }, sectionId?: string }
  */
 export async function POST(request: NextRequest, { params }: { params: Promise<{ agentId: string }> }) {
+  // #1386 Phase 2: require auth + write-scope.
+  const authCtx = await authenticateRequestWithContext(request);
+  if (authCtx.error) return authCtx.error;
+  const scopeFail = requireWriteScope(authCtx.context);
+  if (scopeFail) return scopeFail;
+
   const { agentId } = await params;
   const provider = getStoreProvider();
 

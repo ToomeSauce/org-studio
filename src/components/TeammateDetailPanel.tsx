@@ -8,6 +8,7 @@ import type { AgentLoop } from '@/lib/store';
 import Link from 'next/link';
 import OrgRefreshSection from './OrgRefreshSection';
 import BootstrapDriftSection from './BootstrapDriftSection';
+import ApiTokensSection from './ApiTokensSection';
 
 // --- Status badge colors (matches context board) ---
 // #1290 (2026-05-08): Review column removed. 'review' kept here so legacy
@@ -653,6 +654,12 @@ export default function TeammateDetailPanel({
               </div>
             )}
           </Section>
+
+          {/* #1386 Phase 2 — API tokens (admin-only; component hides itself for non-admins). */}
+          <ApiTokensSection
+            userId={teammate.agentId || teammate.id}
+            displayName={teammate.name}
+          />
         </div>
       </div>
     </div>

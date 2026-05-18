@@ -29,8 +29,9 @@
 // the link or delete the task. We do NOT auto-delete the task — addTask
 // allocates a ticketNumber that we don't want to silently consume.
 
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
+import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 
 const ALLOWED_PRIORITY = new Set(['low', 'medium', 'high', 'critical']);
 
@@ -47,10 +48,16 @@ function requireBearer(authHeader: string | null): boolean {
 }
 
 export async function POST(
-  req: Request,
+  req: NextRequest,
   { params }: { params: Promise<{ projectId: string; version: string; itemId: string }> }
 ) {
   const { projectId, version, itemId } = await params;
+  // #1386 Phase 2: scope check first (cheap, no headers() dependency).
+  const authCtx = await authenticateRequestWithContext(req);
+  if (!authCtx.error) {
+    const scopeFail = requireWriteScope(authCtx.context);
+    if (scopeFail) return scopeFail;
+  }
   const authHeader = (await headers()).get('authorization');
   if (!requireBearer(authHeader)) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });

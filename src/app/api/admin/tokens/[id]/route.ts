@@ -8,6 +8,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { revokeApiToken } from '@/lib/api-tokens';
+import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 
 function requireAdmin(req: NextRequest): NextResponse | null {
   const adminKey = process.env.ORG_STUDIO_API_KEY;
@@ -34,6 +35,12 @@ export async function DELETE(
 ) {
   const adminErr = requireAdmin(req);
   if (adminErr) return adminErr;
+  // #1386 Phase 2: defense-in-depth — also enforce write scope.
+  const authCtx = await authenticateRequestWithContext(req);
+  if (!authCtx.error) {
+    const scopeFail = requireWriteScope(authCtx.context);
+    if (scopeFail) return scopeFail;
+  }
 
   if (!process.env.DATABASE_URL) {
     return NextResponse.json({ error: 'unsupported_in_file_mode' }, { status: 503 });

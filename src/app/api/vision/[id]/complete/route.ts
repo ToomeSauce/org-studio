@@ -1,3 +1,4 @@
+// no-auth: 410-gone stub, no body processed (#1386 audit)
 /**
  * POST /api/vision/[id]/complete
  *

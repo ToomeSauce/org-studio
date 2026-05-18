@@ -18,14 +18,16 @@
  * mutating routes). Loopback callers from server.mjs include the header.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticateRequest } from '@/lib/auth';
+import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 import { getStoreProvider } from '@/lib/store-provider';
 import { routeCommentNotifications } from '@/lib/notification-router';
 import { resolveTaskComponent, resolveTaskVersion } from '@/lib/notification-context';
 
 export async function POST(request: NextRequest) {
-  const authError = await authenticateRequest(request);
-  if (authError) return authError;
+  const authCtx = await authenticateRequestWithContext(request);
+  if (authCtx.error) return authCtx.error;
+  const scopeFail = requireWriteScope(authCtx.context);
+  if (scopeFail) return scopeFail;
 
   let body: any;
   try {

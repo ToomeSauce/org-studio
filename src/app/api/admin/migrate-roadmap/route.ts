@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getStoreProvider } from '@/lib/store-provider';
 import { versionSortKey } from '@/lib/version-utils';
+import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,6 +18,13 @@ export async function POST(req: NextRequest) {
 
     if (!apiKey || apiKey !== expectedKey) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // #1386 Phase 2: defense-in-depth — also enforce write scope.
+    const authCtx = await authenticateRequestWithContext(req);
+    if (!authCtx.error) {
+      const scopeFail = requireWriteScope(authCtx.context);
+      if (scopeFail) return scopeFail;
     }
 
     if (!process.env.DATABASE_URL) {

@@ -12,7 +12,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { sendToAgent } from '@/lib/runtimes/registry';
-import { authenticateRequest } from '@/lib/auth';
+import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 import { getStoreProvider, type StoreData } from '@/lib/store-provider';
 import { clearInFlightAgent } from '@/app/api/scheduler/route';
 
@@ -32,8 +32,10 @@ async function readStore(): Promise<StoreData> {
 }
 
 export async function POST(request: NextRequest) {
-  const authError = await authenticateRequest(request);
-  if (authError) return authError;
+  const authCtx = await authenticateRequestWithContext(request);
+  if (authCtx.error) return authCtx.error;
+  const scopeFail = requireWriteScope(authCtx.context);
+  if (scopeFail) return scopeFail;
 
   try {
     const body: DrainRequest = await request.json();

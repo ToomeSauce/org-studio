@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { readFileSync, readdirSync, existsSync, statSync, mkdirSync, copyFileSync } from 'fs';
 import { join } from 'path';
-import { authenticateRequest } from '@/lib/auth';
+import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 
 const BACKUP_DIR = join(process.cwd(), 'data', 'backups');
 const STORE_PATH = join(process.cwd(), 'data', 'store.json');
@@ -79,8 +79,10 @@ export async function GET(req: NextRequest) {
 
 // POST — restore a backup
 export async function POST(req: NextRequest) {
-  const authError = await authenticateRequest(req);
-  if (authError) return authError;
+  const authCtx = await authenticateRequestWithContext(req);
+  if (authCtx.error) return authCtx.error;
+  const scopeFail = requireWriteScope(authCtx.context);
+  if (scopeFail) return scopeFail;
 
   try {
     const body = await req.json();

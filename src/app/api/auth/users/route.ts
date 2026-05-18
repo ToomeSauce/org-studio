@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticateRequest, hashPassword } from '@/lib/auth';
+import { authenticateRequest, authenticateRequestWithContext, requireWriteScope, hashPassword } from '@/lib/auth';
 import { getStoreProvider } from '@/lib/store-provider';
 
 /**
@@ -16,8 +16,10 @@ import { getStoreProvider } from '@/lib/store-provider';
  */
 export async function POST(req: NextRequest) {
   // Require API key for user management
-  const authError = await authenticateRequest(req);
-  if (authError) return authError;
+  const authCtx = await authenticateRequestWithContext(req);
+  if (authCtx.error) return authCtx.error;
+  const scopeFail = requireWriteScope(authCtx.context);
+  if (scopeFail) return scopeFail;
 
   try {
     const { username, password } = await req.json();

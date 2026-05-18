@@ -1,3 +1,4 @@
+// no-auth: public liveness probe (#1386 audit)
 /**
  * GET /api/alive — Ultra-cheap liveness/readiness probe.
  *

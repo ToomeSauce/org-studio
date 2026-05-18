@@ -31,6 +31,16 @@ export interface Teammate {
   staleClaimCountedAt?: number; // ms epoch of the most recent increment
   loopDisabledAt?: number;      // ms epoch when scheduler dispatch was disabled
   loopDisableReason?: string;   // human-readable cause for audit/UI
+
+  // #1386 Phase 2 — optional per-agent API token (plaintext fallback string).
+  // When present, the scheduler/dispatch path prefers this token over the
+  // global ORG_STUDIO_API_KEY when launching the agent. Mint via the Team
+  // page UI (which calls POST /api/admin/tokens). Storing plaintext in
+  // settings is acceptable for the per-agent token because settings.json
+  // already lives on the same host the agent runs on — it's not crossing
+  // a trust boundary. For tighter isolation, store the token id only and
+  // re-resolve at launch time (future hardening).
+  agentToken?: string;
 }
 
 
@@ -134,4 +144,26 @@ export function buildAgentMap(teammates: Teammate[]): Record<string, Teammate> {
     map[t.id] = t;
   }
   return map;
+}
+
+/**
+ * #1386 Phase 2 — Resolve the API token an agent should use when calling
+ * org-studio APIs from its own shell. Prefers a per-agent token from
+ * settings.teammates[i].agentToken, falls back to the global
+ * ORG_STUDIO_API_KEY env var (current behavior).
+ *
+ * The dispatch path is the consumer: it injects the resolved value as
+ * ORG_STUDIO_API_KEY in the agent process's environment. Prompts continue
+ * to reference ${ORG_STUDIO_API_KEY} literally — they never see whether
+ * it's a global or per-agent token. This means existing prompts work
+ * unchanged; only the launch-time env construction changes.
+ *
+ * Returns null if no token is available (auth disabled / dev mode).
+ */
+export function resolveAgentApiToken(teammates: Teammate[], agentId: string): string | null {
+  const t = teammates.find((x) => x.agentId === agentId || x.id === agentId);
+  if (t?.agentToken && typeof t.agentToken === 'string' && t.agentToken.trim()) {
+    return t.agentToken.trim();
+  }
+  return process.env.ORG_STUDIO_API_KEY || null;
 }
