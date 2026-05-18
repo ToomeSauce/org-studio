@@ -415,6 +415,10 @@ export async function POST(
                 originalVersion,
                 version,
                 id: newId,
+                // #1379 — echo items (with auto-minted ids) so callers don't have
+                // to GET the roadmap afterwards just to learn what ids the server
+                // assigned. Same shape as GET .versions[].items.
+                items: itemsWithIds,
                 tasksMigrated,
                 projectFieldsRewritten,
               });
@@ -589,6 +593,11 @@ export async function POST(
             id: versionId,
             version_type: resolvedVersionType,
             owner: ownerProvided ? ownerValue : undefined,
+            // #1379 — echo items (with auto-minted ids) so callers can pick them
+            // up directly instead of GETting the roadmap afterwards. The skill text
+            // ("A server-side auto-mint on upsert is planned") was out of date;
+            // mint has been live for a while, the response just didn't surface it.
+            items: itemsWithIds,
             shadowSync,
           });
         } else if (action === 'delete') {
@@ -821,6 +830,9 @@ function handleFileBasedRoadmap(
           originalVersion,
           version,
           id: `rv-${projectId}-${version.replace(/\./g, '-')}`,
+          // #1379 — echo items (with auto-minted ids) so callers can pick them
+          // up directly. Mirrors the Postgres path.
+          items: itemsWithIds,
           tasksMigrated: 0,
           projectFieldsRewritten: {
             components: 0,
@@ -877,7 +889,7 @@ function handleFileBasedRoadmap(
       });
       fs.writeFileSync(roadmapPath, JSON.stringify(data, null, 2));
 
-      return NextResponse.json({ action: 'upserted', version });
+      return NextResponse.json({ action: 'upserted', version, items: itemsWithIds });
     } else if (action === 'delete') {
       const { version } = payload;
       data.versions = data.versions.filter((v: any) => v.version !== version);
