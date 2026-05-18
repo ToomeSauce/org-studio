@@ -230,12 +230,41 @@ function safeRead(path) {
 }
 
 // --- Broadcast ---
-function broadcast(type, data) {
+// #1387 A.2: workspace id constants + per-workspace cache live here so that
+// every downstream broadcast/refresh site (file watcher, LISTEN handler, WS
+// connection handler, startup initial sync) can reference them without TDZ issues.
+const DEFAULT_WORKSPACE_ID = 'default-workspace';
+// Map<workspaceId, StoreData>. Lazy-populated on first refresh per workspace.
+// In OSS mode (no DATABASE_URL) only one entry exists, keyed by 'default-workspace';
+// the code path is identical to the pre-refactor single-global behaviour.
+const cachedStoreByWorkspace = new Map();
+// Back-compat shim: legacy code paths still read the default-workspace store
+// directly (projectIntegrityAudit, stuckTaskWatchdog, drift check, health monitor).
+// They were system-level watchdogs that have always operated on the default
+// workspace; a follow-up will iterate every workspace via getStoreProviderAllWorkspaces().
+function getCachedStore(workspaceId = DEFAULT_WORKSPACE_ID) {
+  return cachedStoreByWorkspace.get(workspaceId) || null;
+}
+
+// #1387 A.2: workspace-scoped broadcasts.
+//
+//   broadcast(type, data)                        — system-global (fleet-wide). Goes to every WS client.
+//                                                  Used for 'sessions', 'cron', 'gateway-status',
+//                                                  'gateway-agents' (gateway/OS-level facts that don't
+//                                                  belong to a single workspace).
+//                                                  TODO(#1387 A-followup): some of these (e.g. sessions)
+//                                                  could be filtered by workspace membership once the
+//                                                  membership table is wired in.
+//
+//   broadcast(type, data, workspaceId)           — workspace-scoped. Only clients whose ws.workspaceId
+//                                                  matches receive the message. Used for 'store' pushes
+//                                                  driven by LISTEN/NOTIFY and file-watcher events.
+function broadcast(type, data, workspaceId) {
   const msg = JSON.stringify({ type, data, ts: Date.now() });
   for (const client of wss.clients) {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(msg);
-    }
+    if (client.readyState !== WebSocket.OPEN) continue;
+    if (workspaceId && client.workspaceId && client.workspaceId !== workspaceId) continue;
+    client.send(msg);
   }
 }
 
@@ -249,14 +278,25 @@ function watchDataFile(path, type) {
     if (timer) clearTimeout(timer);
     timer = setTimeout(async () => {
       if (type === 'store' && usePostgres) {
-        // Postgres is source of truth — fetch from API, not stale file
-        await refreshCachedStore();
-        if (cachedStore) broadcast('store', cachedStore);
+        // Postgres is source of truth — fetch from API, not stale file.
+        // #1387 A.2: file watcher is a legacy dev-mode path. With DATABASE_URL set,
+        // LISTEN/NOTIFY drives store refreshes. To stay safe we invalidate ALL
+        // workspace cache entries here and refresh the default-workspace one to keep
+        // the existing connection-time push behaviour. A targeted per-workspace refresh
+        // is unnecessary because Postgres NOTIFY is the live signal.
+        cachedStoreByWorkspace.clear();
+        const fresh = await refreshCachedStore(DEFAULT_WORKSPACE_ID);
+        if (fresh) broadcast('store', fresh, DEFAULT_WORKSPACE_ID);
       } else {
         const data = safeRead(path);
         if (data) {
-          if (type === 'store') cachedStore = data;
-          broadcast(type, data);
+          if (type === 'store') {
+            // Legacy OSS-file path: single default-workspace store.
+            cachedStoreByWorkspace.set(DEFAULT_WORKSPACE_ID, data);
+            broadcast(type, data, DEFAULT_WORKSPACE_ID);
+          } else {
+            broadcast(type, data);
+          }
         }
       }
     }, 150);
@@ -1051,7 +1091,7 @@ async function initializePostgresListener() {
               console.warn('[LISTEN] notify-comment bridge sync error:', e?.message || e);
             }
             try {
-              const freshStore = await refreshCachedStore();
+              const freshStore = await refreshCachedStore(changeEvent.workspace_id);
               if (freshStore) {
                 const task = freshStore.tasks?.find(t => t.id === changeEvent.taskId);
                 // Look up by commentId if available, fall back to last comment
@@ -1174,7 +1214,7 @@ async function initializePostgresListener() {
 
             // Also try resolving assignee name to agentId
             try {
-              const freshStore = await refreshCachedStore();
+              const freshStore = await refreshCachedStore(changeEvent.workspace_id);
               if (freshStore) {
                 const teammates = freshStore.settings?.teammates || [];
                 const match = teammates.find(t =>
@@ -1193,11 +1233,17 @@ async function initializePostgresListener() {
           }
 
           // Read fresh store from Postgres via internal API (not local file)
+          // #1387 A.2: route NOTIFY -> per-workspace cache slot + scoped broadcast.
+          // The NOTIFY payload carries workspace_id (defaulted to 'default-workspace'
+          // upstream if missing — see line ~1000). We refresh and broadcast only for
+          // that workspace, so cross-workspace WS clients aren't notified of an event
+          // they don't own.
           try {
-            const freshStore = await refreshCachedStore();
+            const wsIdForEvent = changeEvent.workspace_id || DEFAULT_WORKSPACE_ID;
+            const freshStore = await refreshCachedStore(wsIdForEvent);
             if (freshStore) {
-              broadcast('store', freshStore);
-              
+              broadcast('store', freshStore, wsIdForEvent);
+
               // Also sync ORG.md on any store change
               if (WORKSPACE_BASE) {
                 syncOrgFiles(freshStore);
@@ -1314,7 +1360,7 @@ if (WORKSPACE_BASE) {
   // --- Startup reconcile: warn if recent task status transitions disagree ---
   setTimeout(async () => {
     try {
-      const store = cachedStore || await refreshCachedStore();
+      const store = getCachedStore() || await refreshCachedStore();
       if (!store?.tasks?.length) return;
       const now = Date.now();
       const RECENT_MS = 30 * 60 * 1000; // 30 minutes
@@ -1349,28 +1395,35 @@ let lastCronHash = '';
 let lastAgentsHash = '';
 let cachedSessions = null;
 let cachedCron = null;
-let cachedStore = null;
 let cachedGatewayStatus = null;
 let cachedAgents = null;
 let pollFailureCount = 0;
 let pollTimeoutHandle = null;
 
-/** Fetch store from the API (Postgres-backed) and cache it. Returns the store or null. */
-async function refreshCachedStore() {
+/**
+ * Fetch store from the API (Postgres-backed) for a specific workspace and cache it.
+ * #1387 A.2: pass workspaceId to scope the fetch via X-Workspace-Id header. In OSS
+ * mode the header is harmless — /api/store still returns the single default-workspace.
+ * Returns the store or null.
+ */
+async function refreshCachedStore(workspaceId = DEFAULT_WORKSPACE_ID) {
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/api/store`);
+    const res = await fetch(`http://127.0.0.1:${port}/api/store`, {
+      headers: { 'X-Workspace-Id': workspaceId },
+    });
     if (res.ok) {
-      cachedStore = await res.json();
-      return cachedStore;
+      const data = await res.json();
+      cachedStoreByWorkspace.set(workspaceId, data);
+      return data;
     }
   } catch (e) {
     // #1265: Postgres-first. Falling back to STORE_PATH used to silently feed stale
     // April-15 data into the in-memory cache. Now we just log and return null —
     // callers already gracefully handle a missing cachedStore.
-    console.warn('[refreshCachedStore] /api/store fetch failed:', e?.message || e);
-    cachedStore = null;
+    console.warn(`[refreshCachedStore ws=${workspaceId}] /api/store fetch failed:`, e?.message || e);
+    cachedStoreByWorkspace.delete(workspaceId);
   }
-  return cachedStore;
+  return null;
 }
 
 function quickHash(obj) {
@@ -1459,17 +1512,48 @@ pollGateway = pollGatewayWithBackoff;
 scheduleNextPoll(3000); // Initial poll after 3s
 
 // --- Client connection ---
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
   // Reset failure counter and poll immediately when a new client connects
   // (user opened dashboard, worth retrying)
   pollFailureCount = 0;
   scheduleNextPoll(100);
 
+  // #1387 A.2: Resolve workspace from the upgrade request. The browser sends its
+  // cookies on the WS handshake; we look for org_studio_workspace_id, fall back to
+  // a ?workspace_id=... query param, then default-workspace. In OSS mode every
+  // client resolves to 'default-workspace' — identical to pre-refactor behaviour.
+  let workspaceId = DEFAULT_WORKSPACE_ID;
+  try {
+    const cookieHeader = req?.headers?.cookie || '';
+    const m = cookieHeader.match(/(?:^|;\s*)org_studio_workspace_id=([^;]+)/);
+    if (m) {
+      workspaceId = decodeURIComponent(m[1]);
+    } else if (req?.url) {
+      const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+      const qp = url.searchParams.get('workspace_id');
+      if (qp) workspaceId = qp;
+    }
+  } catch { /* fall back to default */ }
+  ws.workspaceId = workspaceId;
+
   // Send all cached state immediately. cachedStore is Postgres-backed and warmed at
   // startup via refreshCachedStore(); if it's null the client will pick it up on the
   // next /api/store HTTP poll. (#1265: dropped stale STORE_PATH fallback.)
-  const store = cachedStore;
-  if (store) ws.send(JSON.stringify({ type: 'store', data: store, ts: Date.now() }));
+  // #1387 A.2: only send THIS client's workspace store. Lazily refresh if we haven't
+  // populated this workspace's slot yet.
+  let store = getCachedStore(workspaceId);
+  if (!store) {
+    // Fire-and-forget refresh; the client will also poll /api/store on its own.
+    refreshCachedStore(workspaceId)
+      .then((fresh) => {
+        if (fresh && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'store', data: fresh, ts: Date.now() }));
+        }
+      })
+      .catch(() => {});
+  } else {
+    ws.send(JSON.stringify({ type: 'store', data: store, ts: Date.now() }));
+  }
 
   const statuses = safeRead(STATUS_PATH);
   if (statuses) ws.send(JSON.stringify({ type: 'activity-status', data: statuses, ts: Date.now() }));
@@ -1600,7 +1684,12 @@ const _projectIntegrityLoggedMap = new Map(); // key: `${projectId}:${violationT
 const PROJECT_INTEGRITY_DEDUP_MS = 60 * 60_000; // 60 minutes
 
 async function projectIntegrityAudit() {
-  const store = cachedStore; // #1265: Postgres-backed only; no stale STORE_PATH fallback.
+  // #1387 A.2: this watchdog originally ran against the single global cachedStore.
+  // It still reads only the default-workspace store; a follow-up will iterate every
+  // workspace via getStoreProviderAllWorkspaces(). For now we preserve identical
+  // behaviour by reading default-workspace explicitly.
+  // TODO(#1387 A-followup): iterate all workspaces.
+  const store = getCachedStore(); // #1265: Postgres-backed only; no stale STORE_PATH fallback.
   if (!store?.projects?.length) return;
 
   const now = Date.now();
@@ -1679,7 +1768,9 @@ async function projectIntegrityAudit() {
 
 async function stuckTaskWatchdog() {
   // #1265: cachedStore is Postgres-backed; no stale STORE_PATH fallback.
-  const store = cachedStore;
+  // #1387 A.2: default-workspace only for now — see projectIntegrityAudit note.
+  // TODO(#1387 A-followup): iterate all workspaces.
+  const store = getCachedStore();
   if (!store?.tasks?.length) return;
 
   // Log incidents for stuck tasks (merged from standalone stuckTaskDetector)
@@ -2483,7 +2574,9 @@ server.listen(port, async () => {
   // Runs every hour; cooldown inside runDriftCheck prevents incident spam.
   setInterval(async () => {
     try {
-      const store = cachedStore || await refreshCachedStore();
+      // #1387 A.2: drift check is system-global watchdog; runs against default-workspace.
+      // TODO(#1387 A-followup): iterate all workspaces.
+      const store = getCachedStore() || await refreshCachedStore();
       await runDriftCheck({
         tasks: store?.tasks || [],
         teammates: store?.settings?.teammates || store?.teammates || [],
