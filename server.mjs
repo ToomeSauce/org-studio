@@ -871,7 +871,8 @@ async function processIntent(changeEvent) {
 
       // Fetch the project and build the launch message
       try {
-        const storeRes = await fetch(`http://127.0.0.1:${port}/api/store`);
+        const storeAuth = process.env.ORG_STUDIO_API_KEY ? { Authorization: `Bearer ${process.env.ORG_STUDIO_API_KEY}` } : {};
+        const storeRes = await fetch(`http://127.0.0.1:${port}/api/store`, { headers: storeAuth });
         const store = await storeRes.json();
         const project = store.projects?.find(p => p.id === projectId);
         if (!project) {
@@ -929,7 +930,8 @@ async function processIntent(changeEvent) {
         
         // Resolve assignee → agentId from store
         try {
-          const storeRes = await fetch(`http://127.0.0.1:${port}/api/store`);
+          const storeAuth = process.env.ORG_STUDIO_API_KEY ? { Authorization: `Bearer ${process.env.ORG_STUDIO_API_KEY}` } : {};
+          const storeRes = await fetch(`http://127.0.0.1:${port}/api/store`, { headers: storeAuth });
           const store = await storeRes.json();
           const teammates = store.settings?.teammates || [];
           const match = teammates.find(t =>
@@ -1408,9 +1410,15 @@ let pollTimeoutHandle = null;
  */
 async function refreshCachedStore(workspaceId = DEFAULT_WORKSPACE_ID) {
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/api/store`, {
-      headers: { 'X-Workspace-Id': workspaceId },
-    });
+    // #1387 hotfix: A.3 added a cloud-mode auth gate on /api/store GET. This
+    // internal self-call must carry the break-glass key or it 401s and the
+    // WS clients never receive any store payload. ORG_STUDIO_API_KEY is
+    // always present in cloud mode (cluster secret) and unused/null in OSS.
+    const headers = { 'X-Workspace-Id': workspaceId };
+    if (process.env.ORG_STUDIO_API_KEY) {
+      headers['Authorization'] = `Bearer ${process.env.ORG_STUDIO_API_KEY}`;
+    }
+    const res = await fetch(`http://127.0.0.1:${port}/api/store`, { headers });
     if (res.ok) {
       const data = await res.json();
       cachedStoreByWorkspace.set(workspaceId, data);
