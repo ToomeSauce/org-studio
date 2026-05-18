@@ -493,7 +493,7 @@ async function testCachedStoreA2() {
   // workspaces. Skipped (TODO) when the server isn't running — this is a regression
   // suite, not an integration runner.
   try {
-    const ctrl = AbortSignal.timeout(1500);
+    const ctrl = AbortSignal.timeout(5000);
     const probe = await fetch('http://127.0.0.1:4501/api/store', { signal: ctrl });
     if (probe.ok) {
       const [rA, rB] = await Promise.all([
@@ -515,8 +515,8 @@ async function testCachedStoreA2() {
     } else {
       todo(false, 'live /api/store workspace probe — server not reachable on :4501', 'A.2-live');
     }
-  } catch {
-    todo(false, 'live /api/store workspace probe — server not reachable on :4501', 'A.2-live');
+  } catch (e) {
+    todo(false, `live /api/store workspace probe — server not reachable on :4501 (${e.message})`, 'A.2-live');
   }
 
   // WS broadcast scoping is verified by static inspection above plus manual smoke test:
