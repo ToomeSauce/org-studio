@@ -219,6 +219,45 @@ export async function hasWorkspaceMembership(
   );
 }
 
+/**
+ * #1387 A.4 — strict membership list for the login selector.
+ *
+ * Returns ONLY the workspaces where the user has an actual row in
+ * `org_studio_workspace_memberships` (or, in OSS mode, the single
+ * default workspace as a back-compat affordance because OSS has no
+ * memberships table populated).
+ *
+ * Unlike `getUserWorkspaces`, this does NOT force-include
+ * 'default-workspace' on top of real memberships — cloud users with
+ * memberships in ws-a / ws-b should see exactly ws-a and ws-b in the
+ * selector, not a phantom default.
+ *
+ * Shape: `{ id, name, role }[]` — login UI renders `name`, sends `id`.
+ */
+export async function listUserWorkspaceMemberships(
+  userId: string,
+): Promise<Array<{ id: string; name: string; role: string }>> {
+  const { workspaces, memberships } = await loadWorkspaceData();
+
+  // OSS mode: no workspaces table loaded -> single default.
+  if (!workspaces.length) {
+    return [{ id: DEFAULT_WORKSPACE_ID, name: 'Default Workspace', role: 'owner' }];
+  }
+
+  const userMemberships = memberships.filter((m) => m.userId === userId);
+  const wsById = new Map(workspaces.map((w) => [w.id, w]));
+  const out: Array<{ id: string; name: string; role: string }> = [];
+  const seen = new Set<string>();
+  for (const m of userMemberships) {
+    if (seen.has(m.workspaceId)) continue;
+    seen.add(m.workspaceId);
+    const ws = wsById.get(m.workspaceId);
+    if (!ws) continue; // stale membership row pointing at a deleted workspace — skip
+    out.push({ id: ws.id, name: ws.name, role: m.role });
+  }
+  return out;
+}
+
 // ── Workspace Resolution ───────────────────────────────────────────────
 
 /**
