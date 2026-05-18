@@ -129,7 +129,7 @@ export async function GET(
         try {
           const result = await client.query(
             'SELECT content FROM org_studio_vision_docs WHERE project_id = $1 AND workspace_id = $2',
-            [projectId, 'default-workspace'] // TODO(v0.17-multi-workspace): resolve from request context
+            [projectId, workspaceId]
           );
           if (result.rows.length > 0) {
             content = result.rows[0].content;
@@ -220,7 +220,7 @@ export async function PUT(
             `INSERT INTO org_studio_vision_docs (project_id, content, updated_at, workspace_id)
              VALUES ($1, $2, $3, $4)
              ON CONFLICT (project_id) DO UPDATE SET content = $2, updated_at = $3`,
-            [projectId, newContent, updatedAt, 'default-workspace'] // TODO(v0.17-multi-workspace): resolve from request context
+            [projectId, newContent, updatedAt, workspaceId]
           );
           savedToDb = true;
           console.info(`[VisionDoc] PUT project=${projectId} saved_to=postgres len=${newContent.length}`);

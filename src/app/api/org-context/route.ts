@@ -112,7 +112,7 @@ export async function GET(request: NextRequest) {
   // Load operating principles for agent if specified
   let operatingPrinciples = undefined;
   if (agentId) {
-    operatingPrinciples = await generatePrinciples(agentId);
+    operatingPrinciples = await generatePrinciples(agentId, workspaceId);
   }
 
   // Fetch coaching insights for agent (best-effort)

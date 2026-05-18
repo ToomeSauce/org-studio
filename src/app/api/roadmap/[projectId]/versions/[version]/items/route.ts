@@ -32,9 +32,12 @@
 
 import { NextResponse, NextRequest } from 'next/server';
 import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
+import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
 import { syncProjectShadowVersion } from '@/lib/roadmap-sync';
 
-const WORKSPACE_ID = 'default-workspace';
+// #1387 A.3: WORKSPACE_ID is resolved per-request from the request context.
+// The notifyChange helper takes it as a parameter; the SQL path threads it
+// through to all queries.
 
 type RawItem = {
   id?: string;
@@ -47,7 +50,7 @@ function mintItemId(): string {
   return `item-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`;
 }
 
-async function notifyChange(client: any, projectId: string, version: string): Promise<void> {
+async function notifyChange(client: any, projectId: string, version: string, workspaceId: string): Promise<void> {
   try {
     const roadmap = JSON.stringify({
       type: 'roadmap_update',
@@ -56,7 +59,7 @@ async function notifyChange(client: any, projectId: string, version: string): Pr
       version,
       timestamp: Date.now(),
       source: 'roadmap-patch-items',
-      workspace_id: WORKSPACE_ID,
+      workspace_id: workspaceId,
     });
     await client.query(`SELECT pg_notify('org_studio_events', $1)`, [roadmap]);
 
@@ -65,7 +68,7 @@ async function notifyChange(client: any, projectId: string, version: string): Pr
       projectId,
       timestamp: Date.now(),
       source: 'roadmap-patch-items',
-      workspace_id: WORKSPACE_ID,
+      workspace_id: workspaceId,
     });
     await client.query(`SELECT pg_notify('org_studio_events', $1)`, [project]);
   } catch (e) {
@@ -85,6 +88,10 @@ export async function PATCH(
     if (authCtx.error) return authCtx.error;
     const scopeFail = requireWriteScope(authCtx.context);
     if (scopeFail) return scopeFail;
+
+    // #1387 A.3: resolve workspace from request context (header / cookie /
+    // membership) instead of hardcoding default-workspace.
+    const workspaceId = await resolveWorkspaceIdForRequest(req);
 
     if (!process.env.DATABASE_URL) {
       return NextResponse.json(
@@ -164,7 +171,7 @@ export async function PATCH(
            FROM org_studio_roadmap_versions
           WHERE project_id = $1 AND version = $2 AND workspace_id = $3
           FOR UPDATE`,
-        [projectId, version, WORKSPACE_ID],
+        [projectId, version, workspaceId],
       );
 
       if (lockRes.rows.length === 0) {
@@ -272,7 +279,7 @@ export async function PATCH(
         `UPDATE org_studio_roadmap_versions
             SET items = $1::jsonb
           WHERE project_id = $2 AND version = $3 AND workspace_id = $4`,
-        [JSON.stringify(currentItems), projectId, version, WORKSPACE_ID],
+        [JSON.stringify(currentItems), projectId, version, workspaceId],
       );
 
       // Shadow-sync project.sections so the cached store reflects the change.
@@ -291,7 +298,7 @@ export async function PATCH(
       await client.query('COMMIT');
 
       // Notify listeners so the in-process cached store refreshes.
-      await notifyChange(client, projectId, version);
+      await notifyChange(client, projectId, version, workspaceId);
 
       return NextResponse.json({
         action: 'patched',

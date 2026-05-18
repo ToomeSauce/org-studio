@@ -22,9 +22,11 @@
  * No write side-effects. No DB writes. Falls back gracefully when DB or
  * scheduler module hasn't initialized yet.
  */
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getInFlightAgents } from '@/lib/runtimes/scheduler-bridge';
 import { getSchedulerStateSnapshot } from '@/lib/scheduler-state';
+import { resolveWorkspaceContext } from '@/lib/workspace-auth';
+import { authenticateRequestWithContext } from '@/lib/auth';
 
 let _pool: any = undefined; // undefined = not init, null = no DB
 
@@ -43,7 +45,7 @@ async function getPool(): Promise<any> {
   }
 }
 
-async function getOutboxDepth() {
+async function getOutboxDepth(workspaceId: string) {
   const pool = await getPool();
   if (!pool) return null;
   try {
@@ -52,7 +54,7 @@ async function getOutboxDepth() {
          FROM org_studio_outbox
         WHERE workspace_id = $1
         GROUP BY status`,
-      ['default-workspace'],
+      [workspaceId],
     );
     const out: Record<string, number> = { queued: 0, in_flight: 0, failed: 0, done: 0 };
     let total = 0;
@@ -71,11 +73,26 @@ async function getOutboxDepth() {
   }
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
+    // #1387 A.3: scope outbox depth to caller's workspace. Anonymous /
+    // ORG_STUDIO_API_KEY callers fall through to default-workspace (today's
+    // behaviour); authenticated session/per-agent tokens see their own
+    // workspace's depth via resolveWorkspaceContext.
+    let workspaceId = 'default-workspace';
+    try {
+      const auth = await authenticateRequestWithContext(req);
+      const userId = auth.context?.userId ?? undefined;
+      const ws = await resolveWorkspaceContext(req, userId);
+      if (ws.context?.id) workspaceId = ws.context.id;
+    } catch {
+      // Best-effort — falling back to default-workspace is safe for this
+      // monitoring snapshot endpoint.
+    }
+
     const snap = getSchedulerStateSnapshot();
     const inFlightAgents = getInFlightAgents();
-    const outboxDepth = await getOutboxDepth();
+    const outboxDepth = await getOutboxDepth(workspaceId);
 
     return NextResponse.json({
       now: Date.now(),

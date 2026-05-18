@@ -2439,9 +2439,12 @@ async function checkDeadLetterBacklog() {
     const client = new pg.Client({ connectionString: dbUrl });
     await client.connect();
     try {
+      // #1387 A.3: global dead-letter watchdog — aggregate across all
+      // workspaces. Drops the per-workspace filter intentionally so the
+      // alert reflects fleet state. (Per-workspace alerts would belong on a
+      // workspace-scoped dashboard, not a single global SRE watchdog.)
       const { rows } = await client.query(
-        `SELECT count(*)::int AS cnt FROM org_studio_outbox WHERE status = 'dead_letter' AND workspace_id = $1`,
-        ['default-workspace'] // TODO(v0.17-multi-workspace): aggregate across all workspaces or scope per-request
+        `SELECT count(*)::int AS cnt FROM org_studio_outbox WHERE status = 'dead_letter'`,
       );
       const count = rows[0]?.cnt || 0;
       if (count > 10) {
@@ -2546,6 +2549,16 @@ async function checkListenStale() {
 server.listen(port, async () => {
   console.log(`▲ Org Studio ready on http://localhost:${port}`);
   console.log(`  WebSocket: ws://localhost:${port}/ws`);
+
+  // #1387 A.3 decision #4: warn loudly when the transition flag is set in
+  // cloud mode — it disables auth on /api/store GET, which is fine for
+  // marketing pages / embeds but dangerous if left on by accident.
+  if (process.env.DATABASE_URL && process.env.ALLOW_ANONYMOUS_READS === 'true') {
+    console.warn(
+      '\u26a0\ufe0f  [auth] ALLOW_ANONYMOUS_READS=true with DATABASE_URL set — /api/store GET is publicly readable. ' +
+        'This transition flag should not be on in production. Unset it once your callers carry session cookies or Bearer tokens.',
+    );
+  }
 
   // Warm the store cache from Postgres (so first WS clients get fresh data)
   await refreshCachedStore();

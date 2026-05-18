@@ -87,7 +87,7 @@ export function createSessionToken(): string {
 /**
  * Get a session (async to support Postgres)
  */
-export async function getSession(sessionToken: string): Promise<{ userId: string } | null> {
+export async function getSession(sessionToken: string): Promise<{ userId: string; workspaceId?: string } | null> {
   // Try Postgres first (if DATABASE_URL is set)
   if (process.env.DATABASE_URL) {
     try {
@@ -95,9 +95,13 @@ export async function getSession(sessionToken: string): Promise<{ userId: string
       const client = new pg.Client(process.env.DATABASE_URL);
       await client.connect();
       try {
+        // #1387 A.3: sessions are keyed by token (unique). Read workspace_id
+        // from the row itself instead of hardcoding the lookup filter — a
+        // user logged into workspace A shouldn't fail authentication just
+        // because the session lookup looked in workspace B.
         const result = await client.query(
-          'SELECT user_id, expires_at FROM org_studio_sessions WHERE token = $1 AND workspace_id = $2',
-          [sessionToken, 'default-workspace'] // TODO(v0.17-multi-workspace): sessions are workspace-scoped
+          'SELECT user_id, expires_at, workspace_id FROM org_studio_sessions WHERE token = $1',
+          [sessionToken]
         );
         if (result.rows.length === 0) return null;
 
@@ -107,12 +111,12 @@ export async function getSession(sessionToken: string): Promise<{ userId: string
           : session.expires_at;
         
         if (expiresAt < Date.now()) {
-          // Session expired — delete it
-          await client.query('DELETE FROM org_studio_sessions WHERE token = $1 AND workspace_id = $2', [sessionToken, 'default-workspace']);
+          // Session expired — delete it (token is unique PK; no workspace filter needed)
+          await client.query('DELETE FROM org_studio_sessions WHERE token = $1', [sessionToken]);
           return null;
         }
 
-        return { userId: session.user_id };
+        return { userId: session.user_id, workspaceId: session.workspace_id || undefined };
       } finally {
         await client.end();
       }
@@ -139,7 +143,8 @@ export async function getSession(sessionToken: string): Promise<{ userId: string
  */
 export async function createSession(
   userId: string,
-  expiresIn: number = 24 * 60 * 60 * 1000
+  expiresIn: number = 24 * 60 * 60 * 1000,
+  workspaceId: string = 'default-workspace'
 ): Promise<string> {
   const token = createSessionToken();
   const expiresAt = Date.now() + expiresIn;
@@ -151,9 +156,12 @@ export async function createSession(
       const client = new pg.Client(process.env.DATABASE_URL);
       await client.connect();
       try {
+        // #1387 A.3: workspace_id resolved by caller. Login flow (A.4 sub-slice)
+        // will pass the selected workspace once the selector ships; today every
+        // session lands in 'default-workspace'.
         await client.query(
           'INSERT INTO org_studio_sessions (token, user_id, expires_at, workspace_id) VALUES ($1, $2, $3, $4)',
-          [token, userId, expiresAt, 'default-workspace'] // TODO(v0.17-multi-workspace): sessions are workspace-scoped
+          [token, userId, expiresAt, workspaceId]
         );
         return token;
       } finally {
@@ -183,7 +191,8 @@ export async function destroySession(sessionToken: string): Promise<void> {
       const client = new pg.Client(process.env.DATABASE_URL);
       await client.connect();
       try {
-        await client.query('DELETE FROM org_studio_sessions WHERE token = $1 AND workspace_id = $2', [sessionToken, 'default-workspace']);
+        // #1387 A.3: sessions are keyed by token (unique PK). No workspace filter needed.
+        await client.query('DELETE FROM org_studio_sessions WHERE token = $1', [sessionToken]);
         return;
       } finally {
         await client.end();

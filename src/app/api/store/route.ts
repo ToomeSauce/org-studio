@@ -427,6 +427,51 @@ async function resolveRequestWorkspace(req: NextRequest): Promise<WorkspaceConte
 
 export async function GET(req: NextRequest) {
   try {
+    // #1387 A.3 (decision #4): cloud-mode anonymous GET gate.
+    //   OSS (no DATABASE_URL): anonymous GET allowed (today's behavior).
+    //   Cloud (DATABASE_URL set):
+    //     - require session cookie OR Bearer API/per-agent token, else 401.
+    //     - ALLOW_ANONYMOUS_READS=true overrides (transition flag for
+    //       embeds/marketing pages); a startup warning is logged elsewhere.
+    if (process.env.DATABASE_URL && process.env.ALLOW_ANONYMOUS_READS !== 'true') {
+      const cookieHeader = req.headers.get('cookie');
+      const sessionToken = getSessionTokenFromCookie(cookieHeader);
+      const authHeader = req.headers.get('authorization') || '';
+      const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+      let authed = false;
+      if (sessionToken) {
+        const session = await getSession(sessionToken);
+        if (session) authed = true;
+      }
+      if (!authed && bearer) {
+        // Match the same auth path as authenticateRequest — either global
+        // ORG_STUDIO_API_KEY or a valid per-agent token (when enabled).
+        if (process.env.ORG_STUDIO_API_KEY && bearer === process.env.ORG_STUDIO_API_KEY) {
+          authed = true;
+        } else {
+          try {
+            const { perAgentTokensEnabled, verifyApiToken } = await import('@/lib/api-tokens');
+            if (perAgentTokensEnabled()) {
+              const record = await verifyApiToken(bearer);
+              if (record) authed = true;
+            }
+          } catch {
+            // fall through
+          }
+        }
+      }
+      if (!authed) {
+        return NextResponse.json(
+          {
+            error: 'unauthorized',
+            message:
+              'Cloud-mode /api/store requires authentication. Set ALLOW_ANONYMOUS_READS=true to allow anonymous reads (transition flag).',
+          },
+          { status: 401 },
+        );
+      }
+    }
+
     // Workspace filtering — transparent: single-workspace users see everything
     const wsOrError = await resolveRequestWorkspace(req);
     if (wsOrError instanceof NextResponse) return wsOrError;

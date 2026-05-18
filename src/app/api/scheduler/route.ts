@@ -721,11 +721,26 @@ async function fireOneShot(store: StoreData, loop: AgentLoop): Promise<string | 
       sessionKey,
       idempotencyKey,
       onCompleteKind: 'redispatch',
+      // #1387 A.3: scheduler today reads all workspaces' loops as a single
+      // cross-workspace pool (`getStoreProviderAllWorkspaces()`). Until the
+      // multi-workspace scheduler split lands (separate sub-slice), the loop
+      // doesn't carry its source workspace_id; route the resulting outbox row
+      // to 'default-workspace' so it matches today's single-workspace
+      // production behaviour. Replacing the hardcode inside outbox.ts itself
+      // (which had no workspace context at all) is the actual A.3 win.
+      workspaceId: 'default-workspace',
     });
 
     // Write heartbeat after successful enqueue
     try {
-      await writeHeartbeat({ agentId: loop.agentId, loopId: loop.id, status: 'firing' });
+      await writeHeartbeat({
+        agentId: loop.agentId,
+        loopId: loop.id,
+        status: 'firing',
+        // #1387 A.3: scheduler is cross-workspace today; threading the loop's
+        // workspace will land with the multi-workspace scheduler split.
+        workspaceId: 'default-workspace',
+      });
     } catch (_hbErr) {
       // Heartbeat failures must never break scheduler execution
     }

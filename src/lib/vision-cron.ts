@@ -56,12 +56,12 @@ export function cadenceToCron(cadence: string): string {
  * Telegram flow. If a future flow needs version proposals, it should be
  * a separate cron + a separate prompt, not bolted into Launch.
  */
-export async function buildLaunchMessage(project: Project): Promise<string> {
+export async function buildLaunchMessage(project: Project, workspaceId: string = 'default-workspace'): Promise<string> {
   const projectId = project.id;
   const projectName = project.name;
   const version = project.currentVersion || '(unset)';
 
-  const itemsLines = await loadVersionItemSummary(projectId, project.currentVersion || null);
+  const itemsLines = await loadVersionItemSummary(projectId, project.currentVersion || null, workspaceId);
   const itemsBlock = itemsLines.length
     ? `\nRoadmap items in this version:\n${itemsLines.map((l, i) => `${i + 1}. ${l}`).join('\n')}\n`
     : '';
@@ -87,6 +87,7 @@ If something is genuinely blocking (missing context, conflicting requirement, un
 async function loadVersionItemSummary(
   projectId: string,
   version: string | null,
+  workspaceId: string,
 ): Promise<string[]> {
   if (!version) return [];
   if (!process.env.DATABASE_URL) return [];
@@ -98,7 +99,7 @@ async function loadVersionItemSummary(
       const rv = await client.query(
         `SELECT items FROM org_studio_roadmap_versions
          WHERE project_id = $1 AND version = $2 AND workspace_id = $3 LIMIT 1`,
-        [projectId, version, 'default-workspace'],
+        [projectId, version, workspaceId],
       );
       if (rv.rows.length === 0) return [];
       const items: any[] = Array.isArray(rv.rows[0].items) ? rv.rows[0].items : [];
@@ -114,7 +115,7 @@ async function loadVersionItemSummary(
           try {
             const t = await client.query(
               `SELECT ticket_number FROM org_studio_tasks WHERE id = $1 AND workspace_id = $2 LIMIT 1`,
-              [it.taskId, 'default-workspace'],
+              [it.taskId, workspaceId],
             );
             const num = t.rows[0]?.ticket_number;
             lines.push(num ? `${title} → #${num}` : `${title} → task ${it.taskId}`);
@@ -142,10 +143,10 @@ async function loadVersionItemSummary(
  * weekly-cron flow is unwired. Kept as a stub; remove in a follow-up
  * once we've verified nothing imports it.
  */
-export async function buildVisionCronJob(project: Project): Promise<CronJob> {
+export async function buildVisionCronJob(project: Project, workspaceId: string = 'default-workspace'): Promise<CronJob> {
   const cadence = project.autonomy?.cadence || 'weekly';
   const cronExpr = cadenceToCron(cadence);
-  const message = await buildLaunchMessage(project);
+  const message = await buildLaunchMessage(project, workspaceId);
 
   return {
     name: `Vision: ${project.name} — improvement cycle`,
