@@ -139,13 +139,15 @@ export async function GET(req: NextRequest) {
 
     // #1387 A.3: resolve caller's workspace. If unauthenticated AND cloud
     // mode, return a minimal ok payload — don't leak fleet state to
-    // unidentified callers.
+    // unidentified callers. The global ORG_STUDIO_API_KEY is treated as
+    // authed (it has no userId but it's an internal admin credential).
     let workspaceId: string | null = null;
     let authed = false;
     try {
       const auth = await authenticateRequestWithContext(req);
       if (auth.context) {
-        authed = !!auth.context.userId;
+        // session userId, per-agent token userId, OR global API key (method='apikey')
+        authed = !!auth.context.userId || auth.context.method === 'apikey';
         const ws = await resolveWorkspaceContext(req, auth.context.userId ?? undefined);
         if (ws.context?.id) workspaceId = ws.context.id;
       }
