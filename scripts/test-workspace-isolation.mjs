@@ -297,16 +297,21 @@ async function testKudos() {
   const r2 = await pool.query(`SELECT id FROM org_studio_kudos WHERE workspace_id=$1 AND id IN ($2,$3)`, [WS_B, kA, kB]);
   assert(r2.rows.length === 1 && r2.rows[0].id === kB, 'kudos: ws-b sees only B');
 
-  // principles-generator.ts:57 reads ALL kudos without workspace filter (HIGH audit gap).
-  // Until A.3 fixes principles-generator.ts to be per-workspace, this is a documented leak.
-  const allConfirmed = await pool.query(
-    `SELECT id FROM org_studio_kudos WHERE confirmed = true AND id IN ($1,$2)`,
-    [kA, kB]
+  // #1387 A.3 closed: principles-generator now filters by workspace_id.
+  // Hard assertion: the SELECT in loadKudosFromDB carries a workspace_id
+  // predicate. Structural check (matches A.1/A.2 pattern for source-level
+  // regression nets).
+  const principlesSrc = readFileSync(
+    join(rootDir, 'src/lib/principles-generator.ts'),
+    'utf-8',
   );
-  todo(allConfirmed.rows.length === 1,
-    `kudos: a "global confirmed kudos" query (principles-generator pattern) returns only one workspace — got ${allConfirmed.rows.length}`,
-    'A.3-principles'
+  assert(
+    /FROM org_studio_kudos[\s\S]*WHERE confirmed = true AND workspace_id = \$1/.test(principlesSrc) &&
+      /async function loadKudosFromDB\(workspaceId/.test(principlesSrc) &&
+      /generatePrinciples\(\s*agentId: string,\s*workspaceId:/.test(principlesSrc),
+    'principles-generator: kudos SELECT filters by workspace_id; both helpers thread workspaceId (A.3-principles closed)',
   );
+  console.log('  (A.3-principles closed) principles-generator filters kudos per-workspace');
 }
 
 async function testOutbox() {
@@ -321,10 +326,28 @@ async function testOutbox() {
   );
   const r = await pool.query(`SELECT id FROM org_studio_outbox WHERE workspace_id=$1 AND id IN ($2,$3)`, [WS_A, oA, oB]);
   assert(r.rows.length === 1 && r.rows[0].id === oA, 'outbox: scoped read returns only ws-a');
-  // outbox.ts:65 + scheduler/status/route.ts:50 hardcode 'default-workspace'. Behavioral
-  // test for those requires a running app — covered structurally by direct-SQL test above.
-  // Tag the hardcoded constant as known A.3 work.
-  todo(false, "outbox.ts:67 enqueueOutbox() hardcodes workspaceId='default-workspace'", 'A.3-hardcodes');
+  // #1387 A.3 closed: outbox.ts no longer hardcodes 'default-workspace';
+  // workspaceId is now a caller-supplied param. Scheduler passes it
+  // explicitly. Heartbeats follow the same pattern.
+  const outboxSrc = readFileSync(join(rootDir, 'src/lib/outbox.ts'), 'utf-8');
+  const heartbeatSrc = readFileSync(join(rootDir, 'src/lib/heartbeats.ts'), 'utf-8');
+  const visionCronSrc = readFileSync(join(rootDir, 'src/lib/vision-cron.ts'), 'utf-8');
+  assert(
+    /workspaceId\?: string/.test(outboxSrc) &&
+      /params\.workspaceId \|\| 'default-workspace'/.test(outboxSrc),
+    "outbox.ts: enqueueOutbox accepts workspaceId param (default 'default-workspace' for OSS back-compat)",
+  );
+  assert(
+    /workspaceId\?: string/.test(heartbeatSrc) &&
+      /workspaceId \|\| 'default-workspace'/.test(heartbeatSrc),
+    'heartbeats.ts: writeHeartbeat accepts workspaceId param',
+  );
+  assert(
+    /buildLaunchMessage\(project: Project, workspaceId/.test(visionCronSrc) &&
+      /loadVersionItemSummary\([\s\S]*workspaceId: string,/.test(visionCronSrc),
+    'vision-cron.ts: buildLaunchMessage + loadVersionItemSummary thread workspaceId',
+  );
+  console.log('  (A.3-hardcodes closed) outbox + heartbeats + vision-cron accept workspaceId; no bare default-workspace literal in SQL params');
 }
 
 async function testHeartbeats() {
@@ -383,8 +406,17 @@ async function testIncidents() {
   const r2 = await pool.query(`SELECT id FROM org_studio_incidents WHERE workspace_id=$1 AND id IN ($2,$3)`, [WS_B, iA, iB]);
   assert(r2.rows.length === 1 && r2.rows[0].id === iB, 'incidents: ws-b sees only B');
 
-  // /api/health/route.ts:55 reads incidents without workspace filter (audit #5).
-  todo(false, '/api/health/route.ts:55 — incident SELECT missing workspace_id filter', 'A.3-health');
+  // #1387 A.3 closed: /api/health now scopes queries by caller's workspace.
+  const healthSrc = readFileSync(join(rootDir, 'src/app/api/health/route.ts'), 'utf-8');
+  assert(
+    /queryStuckAgents\(pool: any, workspaceId: string\)/.test(healthSrc) &&
+      /queryIncidents\(pool: any, workspaceId: string\)/.test(healthSrc) &&
+      /WHERE workspace_id = \$1/.test(healthSrc) &&
+      /resolveWorkspaceContext/.test(healthSrc) &&
+      /degradedMode: 'unauthenticated'/.test(healthSrc),
+    '/api/health filters stuckAgents + incidents by workspace_id; anonymous cloud probe degrades cleanly (A.3-health closed)',
+  );
+  console.log('  (A.3-health closed) /api/health scoped per workspace');
 }
 
 async function testSettings() {
@@ -440,8 +472,18 @@ async function testSessions() {
   assert(r.rows.length === 1 && r.rows[0].token === tokA, 'sessions: ws-a sees only its session');
   const r2 = await pool.query(`SELECT token FROM org_studio_sessions WHERE workspace_id=$1 AND token IN ($2,$3)`, [WS_B, tokA, tokB]);
   assert(r2.rows.length === 1 && r2.rows[0].token === tokB, 'sessions: ws-b sees only its session');
-  // auth.ts:98/111/186 hardcode 'default-workspace' for session lookups (audit #32/#33/#35).
-  todo(false, 'auth.ts:98/111/186 — session SELECT/DELETE hardcode workspace_id=default-workspace', 'A.3-auth');
+  // #1387 A.3 closed: auth.ts now reads workspace_id from the session row
+  // (token is the unique PK) instead of hardcoding the lookup filter; the
+  // login flow / per-agent-token codepath can land sessions in any workspace.
+  const authSrc = readFileSync(join(rootDir, 'src/lib/auth.ts'), 'utf-8');
+  assert(
+    /SELECT user_id, expires_at, workspace_id FROM org_studio_sessions WHERE token = \$1/.test(authSrc) &&
+      !/SELECT user_id, expires_at FROM org_studio_sessions WHERE token = \$1 AND workspace_id = \$2/.test(authSrc) &&
+      /DELETE FROM org_studio_sessions WHERE token = \$1\b(?!.*workspace_id)/.test(authSrc) &&
+      /workspaceId: string = 'default-workspace'/.test(authSrc),
+    'auth.ts: getSession/destroySession key by token only; createSession accepts workspaceId param (A.3-auth closed)',
+  );
+  console.log('  (A.3-auth closed) auth.ts session lookups read workspace_id from row');
 }
 
 async function testApiTokens() {
@@ -528,6 +570,46 @@ async function testCachedStoreA2() {
   todo(false, 'WS broadcast scoping verified via static check + manual two-tab test', 'A.2-WS-manual');
 }
 
+/**
+ * #1387 A.3 decision #4: anonymous GET /api/store gating.
+ *
+ *   Mode 1 — OSS (no DATABASE_URL): anonymous allowed.
+ *   Mode 2 — cloud (DATABASE_URL set), no ALLOW_ANONYMOUS_READS: 401.
+ *   Mode 3 — cloud + ALLOW_ANONYMOUS_READS=true: anonymous allowed.
+ *   Mode 4 — cloud authenticated (Bearer ORG_STUDIO_API_KEY): allowed.
+ *
+ * Behavioral mode 1+4 are exercised by the live-probe path (the live
+ * suite runs against a Postgres dev server, so mode 1 is structurally
+ * untestable here; modes 2/3 are too — they require restarting the
+ * server with a different env). Hard structural assertion: the GET
+ * handler implements the four-branch check with the right env
+ * variables.
+ */
+async function testStoreAuthGateA3() {
+  console.log('\n🔍 Section: /api/store cloud-mode anonymous GET gate (#1387 A.3 decision #4)');
+  const storeSrc = readFileSync(join(rootDir, 'src/app/api/store/route.ts'), 'utf-8');
+  assert(
+    /process\.env\.DATABASE_URL && process\.env\.ALLOW_ANONYMOUS_READS !== 'true'/.test(storeSrc),
+    "/api/store GET checks DATABASE_URL + ALLOW_ANONYMOUS_READS together (cloud-mode gate)",
+  );
+  assert(
+    /error: 'unauthorized'/.test(storeSrc) &&
+      /status: 401/.test(storeSrc),
+    '/api/store GET returns 401 for unauthenticated cloud requests',
+  );
+  assert(
+    /getSessionTokenFromCookie/.test(storeSrc) && /verifyApiToken/.test(storeSrc),
+    '/api/store GET accepts both session cookie and Bearer (global API key + per-agent token)',
+  );
+  // Startup warning lives in server.mjs (one-time when ALLOW_ANONYMOUS_READS is on).
+  const serverSrc = readFileSync(join(rootDir, 'server.mjs'), 'utf-8');
+  assert(
+    /ALLOW_ANONYMOUS_READS=true with DATABASE_URL set/.test(serverSrc),
+    'server.mjs warns at startup when ALLOW_ANONYMOUS_READS=true in cloud mode',
+  );
+  console.log('  (A.3-store-auth-gate closed) /api/store GET has the four-mode gate documented in decisions doc #4');
+}
+
 async function testWorkspaceMemberships() {
   console.log('\n🔍 Section: org_studio_workspace_memberships');
   const userA = rid('user-a');
@@ -570,6 +652,7 @@ try {
   await testApiTokens();
   await testWorkspaceMemberships();
   await testCachedStoreA2();
+  await testStoreAuthGateA3();
 
   await cleanup();
 
@@ -581,10 +664,10 @@ try {
     console.log('\n⚠️  Deferred TODOs (out-of-scope for slice A.1):');
     console.log('   (A.1-foundation closed by this slice — see store-provider.ts)');
     console.log('   (A.2-cachedStore + A.2-WS-scoping closed — see server.mjs cachedStoreByWorkspace)');
-    console.log('   A.3-hardcodes : hardcoded "default-workspace" constants in libs');
-    console.log('   A.3-principles: principles-generator cross-workspace read');
-    console.log('   A.3-auth      : auth.ts session workspace hardcodes');
-    console.log('   A.3-health    : /api/health unfiltered reads');
+    console.log('   (A.3-hardcodes closed by this slice — see outbox/heartbeats/vision-cron)');
+    console.log('   (A.3-principles closed by this slice — see principles-generator.ts)');
+    console.log('   (A.3-auth closed by this slice — see auth.ts session lookups)');
+    console.log('   (A.3-health closed by this slice — see /api/health/route.ts)');
     console.log('   A.4-schema    : ON CONFLICT PK changes (agent_metrics, settings, heartbeats)');
   }
 
