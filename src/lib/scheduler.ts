@@ -860,6 +860,21 @@ export async function buildLoopPrompt(
   role?: string,
   includeHandoffs?: boolean,
 ): Promise<string> {
+  // #1386 Phase 2 — per-agent API token wiring is deferred to a follow-up.
+  //
+  // Prompts above reference ${ORG_STUDIO_API_KEY} literally; that variable
+  // is set in the agent shell environment by the upstream dispatch path
+  // (gateway chat.send), not here. The right place to plug in a per-agent
+  // token is the dispatch layer's env construction, which lives outside
+  // this repo. The read-side helper is already in place:
+  //   resolveAgentApiToken(teammates, agentId) in src/lib/teammates.ts
+  // returns the per-agent token if settings.teammates[i].agentToken is
+  // set, else falls back to process.env.ORG_STUDIO_API_KEY. The dispatch
+  // path can call it when constructing the agent env. No prompt content
+  // change required.
+  //
+  // Wiring the dispatch path itself is >50 LoC and crosses the
+  // gateway/host boundary, so per #1386 scope it's a follow-up ticket.
   const parts: string[] = [];
 
   // Global preamble — always prepended if provided
