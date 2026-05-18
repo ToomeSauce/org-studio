@@ -52,15 +52,15 @@ export async function POST(
   { params }: { params: Promise<{ projectId: string; version: string; itemId: string }> }
 ) {
   const { projectId, version, itemId } = await params;
-  const authHeader = (await headers()).get('authorization');
-  if (!requireBearer(authHeader)) {
-    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-  }
-  // #1386 Phase 2: scope check (read-only agent tokens cannot mint tickets).
+  // #1386 Phase 2: scope check first (cheap, no headers() dependency).
   const authCtx = await authenticateRequestWithContext(req);
   if (!authCtx.error) {
     const scopeFail = requireWriteScope(authCtx.context);
     if (scopeFail) return scopeFail;
+  }
+  const authHeader = (await headers()).get('authorization');
+  if (!requireBearer(authHeader)) {
+    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 
   let body: any;

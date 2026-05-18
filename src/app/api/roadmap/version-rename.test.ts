@@ -46,6 +46,8 @@ vi.mock('pg', () => {
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequest: async () => null, // always allow
+  authenticateRequestWithContext: async () => ({ context: { userId: 'test', method: 'apikey' } }),
+  requireWriteScope: () => null, // never block in legacy tests
 }));
 
 vi.mock('@/lib/store-provider', () => ({
