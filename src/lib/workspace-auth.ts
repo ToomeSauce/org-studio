@@ -508,3 +508,179 @@ export async function resolveWorkspaceIdForRequest(req: NextRequest): Promise<st
   } catch {}
   return 'default-workspace';
 }
+
+// ── #1387 Slice B: Workspace Role Gate ─────────────────────────────────
+
+/**
+ * Workspace role hierarchy. Higher index = more authority.
+ * Mirrors the role column on `org_studio_workspace_memberships`.
+ *
+ * Current schema only has `owner | member`. `admin` is reserved for a future
+ * migration that introduces a middle tier between owner and member; it is
+ * currently aliased to `owner` for forward-compat gating logic (callers can
+ * already write `requireRole: 'admin'` today; it will resolve to owner-only
+ * until the schema is expanded).
+ */
+export const WORKSPACE_ROLE_ORDER = ['member', 'admin', 'owner'] as const;
+export type WorkspaceRole = (typeof WORKSPACE_ROLE_ORDER)[number];
+
+/**
+ * Return true if `actualRole` meets or exceeds `minRole` in the
+ * WORKSPACE_ROLE_ORDER hierarchy. Unknown roles fail closed (return false).
+ */
+export function roleAtLeast(
+  actualRole: string | null | undefined,
+  minRole: WorkspaceRole,
+): boolean {
+  if (!actualRole) return false;
+  const actualIdx = WORKSPACE_ROLE_ORDER.indexOf(actualRole as WorkspaceRole);
+  const minIdx = WORKSPACE_ROLE_ORDER.indexOf(minRole);
+  if (actualIdx === -1 || minIdx === -1) return false;
+  return actualIdx >= minIdx;
+}
+
+/**
+ * Result of a workspace-role check.
+ *
+ * - `allowed: true` with `via: 'session' | 'agent-token'` — caller has a real
+ *   workspace membership meeting the role threshold.
+ * - `allowed: true` with `via: 'break-glass'` — caller authenticated via the
+ *   global ORG_STUDIO_API_KEY. The check passes for ops/incident use, but the
+ *   caller should record an audit row (slice B.3) before mutating.
+ * - `allowed: false` — caller is unauthenticated, has no membership in the
+ *   target workspace, or has a membership below the required role. `reason`
+ *   carries a short machine-readable code; `response` is a pre-built
+ *   NextResponse the handler can return directly.
+ */
+export type WorkspaceRoleResult =
+  | { allowed: true; via: 'session' | 'agent-token' | 'break-glass'; userId: string | null; role?: WorkspaceRole }
+  | { allowed: false; reason: 'unauthenticated' | 'not-a-member' | 'insufficient-role'; response: NextResponse };
+
+/**
+ * #1387 Slice B — Workspace role gate.
+ *
+ * Resolve the caller's identity, look up their membership in `workspaceId`,
+ * and check that their role meets `minRole`. Three caller identities are
+ * supported, in this priority order:
+ *
+ *   1. **Session cookie** — resolves to a userId; role looked up in the
+ *      `org_studio_workspace_memberships` table.
+ *   2. **Per-agent API token** (#1383, behind ENABLE_PER_AGENT_TOKENS) —
+ *      resolves to the token's owner userId; same membership lookup applies.
+ *   3. **Global ORG_STUDIO_API_KEY** — break-glass. Passes the gate so
+ *      incident response / Catpilot-internal ops keeps working, but the
+ *      caller MUST record an audit-log entry (slice B.3 lands the table +
+ *      logging helper). `via: 'break-glass'` makes this trivially detectable
+ *      by the call site.
+ *
+ * Important semantics:
+ *   - **No membership row → 403 not-a-member.** Even with a valid session,
+ *     callers without a row in the target workspace are rejected.
+ *   - **Role below threshold → 403 insufficient-role.** E.g. a `member`
+ *     calling an `owner`-only endpoint.
+ *   - **OSS mode** (no `org_studio_workspaces` table populated) — the lookup
+ *     transparently treats every authenticated caller as `owner` of
+ *     `default-workspace`. Identical to the existing `listUserWorkspaceMemberships`
+ *     OSS fallback. This preserves zero-config behaviour for the OSS install.
+ *
+ * This function does NOT wire itself into any endpoint — slice B.2 does
+ * that. Landing the helper first means slice B.2 can be a mechanical patch
+ * with a clean rollback boundary.
+ */
+export async function requireWorkspaceRole(
+  req: NextRequest,
+  workspaceId: string,
+  minRole: WorkspaceRole,
+): Promise<WorkspaceRoleResult> {
+  // Lazy import to avoid a circular dep with src/lib/auth.ts at module load.
+  const { authenticateRequestWithContext } = await import('@/lib/auth');
+  const authResult = await authenticateRequestWithContext(req);
+
+  // Unauthenticated → 401, regardless of role.
+  if (authResult.error || !authResult.context) {
+    return {
+      allowed: false,
+      reason: 'unauthenticated',
+      response: NextResponse.json(
+        { error: 'unauthorized', message: 'Authentication required.' },
+        { status: 401 },
+      ),
+    };
+  }
+
+  const ctx = authResult.context;
+
+  // Break-glass: global API key. Pass, but flag for audit at the call site.
+  if (ctx.method === 'apikey') {
+    return { allowed: true, via: 'break-glass', userId: ctx.userId };
+  }
+
+  // Session or agent-token: look up real membership.
+  const userId = ctx.userId;
+  if (!userId) {
+    // Auth succeeded but produced no userId — treat as unauthenticated.
+    // (Currently only happens for method === 'noauth', which we don't want to
+    // grant workspace authority to in cloud mode.)
+    return {
+      allowed: false,
+      reason: 'unauthenticated',
+      response: NextResponse.json(
+        { error: 'unauthorized', message: 'Authentication required.' },
+        { status: 401 },
+      ),
+    };
+  }
+
+  const { workspaces, memberships } = await loadWorkspaceData();
+
+  // OSS mode: no workspaces loaded → treat caller as owner of default-workspace.
+  // (Matches the existing OSS fallback in listUserWorkspaceMemberships.)
+  if (!workspaces.length) {
+    if (workspaceId === DEFAULT_WORKSPACE_ID) {
+      const via: 'session' | 'agent-token' =
+        ctx.method === 'agent-token' ? 'agent-token' : 'session';
+      return { allowed: true, via, userId, role: 'owner' };
+    }
+    return {
+      allowed: false,
+      reason: 'not-a-member',
+      response: NextResponse.json(
+        { error: 'forbidden', message: `No membership in workspace '${workspaceId}'.` },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const membership = memberships.find(
+    (m) => m.userId === userId && m.workspaceId === workspaceId,
+  );
+
+  if (!membership) {
+    return {
+      allowed: false,
+      reason: 'not-a-member',
+      response: NextResponse.json(
+        { error: 'forbidden', message: `No membership in workspace '${workspaceId}'.` },
+        { status: 403 },
+      ),
+    };
+  }
+
+  if (!roleAtLeast(membership.role, minRole)) {
+    return {
+      allowed: false,
+      reason: 'insufficient-role',
+      response: NextResponse.json(
+        {
+          error: 'forbidden',
+          message: `Role '${membership.role}' is below required '${minRole}' for this action.`,
+        },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const via: 'session' | 'agent-token' =
+    ctx.method === 'agent-token' ? 'agent-token' : 'session';
+  return { allowed: true, via, userId, role: membership.role as WorkspaceRole };
+}
