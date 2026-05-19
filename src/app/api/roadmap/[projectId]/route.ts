@@ -101,7 +101,16 @@ export async function GET(
         // Derive item.done from linked task status (don't trust stored done flag)
         let allTasks: any[] = [];
         try {
-          const storeRes = await fetch(`http://127.0.0.1:${process.env.PORT || 4501}/api/store`);
+          // #1395: pass Bearer on the self-fetch so the Slice A.3 auth gate
+          // doesn't 401 us back. Without this header, /api/store returns 401,
+          // allTasks stays empty, and displayTitle + taskTicketNumber never
+          // get populated even though the items have real taskId links.
+          // Mirror of the fix in ed1eccd for server.mjs.
+          const storeRes = await fetch(`http://127.0.0.1:${process.env.PORT || 4501}/api/store`, {
+            headers: process.env.ORG_STUDIO_API_KEY
+              ? { Authorization: `Bearer ${process.env.ORG_STUDIO_API_KEY}` }
+              : {},
+          });
           if (storeRes.ok) {
             const storeData = await storeRes.json();
             allTasks = storeData.tasks || [];

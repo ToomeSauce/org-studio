@@ -1485,6 +1485,161 @@ async function test1393TenantIdentity() {
 }
 
 
+/**
+ * #1395 — atomic roadmap-item ticket flow.
+ *
+ * Asserts:
+ *   - POST /api/roadmap/{p}/versions/{v}/items/{i}/ticket creates a task
+ *     AND links it back to the item in one round-trip (action=created_and_linked).
+ *   - GET /api/roadmap/{p} returns items[].displayTitle and items[].taskTicketNumber
+ *     populated server-side (#1381 surfaced through the Postgres GET path
+ *     after the #1395 self-fetch auth fix).
+ *   - Calling the endpoint a second time for the same (projectId, version, itemId)
+ *     returns action=already_linked with the existing task (idempotency).
+ *   - Endpoint returns 404 for unknown version + unknown item.
+ *
+ * Live-only; requires the dashboard running on localhost:$PORT.
+ */
+async function test1395AtomicTicketFlow() {
+  console.log('\n🔍 Section: atomic roadmap-item ticket flow (#1395)');
+  const fsMod = await import('node:fs');
+  const pathMod = await import('node:path');
+
+  // Static
+  const atomicRoutePath = pathMod.resolve(
+    process.cwd(),
+    'src/app/api/roadmap/[projectId]/versions/[version]/items/[itemId]/ticket/route.ts',
+  );
+  assert(fsMod.existsSync(atomicRoutePath), 'atomic ticket route file exists');
+  const routeSrc = fsMod.readFileSync(atomicRoutePath, 'utf8');
+  assert(routeSrc.includes("already_linked"), 'atomic endpoint implements idempotency (action=already_linked)');
+  assert(routeSrc.includes('created_and_linked'), 'atomic endpoint returns action=created_and_linked on success');
+
+  // Skill doc updated to recommend the new path
+  const skillPath = '/home/openclaw_user/.openclaw/workspace-mikey/skills/org-studio-api/SKILL.md';
+  if (fsMod.existsSync(skillPath)) {
+    const skillSrc = fsMod.readFileSync(skillPath, 'utf8');
+    assert(
+      skillSrc.includes('atomic one-call endpoint') || skillSrc.includes('atomic create-and-link') || skillSrc.includes('Recommended: one-call'),
+      'skill recommends the atomic endpoint',
+    );
+    assert(
+      skillSrc.includes('Legacy 5-step flow') || skillSrc.includes('DEPRECATED'),
+      'skill marks the legacy 5-step flow as deprecated',
+    );
+  }
+
+  // Live
+  const port = process.env.PORT || '4501';
+  const apiKey = process.env.ORG_STUDIO_API_KEY;
+  if (!apiKey) {
+    todo('1395-live: ORG_STUDIO_API_KEY not set; skipping live atomic-endpoint checks');
+    console.log('  (#1395 partial) static assertions passed; live skipped');
+    return;
+  }
+
+  let healthOk = false;
+  try {
+    const r = await fetch(`http://localhost:${port}/api/health`, { signal: AbortSignal.timeout(2000) });
+    healthOk = r.ok;
+  } catch {}
+  if (!healthOk) {
+    todo('1395-live: dashboard not reachable on port ' + port + '; skipping live checks');
+    console.log('  (#1395 partial) static assertions passed; live skipped');
+    return;
+  }
+
+  const PROJECT = 'proj-org-studio';
+  const VERSION = '99.99.' + Math.floor(Math.random() * 90 + 10); // unique SemVer to avoid collisions
+
+  // Setup: create a probe version with one item, server mints the id
+  const upsertRes = await fetch(`http://localhost:${port}/api/roadmap/${PROJECT}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      action: 'upsert',
+      version: VERSION,
+      title: '#1395 smoke test',
+      status: 'planned',
+      versionType: 'chore',
+      items: [{ title: 'Smoke item', done: false }],
+    }),
+  });
+  assert(upsertRes.ok, 'roadmap upsert succeeded');
+  const upsertData = await upsertRes.json();
+  const itemId = upsertData.items?.[0]?.id;
+  assert(typeof itemId === 'string' && itemId.length > 0, 'upsert echoed back a server-minted item id (#1379)');
+
+  // Hit the atomic endpoint
+  const ticketUrl = `http://localhost:${port}/api/roadmap/${PROJECT}/versions/${VERSION}/items/${itemId}/ticket`;
+  const ticketRes = await fetch(ticketUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ assignee: 'Mikey', doneWhen: '1395 smoke', priority: 'low', taskType: 'chore' }),
+  });
+  assert(ticketRes.ok, 'atomic ticket endpoint returned 2xx');
+  const ticketData = await ticketRes.json();
+  assert(ticketData.action === 'created_and_linked', 'atomic endpoint returned action=created_and_linked');
+  assert(ticketData.task?.id, 'response includes task with id');
+  assert(typeof ticketData.task?.ticketNumber === 'number', 'response includes task.ticketNumber');
+  assert(ticketData.item?.taskId === ticketData.task?.id, 'response.item.taskId matches response.task.id (back-link succeeded)');
+  const createdTaskId = ticketData.task.id;
+  const ticketNumber = ticketData.task.ticketNumber;
+
+  // Verify GET surfaces displayTitle + taskTicketNumber (this is the #1395 fix)
+  const verifyRes = await fetch(`http://localhost:${port}/api/roadmap/${PROJECT}`, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+  const verifyData = await verifyRes.json();
+  const verVer = (verifyData.versions || []).find((v) => v.version === VERSION);
+  const verItem = verVer?.items?.find((i) => i.id === itemId);
+  assert(verItem, 'item visible in GET after creation');
+  assert(
+    verItem?.displayTitle === `Smoke item (#${ticketNumber})`,
+    `GET surfaces server-rendered displayTitle (got ${JSON.stringify(verItem?.displayTitle)})`,
+  );
+  assert(verItem?.taskTicketNumber === ticketNumber, 'GET surfaces taskTicketNumber');
+
+  // Idempotency: call the same endpoint again
+  const retryRes = await fetch(ticketUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ assignee: 'Mikey', priority: 'low', taskType: 'chore' }),
+  });
+  assert(retryRes.ok, 'idempotent retry returns 2xx (not 400)');
+  const retryData = await retryRes.json();
+  assert(retryData.action === 'already_linked', 'retry returns action=already_linked');
+  assert(retryData.task?.id === createdTaskId, 'retry returns the original task id (no duplicate)');
+
+  // 404 paths
+  const badVersionRes = await fetch(
+    `http://localhost:${port}/api/roadmap/${PROJECT}/versions/0.0.999/items/${itemId}/ticket`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` }, body: JSON.stringify({ assignee: 'Mikey' }) },
+  );
+  assert(badVersionRes.status === 404, 'unknown version returns 404');
+
+  const badItemRes = await fetch(
+    `http://localhost:${port}/api/roadmap/${PROJECT}/versions/${VERSION}/items/item-does-not-exist/ticket`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` }, body: JSON.stringify({ assignee: 'Mikey' }) },
+  );
+  assert(badItemRes.status === 404, 'unknown item returns 404');
+
+  // Cleanup: delete the probe task + version
+  await fetch(`http://localhost:${port}/api/store`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ action: 'deleteTask', id: createdTaskId }),
+  });
+  await fetch(`http://localhost:${port}/api/roadmap/${PROJECT}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ action: 'delete', version: VERSION }),
+  });
+
+  console.log('  (#1395 closed) atomic ticket flow + displayTitle + idempotency verified end-to-end');
+}
+
+
 // ── Main ─────────────────────────────────────────────────────────────────
 
 try {
@@ -1518,6 +1673,7 @@ try {
   await test1391PerAgentTokenPrep();
   await test1392VisionDocOrphanGC();
   await test1393TenantIdentity();
+  await test1395AtomicTicketFlow();
 
   await cleanup();
 

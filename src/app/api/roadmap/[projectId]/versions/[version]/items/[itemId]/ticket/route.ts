@@ -118,6 +118,47 @@ export async function POST(
         { status: 404 }
       );
     }
+
+    // #1395 — idempotency: if this item already has a linked task, return
+    // it instead of trying to create a duplicate. Caller can detect via
+    // `action: 'already_linked'`. This is a UX fix — the previous behavior
+    // was a 400 from addTask with detail.error = "Roadmap item already has
+    // a linked task" which surfaced through this endpoint as a 400. Now
+    // re-calling with the same {projectId, version, itemId} after a
+    // successful create is a no-op that returns the original linkage.
+    if (roadmapItem.taskId) {
+      try {
+        const existingTaskRes = await fetch(
+          `${internalBase()}/api/store`,
+          {
+            headers: process.env.ORG_STUDIO_API_KEY
+              ? { Authorization: `Bearer ${process.env.ORG_STUDIO_API_KEY}` }
+              : {},
+          },
+        );
+        if (existingTaskRes.ok) {
+          const storeData = await existingTaskRes.json();
+          const existingTask = (storeData.tasks || []).find(
+            (t: any) => t.id === roadmapItem.taskId,
+          );
+          if (existingTask && !existingTask.isArchived) {
+            return NextResponse.json({
+              action: 'already_linked',
+              task: existingTask,
+              item: roadmapItem,
+            });
+          }
+          // existing task is gone or archived — fall through and re-create.
+          // We intentionally do NOT clear the stale taskId here; addTask will
+          // 400 us out if it's still set, and that 400 is a useful signal
+          // that the data is in a weird state. (Manual fix path: clear
+          // items[].taskId via PATCH endpoint, then re-call this one.)
+        }
+      } catch {
+        // Couldn't look up the existing task — fall through to the normal
+        // path which will most likely 400, but with a real error this time.
+      }
+    }
   } catch (e: any) {
     return NextResponse.json(
       { error: 'roadmap_lookup_failed', message: e?.message },
