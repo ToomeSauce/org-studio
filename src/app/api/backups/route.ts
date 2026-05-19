@@ -3,6 +3,7 @@ import { readFileSync, readdirSync, existsSync, statSync, mkdirSync, copyFileSyn
 import { join } from 'path';
 import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 import { requireWorkspaceRole, resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
+import { auditBreakGlassIfNeeded } from '@/lib/admin-audit';
 
 const BACKUP_DIR = join(process.cwd(), 'data', 'backups');
 const STORE_PATH = join(process.cwd(), 'data', 'store.json');
@@ -94,9 +95,14 @@ export async function POST(req: NextRequest) {
   const workspaceId = await resolveWorkspaceIdForRequest(req);
   const roleCheck = await requireWorkspaceRole(req, workspaceId, 'owner');
   if (!roleCheck.allowed) return roleCheck.response;
-  // TODO(#1387 B.3): if roleCheck.via === 'break-glass' write an
-  // org_studio_admin_audit row { workspaceId, userId: roleCheck.userId,
-  // action: 'backups.restore', endpoint: req.url }.
+  // #1387 B.3: log break-glass calls. Best-effort, never throws.
+  await auditBreakGlassIfNeeded({
+    req,
+    workspaceId,
+    via: roleCheck.via,
+    userId: roleCheck.userId ?? null,
+    action: 'backups.restore',
+  });
 
   try {
     const body = await req.json();

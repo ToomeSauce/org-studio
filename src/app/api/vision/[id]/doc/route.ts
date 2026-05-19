@@ -5,6 +5,7 @@ import { join, dirname } from 'path';
 import { rpc } from '@/lib/gateway-rpc';
 import { getStoreProvider } from '@/lib/store-provider';
 import { resolveWorkspaceIdForRequest, requireWorkspaceRole } from '@/lib/workspace-auth';
+import { auditBreakGlassIfNeeded } from '@/lib/admin-audit';
 import { checkArchivedProject } from '@/lib/archived-project-compat';
 
 interface VisionDocResponse {
@@ -216,7 +217,14 @@ export async function PUT(
     // the project lookup.
     const roleCheck = await requireWorkspaceRole(req, workspaceId, 'member');
     if (!roleCheck.allowed) return roleCheck.response;
-    // TODO(#1387 B.3): if roleCheck.via === 'break-glass' write an audit row.
+    // #1387 B.3: log break-glass calls. Best-effort, never throws.
+    await auditBreakGlassIfNeeded({
+      req,
+      workspaceId,
+      via: roleCheck.via,
+      userId: roleCheck.userId ?? null,
+      action: 'vision.doc.put',
+    });
 
     const body = await req.json();
     const newContent = body?.content;
