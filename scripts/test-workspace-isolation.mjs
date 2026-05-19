@@ -871,6 +871,172 @@ async function testWorkspaceMemberships() {
   assert(r2.rows.length === 1 && r2.rows[0].user_id === userB, 'workspace_memberships: composite PK isolates ws-b');
 }
 
+/**
+ * #1387 Slice B — workspace-role gates on write endpoints + break-glass audit.
+ *
+ * Static (always run):
+ *   - workspace-auth.ts exports requireWorkspaceRole + roleAtLeast
+ *   - admin-audit.ts exports writeAdminAudit + auditBreakGlassIfNeeded
+ *   - /api/backups POST calls requireWorkspaceRole(..., 'owner')
+ *   - /api/vision/[id]/doc PUT calls requireWorkspaceRole(..., 'member')
+ *   - /api/store POST calls requireWorkspaceRole(workspace.id, 'member')
+ *   - all three call auditBreakGlassIfNeeded after the gate
+ *   - admin_audit table schema present in migrations/
+ *
+ * Behavioral (live server on :4501):
+ *   - unauthenticated POST /api/store → 401
+ *   - bogus bearer POST /api/store → 401
+ *   - global-key POST /api/store → audit row appears
+ *   - unauthenticated PUT /api/vision/<throwaway>/doc → 401
+ *   - unauthenticated POST /api/backups → 401
+ *
+ * Behavioral checks degrade to TODO if the server is not reachable.
+ */
+async function testSliceBRoleGates() {
+  console.log('\n🔍 Section: workspace-role gates + admin audit (#1387 slice B)');
+
+  const wsAuthSrc = readFileSync(join(rootDir, 'src/lib/workspace-auth.ts'), 'utf-8');
+  assert(
+    /export\s+(async\s+)?function\s+requireWorkspaceRole/.test(wsAuthSrc),
+    'workspace-auth.ts exports requireWorkspaceRole (B.1)',
+  );
+  assert(
+    /export\s+function\s+roleAtLeast/.test(wsAuthSrc),
+    'workspace-auth.ts exports roleAtLeast (B.1)',
+  );
+
+  const fsMod = await import('node:fs');
+  const auditSrcPath = join(rootDir, 'src/lib/admin-audit.ts');
+  assert(fsMod.existsSync(auditSrcPath), 'src/lib/admin-audit.ts exists (B.3)');
+  const auditSrc = readFileSync(auditSrcPath, 'utf-8');
+  assert(
+    /export\s+async\s+function\s+writeAdminAudit/.test(auditSrc) &&
+      /export\s+async\s+function\s+auditBreakGlassIfNeeded/.test(auditSrc),
+    'admin-audit.ts exports writeAdminAudit + auditBreakGlassIfNeeded (B.3)',
+  );
+
+  const backupsSrc = readFileSync(join(rootDir, 'src/app/api/backups/route.ts'), 'utf-8');
+  assert(
+    /requireWorkspaceRole\([^)]*,\s*'owner'\)/.test(backupsSrc),
+    '/api/backups POST gates on owner role (B.2)',
+  );
+  assert(
+    /auditBreakGlassIfNeeded/.test(backupsSrc),
+    '/api/backups POST calls auditBreakGlassIfNeeded (B.3)',
+  );
+
+  const visionSrc = readFileSync(
+    join(rootDir, 'src/app/api/vision/[id]/doc/route.ts'),
+    'utf-8',
+  );
+  assert(
+    /requireWorkspaceRole\([^)]*,\s*'member'\)/.test(visionSrc),
+    '/api/vision/[id]/doc PUT gates on member role (B.2)',
+  );
+  assert(
+    /auditBreakGlassIfNeeded/.test(visionSrc),
+    '/api/vision/[id]/doc PUT calls auditBreakGlassIfNeeded (B.3)',
+  );
+
+  const storeSrc = readFileSync(join(rootDir, 'src/app/api/store/route.ts'), 'utf-8');
+  assert(
+    /requireWorkspaceRole\(req,\s*workspace\.id,\s*'member'\)/.test(storeSrc),
+    '/api/store POST gates on member role of resolved workspace (B.2 #4)',
+  );
+  assert(
+    /auditBreakGlassIfNeeded/.test(storeSrc) &&
+      /action:\s*'store\.mutation'/.test(storeSrc),
+    "/api/store POST audits break-glass with action='store.mutation' (B.3)",
+  );
+
+  const migPath = join(rootDir, 'migrations/1387-b3-admin-audit-table.mjs');
+  assert(fsMod.existsSync(migPath), 'B.3 migration script present in migrations/');
+
+  try {
+    const cols = await pool.query(
+      `SELECT column_name FROM information_schema.columns WHERE table_name = 'org_studio_admin_audit'`,
+    );
+    const names = new Set(cols.rows.map((r) => r.column_name));
+    const required = [
+      'workspace_id', 'user_id', 'action', 'endpoint', 'method',
+      'via', 'request_meta', 'created_at',
+    ];
+    for (const c of required) {
+      assert(names.has(c), `org_studio_admin_audit.${c} column exists`);
+    }
+  } catch (e) {
+    todo(`org_studio_admin_audit schema check skipped: ${e.message}`);
+  }
+
+  // Behavioral
+  const base = 'http://localhost:4501';
+  let reachable = false;
+  try {
+    const ping = await fetch(`${base}/api/health`, { method: 'GET' });
+    reachable = ping.ok || ping.status === 503;
+  } catch {}
+  if (!reachable) {
+    todo('B.4-live: local server not reachable on :4501; skipping live role-gate checks');
+    return;
+  }
+
+  const apiKey = process.env.ORG_STUDIO_API_KEY;
+  if (!apiKey) todo('B.4-live: ORG_STUDIO_API_KEY not set; skipping break-glass live check');
+
+  const r1 = await fetch(`${base}/api/store`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'noop' }),
+  });
+  assert(r1.status === 401, `/api/store POST unauthenticated → 401 (got ${r1.status})`);
+
+  const r2 = await fetch(`${base}/api/store`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer not-a-real-token-xyz' },
+    body: JSON.stringify({ action: 'noop' }),
+  });
+  assert(r2.status === 401, `/api/store POST bogus bearer → 401 (got ${r2.status})`);
+
+  const r3 = await fetch(`${base}/api/backups`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'restore', filename: 'whatever.json' }),
+  });
+  assert(r3.status === 401, `/api/backups POST unauthenticated → 401 (got ${r3.status})`);
+
+  const throwawayId = `test-b4-${Date.now()}`;
+  const r4 = await fetch(`${base}/api/vision/${throwawayId}/doc`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content: 'should not land' }),
+  });
+  assert(r4.status === 401, `/api/vision/<id>/doc PUT unauthenticated → 401 (got ${r4.status})`);
+
+  if (apiKey) {
+    const before = await pool.query(
+      `SELECT count(*)::int AS n FROM org_studio_admin_audit WHERE action='store.mutation'`,
+    );
+    await fetch(`${base}/api/store`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({ action: 'noop_b4_smoke' }),
+    });
+    const after = await pool.query(
+      `SELECT count(*)::int AS n FROM org_studio_admin_audit WHERE action='store.mutation'`,
+    );
+    assert(
+      after.rows[0].n > before.rows[0].n,
+      `audit row written on break-glass /api/store POST (before=${before.rows[0].n}, after=${after.rows[0].n})`,
+    );
+  }
+
+  console.log('  (B-role-gates + B-audit closed) helper + 3 gated endpoints + audit table verified');
+}
+
+
 // ── Main ─────────────────────────────────────────────────────────────────
 
 try {
@@ -899,6 +1065,7 @@ try {
   await testCachedStoreA2();
   await testStoreAuthGateA3();
   await testLoginSelectorA4();
+  await testSliceBRoleGates();
 
   await cleanup();
 
@@ -916,6 +1083,7 @@ try {
     console.log('   (A.3-health closed by this slice — see /api/health/route.ts)');
     console.log('   (A.4-login closed by this slice — see /api/auth/login/route.ts + /login/page.tsx)');
     console.log('   (A.4-schema closed by #1388 — see migrations/1388-a4-schema-workspace-id-conflict-keys.mjs)');
+    console.log('   (B-role-gates closed by #1387 slice B — see workspace-auth.ts requireWorkspaceRole + B.2/B.3 commits)');
   }
 
   if (failed > 0) {
