@@ -1204,6 +1204,135 @@ async function test1391PerAgentTokenPrep() {
   console.log('  (#1391 prep closed) per-agent token plumbing verified, upstream gap documented');
 }
 
+/**
+ * #1392 — vision-doc rename hygiene: GC script for orphan vision_docs rows.
+ *
+ * Asserts (static):
+ *   - scripts/gc-orphan-vision-docs.mjs exists and is executable
+ *   - script accepts --dry-run flag
+ *   - script writes to org_studio_vision_docs_backup (snapshot before delete)
+ *   - script uses LEFT JOIN on org_studio_projects to find orphans
+ *   - audit doc exists
+ *
+ * Asserts (functional, Postgres-required):
+ *   - Inserting a fake orphan + running script (live) deletes it
+ *   - Backup row appears in org_studio_vision_docs_backup
+ *   - Second run is a no-op (idempotent)
+ *
+ * Functional half is skipped if DATABASE_URL is not set.
+ */
+async function test1392VisionDocOrphanGC() {
+  console.log('\n🔍 Section: vision-doc orphan GC (#1392)');
+
+  const fsMod = await import('node:fs');
+  const scriptPath = join(rootDir, 'scripts/gc-orphan-vision-docs.mjs');
+  assert(fsMod.existsSync(scriptPath), 'scripts/gc-orphan-vision-docs.mjs exists (#1392)');
+
+  const scriptSrc = readFileSync(scriptPath, 'utf-8');
+  assert(/--dry-run/.test(scriptSrc), 'GC script supports --dry-run flag (#1392)');
+  assert(
+    /LEFT JOIN org_studio_projects/.test(scriptSrc),
+    'GC script identifies orphans via LEFT JOIN on org_studio_projects (#1392)',
+  );
+  assert(
+    /org_studio_vision_docs_backup/.test(scriptSrc),
+    'GC script snapshots to org_studio_vision_docs_backup before delete (#1392)',
+  );
+  assert(
+    /BEGIN[\s\S]*COMMIT/.test(scriptSrc) && /ROLLBACK/.test(scriptSrc),
+    'GC script wraps snapshot+delete in BEGIN/COMMIT with ROLLBACK on error (#1392)',
+  );
+
+  const docPath = join(rootDir, 'docs/audits/1392-vision-doc-rename-hygiene.md');
+  assert(fsMod.existsSync(docPath), '#1392 audit doc exists');
+
+  // Functional test (Postgres only) — insert a fake orphan and verify
+  // the script deletes it.
+  if (!process.env.DATABASE_URL) {
+    console.log('  (#1392 functional half skipped — DATABASE_URL not set)');
+    console.log('  (#1392 closed) GC script + audit doc verified statically');
+    return;
+  }
+
+  const { Pool } = await import('pg');
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 2 });
+  const fakeId = 'test-orphan-1392-isosuite-' + Date.now();
+  let cleanup = async () => {};
+  try {
+    await pool.query(
+      `INSERT INTO org_studio_vision_docs (project_id, content, updated_at, workspace_id)
+       VALUES ($1, $2, $3, 'default-workspace')`,
+      [fakeId, '[#1392 isolation suite] temporary orphan, GC should remove this', Date.now()],
+    );
+    // Defensive cleanup if assertions throw before the script runs.
+    cleanup = async () => {
+      try {
+        await pool.query(
+          `DELETE FROM org_studio_vision_docs WHERE project_id = $1`,
+          [fakeId],
+        );
+      } catch {}
+    };
+
+    // Verify the orphan is present
+    const before = await pool.query(
+      `SELECT 1 FROM org_studio_vision_docs WHERE project_id = $1`,
+      [fakeId],
+    );
+    assert(before.rows.length === 1, 'orphan inserted for GC test (#1392)');
+
+    // Run the GC script
+    const { execSync } = await import('node:child_process');
+    const out = execSync(`node ${scriptPath}`, {
+      cwd: rootDir,
+      env: process.env,
+      encoding: 'utf-8',
+      stdio: 'pipe',
+    });
+    assert(
+      /Deleted 1 orphan row/.test(out) || /Deleted \d+ orphan row/.test(out),
+      'GC script reports the deletion (#1392)',
+    );
+
+    // Verify the orphan is gone
+    const after = await pool.query(
+      `SELECT 1 FROM org_studio_vision_docs WHERE project_id = $1`,
+      [fakeId],
+    );
+    assert(after.rows.length === 0, 'orphan row was deleted by GC script (#1392)');
+
+    // Verify snapshot is in backup table
+    const backup = await pool.query(
+      `SELECT 1 FROM org_studio_vision_docs_backup WHERE project_id = $1`,
+      [fakeId],
+    );
+    assert(
+      backup.rows.length >= 1,
+      'deleted orphan was snapshotted to org_studio_vision_docs_backup (#1392)',
+    );
+
+    // Run again — should be a no-op (idempotency)
+    const out2 = execSync(`node ${scriptPath}`, {
+      cwd: rootDir,
+      env: process.env,
+      encoding: 'utf-8',
+      stdio: 'pipe',
+    });
+    assert(/No orphans/.test(out2), 'GC script is idempotent — no-op on clean state (#1392)');
+
+    // Final cleanup: remove our backup snapshot row so the table stays clean
+    await pool.query(
+      `DELETE FROM org_studio_vision_docs_backup WHERE project_id = $1`,
+      [fakeId],
+    );
+  } finally {
+    await cleanup();
+    await pool.end();
+  }
+
+  console.log('  (#1392 closed) GC script verified end-to-end against Postgres');
+}
+
 
 // ── Main ─────────────────────────────────────────────────────────────────
 
@@ -1236,6 +1365,7 @@ try {
   await testSliceBRoleGates();
   await test1390AuditReadEndpoint();
   await test1391PerAgentTokenPrep();
+  await test1392VisionDocOrphanGC();
 
   await cleanup();
 
