@@ -550,22 +550,30 @@ export async function POST(req: NextRequest) {
   // for every call site.
   const roleCheck = await requireWorkspaceRole(req, workspace.id, 'member');
   if (!roleCheck.allowed) return roleCheck.response;
-  await auditBreakGlassIfNeeded({
-    req,
-    workspaceId: workspace.id,
-    via: roleCheck.via,
-    userId: roleCheck.userId ?? null,
-    // action recorded at the request boundary; the specific mutation type
-    // (addTask, updateTask, addComment, etc.) is in body.action below and
-    // not duplicated here. If we want per-mutation audit granularity later,
-    // add a second audit call inside the switch after we know `action`.
-    action: 'store.mutation',
-  });
+  // Audit call moved into the switch below (#1389) so the audit row carries
+  // the specific mutation type (store.addTask vs store.addComment etc.)
+  // instead of the generic 'store.mutation' label. Rationale: an audit row
+  // is only useful if it reaches the mutation — a malformed body that
+  // throws before the switch never mutated anything, so not auditing it is
+  // the correct behavior.
 
   try {
     const body = await req.json();
     const { action, ...payload } = body;
     const store = await readStore(workspace.id);
+
+    // #1389 — per-mutation audit granularity. Record the specific action
+    // (addTask, updateTask, addComment, etc.) so we can answer questions
+    // like "who deleted a project on date X" or "what break-glass writes
+    // happened during the incident window" from the audit log directly.
+    // Best-effort, never throws (handler in admin-audit.ts).
+    await auditBreakGlassIfNeeded({
+      req,
+      workspaceId: workspace.id,
+      via: roleCheck.via,
+      userId: roleCheck.userId ?? null,
+      action: `store.${action || 'unknown'}`,
+    });
 
     switch (action) {
       case 'addTask': {

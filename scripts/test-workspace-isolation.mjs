@@ -945,8 +945,8 @@ async function testSliceBRoleGates() {
   );
   assert(
     /auditBreakGlassIfNeeded/.test(storeSrc) &&
-      /action:\s*'store\.mutation'/.test(storeSrc),
-    "/api/store POST audits break-glass with action='store.mutation' (B.3)",
+      /action:\s*`store\.\$\{action[^`]*`/.test(storeSrc),
+    "/api/store POST audits break-glass with per-mutation action (B.3 + #1389)",
   );
 
   const migPath = join(rootDir, 'migrations/1387-b3-admin-audit-table.mjs');
@@ -1014,7 +1014,7 @@ async function testSliceBRoleGates() {
 
   if (apiKey) {
     const before = await pool.query(
-      `SELECT count(*)::int AS n FROM org_studio_admin_audit WHERE action='store.mutation'`,
+      `SELECT count(*)::int AS n FROM org_studio_admin_audit WHERE action LIKE 'store.%'`,
     );
     await fetch(`${base}/api/store`, {
       method: 'POST',
@@ -1025,11 +1025,23 @@ async function testSliceBRoleGates() {
       body: JSON.stringify({ action: 'noop_b4_smoke' }),
     });
     const after = await pool.query(
-      `SELECT count(*)::int AS n FROM org_studio_admin_audit WHERE action='store.mutation'`,
+      `SELECT count(*)::int AS n FROM org_studio_admin_audit WHERE action LIKE 'store.%'`,
     );
     assert(
       after.rows[0].n > before.rows[0].n,
       `audit row written on break-glass /api/store POST (before=${before.rows[0].n}, after=${after.rows[0].n})`,
+    );
+
+    // #1389 — per-mutation granularity. The most recent break-glass row
+    // should carry the specific body.action, not the generic 'store.mutation'.
+    const latest = await pool.query(
+      `SELECT action FROM org_studio_admin_audit
+       WHERE via='break-glass' AND action LIKE 'store.%'
+       ORDER BY created_at DESC LIMIT 1`,
+    );
+    assert(
+      latest.rows.length === 1 && latest.rows[0].action === 'store.noop_b4_smoke',
+      `latest break-glass audit row has per-mutation action (#1389): got ${latest.rows[0]?.action}`,
     );
   }
 
