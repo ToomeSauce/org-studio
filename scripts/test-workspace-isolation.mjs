@@ -1048,6 +1048,100 @@ async function testSliceBRoleGates() {
   console.log('  (B-role-gates + B-audit closed) helper + 3 gated endpoints + audit table verified');
 }
 
+/**
+ * #1390 — admin audit log read endpoint + Settings UI section.
+ *
+ * Static:
+ *   - /api/audit/route.ts exists, exports GET, calls requireWorkspaceRole(..., 'owner')
+ *   - src/components/AuditLogSection.tsx exists and is imported by Settings page
+ *
+ * Behavioral (live server on :4501):
+ *   - unauthenticated GET /api/audit → 401
+ *   - global-key GET /api/audit → 200 with { rows, total, limit, offset, workspaceId }
+ *   - invalid `via` param → 400
+ *   - filtering by actionLike narrows the result set (or equals on tiny datasets)
+ */
+async function test1390AuditReadEndpoint() {
+  console.log('\n🔍 Section: admin audit read endpoint + UI (#1390)');
+
+  const fsMod = await import('node:fs');
+  const routePath = join(rootDir, 'src/app/api/audit/route.ts');
+  assert(fsMod.existsSync(routePath), '/api/audit/route.ts exists (#1390)');
+  const routeSrc = readFileSync(routePath, 'utf-8');
+  assert(/export\s+async\s+function\s+GET/.test(routeSrc), '/api/audit exports GET handler');
+  assert(
+    /requireWorkspaceRole\([^)]*,\s*'owner'\)/.test(routeSrc),
+    '/api/audit GET gates on owner role',
+  );
+
+  const compPath = join(rootDir, 'src/components/AuditLogSection.tsx');
+  assert(fsMod.existsSync(compPath), 'AuditLogSection component exists (#1390)');
+  const settingsSrc = readFileSync(
+    join(rootDir, 'src/app/(dashboard)/settings/page.tsx'),
+    'utf-8',
+  );
+  assert(
+    /import\s+\{\s*AuditLogSection\s*\}\s+from\s+'@\/components\/AuditLogSection'/.test(
+      settingsSrc,
+    ) && /<AuditLogSection\s*\/>/.test(settingsSrc),
+    'AuditLogSection imported + rendered in Settings page',
+  );
+
+  const base = 'http://localhost:4501';
+  let reachable = false;
+  try {
+    const ping = await fetch(`${base}/api/health`, { method: 'GET' });
+    reachable = ping.ok || ping.status === 503;
+  } catch {}
+  if (!reachable) {
+    todo('1390-live: server not reachable, skipping live audit endpoint checks');
+    return;
+  }
+
+  const apiKey = process.env.ORG_STUDIO_API_KEY;
+
+  const r1 = await fetch(`${base}/api/audit`, { method: 'GET' });
+  assert(r1.status === 401, `/api/audit unauthenticated → 401 (got ${r1.status})`);
+
+  if (apiKey) {
+    const r2 = await fetch(`${base}/api/audit?limit=5`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    assert(r2.status === 200, `/api/audit global-key → 200 (got ${r2.status})`);
+    const data = await r2.json();
+    assert(
+      typeof data.total === 'number' && Array.isArray(data.rows) && typeof data.workspaceId === 'string',
+      '/api/audit response has { total, rows, workspaceId } shape',
+    );
+    assert(
+      data.rows.length <= 5,
+      `/api/audit honors limit param (got ${data.rows.length} rows, asked for 5)`,
+    );
+
+    const r3 = await fetch(`${base}/api/audit?via=not-a-real-value`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    assert(r3.status === 400, `/api/audit invalid via → 400 (got ${r3.status})`);
+
+    const r4 = await fetch(`${base}/api/audit?actionLike=store.%25&limit=5`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    assert(r4.status === 200, `/api/audit actionLike filter → 200 (got ${r4.status})`);
+    const d4 = await r4.json();
+    assert(
+      d4.rows.every((row) => row.action.startsWith('store.')),
+      `/api/audit actionLike=store.%25 returns only store.* rows`,
+    );
+  } else {
+    todo('1390-live: ORG_STUDIO_API_KEY not set; skipping authenticated checks');
+  }
+
+  console.log('  (#1390 closed) /api/audit endpoint + Settings section verified');
+}
+
 
 // ── Main ─────────────────────────────────────────────────────────────────
 
@@ -1078,6 +1172,7 @@ try {
   await testStoreAuthGateA3();
   await testLoginSelectorA4();
   await testSliceBRoleGates();
+  await test1390AuditReadEndpoint();
 
   await cleanup();
 

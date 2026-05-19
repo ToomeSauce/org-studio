@@ -8,6 +8,7 @@ import { Save, RefreshCw, ChevronDown, ChevronUp, WifiOff, RotateCcw, History, E
 import { clsx } from 'clsx';
 import { WorkspaceInfoCard, WorkspaceSwitcher } from '@/components/WorkspaceSwitcher';
 import { FeatureFlagsSection } from '@/components/FeatureFlagsSection';
+import { AuditLogSection } from '@/components/AuditLogSection';
 
 function ResetOnboardingSection() {
   const [resetting, setResetting] = useState(false);
@@ -786,6 +787,9 @@ export default function SettingsPage() {
 
       {/* Experimental UX flags */}
       <FeatureFlagsSection />
+
+      {/* Admin Audit Log (#1390) */}
+      <AuditLogSection />
 
       {/* Backup History */}
       <BackupHistorySection />
