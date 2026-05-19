@@ -1142,6 +1142,68 @@ async function test1390AuditReadEndpoint() {
   console.log('  (#1390 closed) /api/audit endpoint + Settings section verified');
 }
 
+/**
+ * #1391 — per-agent token migration prep.
+ *
+ * Static checks only — the real cutover is blocked on OpenClaw upstream
+ * (per-agent env injection). See docs/audits/1391-per-agent-tokens.md.
+ *
+ * Asserts:
+ *   - api-tokens.ts exports the mint/verify/list/revoke surface
+ *   - perAgentTokensEnabled() flag exists and is read from env
+ *   - resolveAgentApiToken() in teammates.ts falls back to global key
+ *   - audit doc 1391-per-agent-tokens.md exists
+ */
+async function test1391PerAgentTokenPrep() {
+  console.log('\n🔍 Section: per-agent token migration prep (#1391)');
+
+  const fsMod = await import('node:fs');
+  const apiTokensSrc = readFileSync(join(rootDir, 'src/lib/api-tokens.ts'), 'utf-8');
+  assert(
+    /export\s+function\s+perAgentTokensEnabled/.test(apiTokensSrc),
+    'api-tokens.ts exports perAgentTokensEnabled() flag check (#1391)',
+  );
+  assert(
+    /ENABLE_PER_AGENT_TOKENS/.test(apiTokensSrc),
+    'perAgentTokensEnabled() reads ENABLE_PER_AGENT_TOKENS env var (#1391)',
+  );
+  assert(
+    /export\s+async\s+function\s+mintApiToken/.test(apiTokensSrc) &&
+      /export\s+async\s+function\s+verifyApiToken/.test(apiTokensSrc),
+    'mintApiToken + verifyApiToken still exported from api-tokens.ts (#1391 depends on)',
+  );
+
+  const teammatesSrc = readFileSync(join(rootDir, 'src/lib/teammates.ts'), 'utf-8');
+  assert(
+    /export\s+function\s+resolveAgentApiToken/.test(teammatesSrc) &&
+      /process\.env\.ORG_STUDIO_API_KEY/.test(teammatesSrc),
+    'resolveAgentApiToken() falls back to global ORG_STUDIO_API_KEY (#1391)',
+  );
+
+  const storeSrc = readFileSync(join(rootDir, 'src/app/api/store/route.ts'), 'utf-8');
+  assert(
+    /perAgentTokensEnabled\(\)/.test(storeSrc) && /verifyApiToken/.test(storeSrc),
+    '/api/store verifies per-agent tokens when flag is on (#1391)',
+  );
+
+  const docPath = join(rootDir, 'docs/audits/1391-per-agent-tokens.md');
+  assert(
+    fsMod.existsSync(docPath),
+    '#1391 audit/runbook doc exists at docs/audits/1391-per-agent-tokens.md',
+  );
+  const docSrc = readFileSync(docPath, 'utf-8');
+  assert(
+    /OpenClaw upstream/.test(docSrc) && /per-agent env injection/.test(docSrc),
+    '#1391 doc explicitly calls out the OpenClaw upstream gap',
+  );
+  assert(
+    /Rollback/.test(docSrc) && /Reversibility/.test(docSrc),
+    '#1391 doc includes rollback + reversibility sections',
+  );
+
+  console.log('  (#1391 prep closed) per-agent token plumbing verified, upstream gap documented');
+}
+
 
 // ── Main ─────────────────────────────────────────────────────────────────
 
@@ -1173,6 +1235,7 @@ try {
   await testLoginSelectorA4();
   await testSliceBRoleGates();
   await test1390AuditReadEndpoint();
+  await test1391PerAgentTokenPrep();
 
   await cleanup();
 
