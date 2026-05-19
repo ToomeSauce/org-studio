@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { readFileSync, readdirSync, existsSync, statSync, mkdirSync, copyFileSync } from 'fs';
 import { join } from 'path';
 import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
+import { requireWorkspaceRole, resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
 
 const BACKUP_DIR = join(process.cwd(), 'data', 'backups');
 const STORE_PATH = join(process.cwd(), 'data', 'store.json');
@@ -83,6 +84,19 @@ export async function POST(req: NextRequest) {
   if (authCtx.error) return authCtx.error;
   const scopeFail = requireWriteScope(authCtx.context);
   if (scopeFail) return scopeFail;
+
+  // #1387 B.2 — owner-only of the target workspace.
+  // Restore is destructive: it overwrites the file-mode store.json from a
+  // backup file. Authenticated callers without owner role in the resolved
+  // workspace are rejected. Global ORG_STUDIO_API_KEY passes via break-glass
+  // (B.3 will log this). In OSS/file-only mode every authenticated caller is
+  // owner-of-default-workspace, so single-user installs are unaffected.
+  const workspaceId = await resolveWorkspaceIdForRequest(req);
+  const roleCheck = await requireWorkspaceRole(req, workspaceId, 'owner');
+  if (!roleCheck.allowed) return roleCheck.response;
+  // TODO(#1387 B.3): if roleCheck.via === 'break-glass' write an
+  // org_studio_admin_audit row { workspaceId, userId: roleCheck.userId,
+  // action: 'backups.restore', endpoint: req.url }.
 
   try {
     const body = await req.json();

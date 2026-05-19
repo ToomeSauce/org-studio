@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { rpc } from '@/lib/gateway-rpc';
 import { getStoreProvider } from '@/lib/store-provider';
-import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
+import { resolveWorkspaceIdForRequest, requireWorkspaceRole } from '@/lib/workspace-auth';
 import { checkArchivedProject } from '@/lib/archived-project-compat';
 
 interface VisionDocResponse {
@@ -200,6 +200,24 @@ export async function PUT(
   try {
     const { id: projectId } = await params;
     const workspaceId = await resolveWorkspaceIdForRequest(req);
+
+    // #1387 B.2 — member-of-target-workspace gate. Vision doc writes are
+    // scoped to the project's workspace. Authenticated callers without a
+    // membership in workspaceId are rejected. Global ORG_STUDIO_API_KEY
+    // passes via break-glass (B.3 will log this).
+    //
+    // Note: this gates on the workspace resolved from the REQUEST headers/
+    // cookies, not the workspace the project actually lives in. Slice A's
+    // store-provider partition already prevents cross-workspace writes at
+    // the data layer (a project lookup against the wrong workspace store
+    // returns null), so the worst case here is a 404 from the project
+    // lookup downstream rather than a cross-workspace write. The role gate
+    // adds defense in depth: anonymous-cookied callers can't even reach
+    // the project lookup.
+    const roleCheck = await requireWorkspaceRole(req, workspaceId, 'member');
+    if (!roleCheck.allowed) return roleCheck.response;
+    // TODO(#1387 B.3): if roleCheck.via === 'break-glass' write an audit row.
+
     const body = await req.json();
     const newContent = body?.content;
 
