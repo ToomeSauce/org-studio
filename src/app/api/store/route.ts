@@ -16,8 +16,10 @@ import {
   stampWorkspace,
   belongsToWorkspace,
   DEFAULT_WORKSPACE_ID,
+  requireWorkspaceRole,
   type WorkspaceContext,
 } from '@/lib/workspace-auth';
+import { auditBreakGlassIfNeeded } from '@/lib/admin-audit';
 import { validateUpdateTaskPayload } from '@/lib/update-task-validation';
 import { canonicalizeTeammate } from '@/lib/canonicalize-teammate';
 import { getRuntimeRegistry } from '@/lib/runtimes/registry';
@@ -533,6 +535,32 @@ export async function POST(req: NextRequest) {
   const wsOrError = await resolveRequestWorkspace(req);
   if (wsOrError instanceof NextResponse) return wsOrError;
   const workspace = wsOrError;
+
+  // #1387 B.2 #4 — member-of-resolved-workspace role gate.
+  // Slice A established that the workspace data layer enforces isolation at
+  // the read/write surface (reads are scoped, writes are stamped). This gate
+  // adds the identity check: only authenticated callers with a real
+  // membership in workspace.id (OR the global ORG_STUDIO_API_KEY via
+  // break-glass) can hit the mutation switch below.
+  //
+  // Break-glass keeps every existing agent loop and cron path working
+  // unchanged today. B.3 audits each break-glass call so it's traceable.
+  // Future work (separate ticket): migrate agent loops from global key to
+  // per-agent tokens (#1383), then this gate becomes a real per-user check
+  // for every call site.
+  const roleCheck = await requireWorkspaceRole(req, workspace.id, 'member');
+  if (!roleCheck.allowed) return roleCheck.response;
+  await auditBreakGlassIfNeeded({
+    req,
+    workspaceId: workspace.id,
+    via: roleCheck.via,
+    userId: roleCheck.userId ?? null,
+    // action recorded at the request boundary; the specific mutation type
+    // (addTask, updateTask, addComment, etc.) is in body.action below and
+    // not duplicated here. If we want per-mutation audit granularity later,
+    // add a second audit call inside the switch after we know `action`.
+    action: 'store.mutation',
+  });
 
   try {
     const body = await req.json();
