@@ -30,7 +30,10 @@ export interface WorkspaceContext {
 export interface WorkspaceMembership {
   workspaceId: string;
   userId: string;
-  role: 'owner' | 'member';
+  // #1393 (Slice B B.1): 'admin' is forward-compat — schema CHECK now
+  // allows ('owner' | 'admin' | 'member' | 'viewer'). Today only 'owner'
+  // is privileged in requireWorkspaceRole; 'admin' resolves to owner-only.
+  role: 'owner' | 'admin' | 'member' | 'viewer';
   joinedAt: number;
 }
 
@@ -39,6 +42,10 @@ export interface Workspace {
   name: string;
   owner: string;
   createdAt: number;
+  // #1393: optional fields added on Slice A schema. Older deployments
+  // that haven't run migrate-1393-tenant-identity will see undefined.
+  plan?: string;
+  deletedAt?: number | null;
 }
 
 // ── Constants ──────────────────────────────────────────────────────────
@@ -85,9 +92,30 @@ async function loadWorkspaceData(): Promise<{
       const client = new pg.Client(dbUrl);
       await client.connect();
       try {
-        const wsResult = await client.query(
-          'SELECT id, name, owner, created_at FROM org_studio_workspaces ORDER BY id',
+        // #1393: SELECT plan + deleted_at, filter out soft-deleted workspaces.
+        //
+        // information_schema lookup keeps this safe on pre-migration DBs:
+        // if the columns don't exist yet, we fall back to the legacy SELECT.
+        // After migrate-1393-tenant-identity.mjs runs everywhere, this branch
+        // is dead code we can remove in a followup.
+        const hasNewCols = await client.query(
+          `SELECT
+             EXISTS(SELECT 1 FROM information_schema.columns
+                    WHERE table_name='org_studio_workspaces' AND column_name='deleted_at') AS has_deleted_at,
+             EXISTS(SELECT 1 FROM information_schema.columns
+                    WHERE table_name='org_studio_workspaces' AND column_name='plan') AS has_plan`,
         );
+        const supportsSoftDelete = !!hasNewCols.rows[0]?.has_deleted_at;
+        const supportsPlan = !!hasNewCols.rows[0]?.has_plan;
+
+        const wsQuery = supportsSoftDelete
+          ? `SELECT id, name, owner, created_at${supportsPlan ? ', plan' : ''}, deleted_at
+             FROM org_studio_workspaces
+             WHERE deleted_at IS NULL
+             ORDER BY id`
+          : 'SELECT id, name, owner, created_at FROM org_studio_workspaces ORDER BY id';
+
+        const wsResult = await client.query(wsQuery);
         const memResult = await client.query(
           'SELECT workspace_id, user_id, role, joined_at FROM org_studio_workspace_memberships ORDER BY workspace_id, user_id',
         );
@@ -96,11 +124,18 @@ async function loadWorkspaceData(): Promise<{
           name: r.name,
           owner: r.owner,
           createdAt: typeof r.created_at === 'string' ? parseInt(r.created_at, 10) : (r.created_at || 0),
+          plan: r.plan ?? undefined,
+          deletedAt:
+            r.deleted_at == null
+              ? null
+              : typeof r.deleted_at === 'string'
+                ? parseInt(r.deleted_at, 10)
+                : r.deleted_at,
         }));
         _membershipCache = memResult.rows.map((r: any) => ({
           workspaceId: r.workspace_id,
           userId: r.user_id,
-          role: r.role as 'owner' | 'member',
+          role: r.role as 'owner' | 'admin' | 'member' | 'viewer',
           joinedAt: typeof r.joined_at === 'string' ? parseInt(r.joined_at, 10) : (r.joined_at || 0),
         }));
         _cacheTs = Date.now();

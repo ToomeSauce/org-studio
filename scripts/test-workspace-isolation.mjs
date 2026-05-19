@@ -1334,6 +1334,157 @@ async function test1392VisionDocOrphanGC() {
 }
 
 
+/**
+ * #1393 — tenant identity DDL + backfill.
+ *
+ * Asserts:
+ *   - migrate-1393-tenant-identity.mjs exists with expected guards
+ *   - backfill-1393-tenants.mjs is idempotent
+ *   - admin-create-workspace.mjs is transaction-wrapped and supports --dry-run
+ *   - audit doc docs/audits/1393-tenant-identity.md exists
+ *   - org_studio_users table exists with the expected columns
+ *   - org_studio_workspaces has deleted_at + plan columns
+ *   - memberships_role_check constraint covers owner|admin|member|viewer
+ *   - default-workspace exists, plan='internal', deleted_at IS NULL
+ *   - basil user row exists
+ *   - admin-create-workspace.mjs live run creates 3 rows in one tx
+ *   - soft-delete: setting workspaces.deleted_at hides via IS NULL filter
+ */
+async function test1393TenantIdentity() {
+  console.log('\n🔍 Section: tenant identity DDL + backfill (#1393)');
+  const fsMod = await import('node:fs');
+  const pathMod = await import('node:path');
+
+  // Static checks first
+  const migPath = pathMod.resolve(process.cwd(), 'scripts/migrate-1393-tenant-identity.mjs');
+  const bfPath = pathMod.resolve(process.cwd(), 'scripts/backfill-1393-tenants.mjs');
+  const cliPath = pathMod.resolve(process.cwd(), 'scripts/admin-create-workspace.mjs');
+  const docPath = pathMod.resolve(process.cwd(), 'docs/audits/1393-tenant-identity.md');
+
+  assert(fsMod.existsSync(migPath), 'migrate-1393-tenant-identity.mjs exists');
+  assert(fsMod.existsSync(bfPath), 'backfill-1393-tenants.mjs exists');
+  assert(fsMod.existsSync(cliPath), 'admin-create-workspace.mjs exists');
+  assert(fsMod.existsSync(docPath), 'audit doc 1393-tenant-identity.md exists');
+
+  const migSrc = fsMod.readFileSync(migPath, 'utf8');
+  assert(migSrc.includes('BEGIN') && migSrc.includes('COMMIT'), 'migration is transaction-wrapped');
+  assert(migSrc.includes('--dry-run'), 'migration supports --dry-run');
+  assert(migSrc.includes('CREATE TABLE IF NOT EXISTS org_studio_users'), 'migration creates org_studio_users');
+  assert(
+    migSrc.includes('ADD COLUMN IF NOT EXISTS deleted_at') && migSrc.includes('ADD COLUMN IF NOT EXISTS plan'),
+    'migration adds deleted_at + plan to workspaces',
+  );
+  assert(
+    migSrc.includes("'owner', 'admin', 'member', 'viewer'"),
+    'migration enforces role enum (owner|admin|member|viewer)',
+  );
+
+  const bfSrc = fsMod.readFileSync(bfPath, 'utf8');
+  assert(bfSrc.includes('ON CONFLICT (id) DO NOTHING'), 'backfill is idempotent on users');
+  assert(bfSrc.includes('BASIL_EMAIL'), 'backfill reads BASIL_EMAIL env var');
+
+  const cliSrc = fsMod.readFileSync(cliPath, 'utf8');
+  assert(cliSrc.includes('BEGIN') && cliSrc.includes('COMMIT'), 'admin CLI is transaction-wrapped');
+  assert(cliSrc.includes('--dry-run'), 'admin CLI supports --dry-run');
+
+  // Live Postgres checks
+  if (!process.env.DATABASE_URL) {
+    todo('1393-live: DATABASE_URL not set, skipping live tenant-identity checks');
+    console.log('  (#1393 partial) static assertions passed; live skipped');
+    return;
+  }
+
+  const usersExists = await pool.query(
+    `SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name='org_studio_users') AS e`,
+  );
+  assert(usersExists.rows[0].e, 'org_studio_users table exists');
+
+  const userCols = await pool.query(
+    `SELECT column_name FROM information_schema.columns WHERE table_name='org_studio_users'`,
+  );
+  const userColSet = new Set(userCols.rows.map((r) => r.column_name));
+  for (const c of ['id', 'email', 'password_hash', 'oauth_subject', 'created_at', 'last_login_at']) {
+    assert(userColSet.has(c), `org_studio_users has column ${c}`);
+  }
+
+  const wsCols = await pool.query(
+    `SELECT column_name FROM information_schema.columns WHERE table_name='org_studio_workspaces'`,
+  );
+  const wsColSet = new Set(wsCols.rows.map((r) => r.column_name));
+  assert(wsColSet.has('deleted_at'), 'org_studio_workspaces has deleted_at column');
+  assert(wsColSet.has('plan'), 'org_studio_workspaces has plan column');
+
+  const roleCheck = await pool.query(
+    `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint
+     WHERE conname = 'memberships_role_check'
+       AND conrelid = 'org_studio_workspace_memberships'::regclass`,
+  );
+  assert(roleCheck.rows.length > 0, 'memberships_role_check constraint present');
+  if (roleCheck.rows.length > 0) {
+    const def = roleCheck.rows[0].def;
+    for (const r of ['owner', 'admin', 'member', 'viewer']) {
+      assert(def.includes(`'${r}'`), `role CHECK includes '${r}'`);
+    }
+  }
+
+  const basil = await pool.query(`SELECT id, email FROM org_studio_users WHERE id = 'basil'`);
+  assert(basil.rows.length === 1, 'basil user row exists post-backfill');
+
+  const defaultWs = await pool.query(
+    `SELECT id, plan, deleted_at FROM org_studio_workspaces WHERE id = 'default-workspace'`,
+  );
+  assert(defaultWs.rows.length === 1, 'default-workspace exists');
+  assert(defaultWs.rows[0].plan === 'internal', "default-workspace plan = 'internal' post-backfill");
+  assert(defaultWs.rows[0].deleted_at === null, 'default-workspace not soft-deleted');
+
+  // Admin CLI live run — spawn as subprocess to exercise real argv parsing
+  const childProc = await import('node:child_process');
+  const cliTestId = `cli-test-${Date.now()}`;
+  const cliEmail = `cli-${Date.now()}@1393-test.invalid`;
+  const liveOut = childProc.spawnSync(
+    'node',
+    [cliPath, '--name', 'CLI Live Test', '--owner-email', cliEmail, '--workspace-id', cliTestId],
+    { env: process.env, encoding: 'utf8' },
+  );
+  assert(liveOut.status === 0, 'admin-create-workspace.mjs (live) exits 0');
+  let parsed;
+  try {
+    parsed = JSON.parse(liveOut.stdout);
+  } catch {
+    parsed = null;
+  }
+  assert(parsed && parsed.workspace && parsed.user && parsed.membership, 'admin CLI emits workspace + user + membership JSON');
+  assert(parsed?.workspace?.id === cliTestId, 'admin CLI uses provided workspace id');
+  assert(parsed?.membership?.role === 'owner', 'admin CLI creates owner membership');
+
+  // Soft-delete behavior
+  await pool.query(`UPDATE org_studio_workspaces SET deleted_at = $1 WHERE id = $2`, [Date.now(), cliTestId]);
+  const visible = await pool.query(
+    `SELECT id FROM org_studio_workspaces WHERE deleted_at IS NULL AND id = $1`,
+    [cliTestId],
+  );
+  assert(visible.rows.length === 0, 'soft-deleted workspace excluded by deleted_at IS NULL filter');
+
+  const stillPresent = await pool.query(
+    `SELECT id, deleted_at FROM org_studio_workspaces WHERE id = $1`,
+    [cliTestId],
+  );
+  assert(
+    stillPresent.rows.length === 1 && stillPresent.rows[0].deleted_at !== null,
+    'soft-deleted workspace row still exists (recoverable)',
+  );
+
+  // Cleanup
+  await pool.query('DELETE FROM org_studio_workspace_memberships WHERE workspace_id = $1', [cliTestId]);
+  await pool.query('DELETE FROM org_studio_workspaces WHERE id = $1', [cliTestId]);
+  if (parsed?.user?.id) {
+    await pool.query(`DELETE FROM org_studio_users WHERE id = $1`, [parsed.user.id]);
+  }
+
+  console.log('  (#1393 closed) tenant identity DDL + backfill verified end-to-end');
+}
+
+
 // ── Main ─────────────────────────────────────────────────────────────────
 
 try {
@@ -1366,6 +1517,7 @@ try {
   await test1390AuditReadEndpoint();
   await test1391PerAgentTokenPrep();
   await test1392VisionDocOrphanGC();
+  await test1393TenantIdentity();
 
   await cleanup();
 
