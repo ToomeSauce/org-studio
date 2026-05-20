@@ -7,6 +7,87 @@ import { versionSortKey, compareVersions, isValidVersion } from '@/lib/version-u
 import { renameVersionInProjectData, rvDerivedId } from '@/lib/roadmap-rename';
 import { syncProjectShadowVersion } from '@/lib/roadmap-sync';
 
+// #1461 — allow-list for version_type (must match the DB CHECK constraint
+// installed by migrations/1461-roadmap-version-invariants.mjs).
+const ALLOWED_VERSION_TYPES = ['outcome', 'foundation', 'chore', 'qa', 'gtm'] as const;
+type AllowedVersionType = (typeof ALLOWED_VERSION_TYPES)[number];
+
+/**
+ * #1461 — resolve a default owner for a brand-new version row from the
+ * project's primary component (first non-qa/non-support component, falling
+ * back to first component). Mirrors the "primary component" rule used in
+ * project-state.ts so owner inheritance is consistent across the codebase.
+ *
+ * Returns null when the project has no usable component or the component
+ * has no owner set. The caller still has the option to pass owner
+ * explicitly; this is just the inheritance default.
+ */
+async function resolveDefaultOwnerFromProject(
+  client: any,
+  projectId: string,
+  workspaceId: string,
+): Promise<string | null> {
+  try {
+    const res = await client.query(
+      `SELECT data FROM org_studio_projects WHERE id = $1 AND workspace_id = $2 LIMIT 1`,
+      [projectId, workspaceId],
+    );
+    if (res.rows.length === 0) return null;
+    const raw = res.rows[0].data;
+    const data = raw == null ? {} : typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const components: any[] = Array.isArray(data.components) && data.components.length > 0
+      ? data.components
+      : Array.isArray(data.sections) ? data.sections : [];
+    if (components.length === 0) return null;
+    const primary = components.find(
+      (c: any) => !c?.role || (c.role !== 'qa' && c.role !== 'support'),
+    ) || components[0];
+    const owner = primary?.owner || data?.owner || data?.devOwner || null;
+    return typeof owner === 'string' && owner.trim().length > 0 ? owner : null;
+  } catch (e) {
+    console.warn('[Roadmap #1461] resolveDefaultOwnerFromProject failed:', (e as any)?.message || e);
+    return null;
+  }
+}
+
+/**
+ * #1461 — guard the single-current invariant at the API layer (belt) in
+ * addition to the partial unique index installed by the migration
+ * (suspenders). Returns null on OK, or a NextResponse 409 on violation.
+ *
+ * Allowed when:
+ *   - No other row in (workspace_id, project_id) has status='current', OR
+ *   - The only existing 'current' row IS the version we're updating
+ *     (idempotent same-version self-update).
+ */
+async function guardSingleCurrent(
+  client: any,
+  projectId: string,
+  workspaceId: string,
+  version: string,
+): Promise<NextResponse | null> {
+  const res = await client.query(
+    `SELECT version FROM org_studio_roadmap_versions
+      WHERE project_id = $1 AND workspace_id = $2 AND status = 'current'
+        AND version <> $3`,
+    [projectId, workspaceId, version],
+  );
+  if (res.rows.length > 0) {
+    return NextResponse.json(
+      {
+        error: 'multi_current_rejected',
+        message:
+          `Project ${projectId} already has a current version (` +
+          res.rows.map((r: any) => r.version).join(', ') +
+          `). Demote it to 'shipped' or 'planned' before setting another as 'current'.`,
+        currentVersions: res.rows.map((r: any) => r.version),
+      },
+      { status: 409 },
+    );
+  }
+  return null;
+}
+
 export const dynamic = 'force-dynamic';
 
 interface RoadmapItem {
@@ -183,6 +264,18 @@ export async function POST(
       }
     }
     if (action === 'upsert') {
+      // #1461 — versionType allow-list validation. DB CHECK constraint
+      // catches this too, but failing here yields a clear 400 instead of a
+      // raw Postgres error.
+      if (versionType !== undefined && versionType !== null && !ALLOWED_VERSION_TYPES.includes(versionType)) {
+        return NextResponse.json(
+          {
+            error: 'invalid_version_type',
+            message: `versionType must be one of: ${ALLOWED_VERSION_TYPES.join(', ')}. Got: ${versionType}`,
+          },
+          { status: 400 },
+        );
+      }
       if (metaProvided.successCriteria && metaInput.successCriteria != null && typeof metaInput.successCriteria !== 'string') {
         return NextResponse.json({ error: 'successCriteria must be a string' }, { status: 400 });
       }
@@ -294,6 +387,18 @@ export async function POST(
                   },
                   { status: 409 },
                 );
+              }
+
+              // #1461 — if the rename also sets status='current', enforce
+              // single-current invariant. The check uses the NEW version
+              // string; the old row is part of the same rename so won't
+              // false-positive against itself.
+              if (status === 'current') {
+                const guard = await guardSingleCurrent(client, projectId, ws, version);
+                if (guard) {
+                  await client.query('ROLLBACK');
+                  return guard;
+                }
               }
 
               // Auto-mint item ids — same convention as the upsert path.
@@ -454,6 +559,18 @@ export async function POST(
 
           const versionId = `rv-${projectId}-${version.replace(/\./g, '-')}`;
           const sortOrder = versionSortKey(version);
+
+          // #1461 — belt-and-suspenders single-current guard. The partial
+          // unique index from migrations/1461 enforces this at the DB layer
+          // too, but doing it here yields a structured 409 instead of a raw
+          // unique-violation error, AND keeps the invariant even on
+          // environments where the index hasn't been installed yet
+          // (currently: any DB with historical multi-current violations,
+          // e.g. proj-catpilot).
+          if (status === 'current') {
+            const guard = await guardSingleCurrent(client, projectId, workspaceId, version);
+            if (guard) return guard;
+          }
 
           // Ensure every item has an id. Older items were stored as {title, done, taskId}
           // with no id field; agents hitting the API couldn't create versioned tasks against
@@ -636,6 +753,327 @@ export async function POST(
             items: itemsWithIds,
             shadowSync,
             ...(warning ? { warning } : {}),
+          });
+        } else if (action === 'create') {
+          // #1461 — strict creation path that callers should prefer over
+          // upsert for new versions. Required: title. Type-checks every
+          // input. Resolves owner from primary component when not
+          // explicitly provided. Rejects (409) if the version already
+          // exists — unlike upsert, which silently overwrites.
+          if (typeof title !== 'string' || title.trim().length === 0) {
+            return NextResponse.json(
+              { error: 'missing_title', message: 'create: "title" is required and must be a non-empty string.' },
+              { status: 400 },
+            );
+          }
+          const resolvedStatus = status || 'planned';
+          if (!['planned', 'current', 'shipped'].includes(resolvedStatus)) {
+            return NextResponse.json(
+              { error: 'invalid_status', message: `status must be one of: planned, current, shipped. Got: ${resolvedStatus}` },
+              { status: 400 },
+            );
+          }
+          if (versionType !== undefined && versionType !== null && !ALLOWED_VERSION_TYPES.includes(versionType)) {
+            return NextResponse.json(
+              { error: 'invalid_version_type', message: `versionType must be one of: ${ALLOWED_VERSION_TYPES.join(', ')}. Got: ${versionType}` },
+              { status: 400 },
+            );
+          }
+          const resolvedVersionType = (versionType || 'outcome') as AllowedVersionType;
+
+          // Reject duplicate creation explicitly.
+          const existsRes = await client.query(
+            `SELECT 1 FROM org_studio_roadmap_versions WHERE project_id = $1 AND version = $2 AND workspace_id = $3`,
+            [projectId, version, workspaceId],
+          );
+          if (existsRes.rows.length > 0) {
+            return NextResponse.json(
+              {
+                error: 'version_exists',
+                message: `Version "${version}" already exists for project ${projectId}. Use action:"patch" to update an existing version, or action:"upsert" if you genuinely want create-or-replace semantics.`,
+              },
+              { status: 409 },
+            );
+          }
+
+          // Single-current guard.
+          if (resolvedStatus === 'current') {
+            const guard = await guardSingleCurrent(client, projectId, workspaceId, version);
+            if (guard) return guard;
+          }
+
+          // Resolve owner: explicit > primary-component default > null.
+          let resolvedOwner: string | null;
+          if (ownerProvided) {
+            resolvedOwner = ownerValue;
+          } else {
+            resolvedOwner = await resolveDefaultOwnerFromProject(client, projectId, workspaceId);
+          }
+
+          // Auto-mint item ids (same convention as upsert).
+          const itemsWithIds = (items || []).map((it: any) => {
+            if (it && typeof it === 'object' && !it.id) {
+              const newItemId = `item-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`;
+              return { ...it, id: newItemId };
+            }
+            return it;
+          });
+
+          // Build meta from any caller-provided keys (no merge — fresh row).
+          const createMeta: any = {};
+          for (const k of META_KEYS) {
+            if (metaProvided[k] && metaInput[k] != null) createMeta[k] = metaInput[k];
+          }
+          const createMetaJson = Object.keys(createMeta).length > 0 ? JSON.stringify(createMeta) : null;
+
+          const newVersionId = `rv-${projectId}-${version.replace(/\./g, '-')}`;
+          const newSortOrder = versionSortKey(version);
+          await client.query(
+            `INSERT INTO org_studio_roadmap_versions
+              (id, project_id, version, title, status, items, sort_order, created_at, version_type, workspace_id, owner, meta)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)`,
+            [
+              newVersionId, projectId, version, title.trim(), resolvedStatus,
+              JSON.stringify(itemsWithIds), newSortOrder, Date.now(),
+              resolvedVersionType, workspaceId, resolvedOwner, createMetaJson,
+            ],
+          );
+
+          if (resolvedStatus === 'current') {
+            try {
+              await fetch(`http://localhost:${process.env.PORT || 4501}/api/store`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  ...(process.env.ORG_STUDIO_API_KEY ? { 'Authorization': `Bearer ${process.env.ORG_STUDIO_API_KEY}` } : {}),
+                },
+                body: JSON.stringify({ action: 'updateProject', id: projectId, updates: { currentVersion: version } }),
+              });
+            } catch (e) {
+              console.warn('[Roadmap #1461 create] currentVersion sync failed:', (e as any)?.message || e);
+            }
+          }
+
+          let shadowSync: { sectionsHit: number; componentsHit: number; touched: boolean } = {
+            sectionsHit: 0, componentsHit: 0, touched: false,
+          };
+          try {
+            shadowSync = await syncProjectShadowVersion(client, projectId, 'upsert', version, {
+              id: newVersionId, version, title: title.trim(), status: resolvedStatus,
+              items: itemsWithIds, sort_order: newSortOrder, version_type: resolvedVersionType,
+              owner: resolvedOwner,
+            });
+          } catch (e) {
+            console.warn('[Roadmap #1461 create] Shadow sync failed (non-fatal):', (e as any)?.message || e);
+          }
+
+          await notifyRoadmapChange(client, projectId, 'create', version, undefined, workspaceId);
+          if (shadowSync.touched) await notifyProjectChange(client, projectId, workspaceId);
+
+          return NextResponse.json({
+            action: 'created',
+            version,
+            id: newVersionId,
+            title: title.trim(),
+            status: resolvedStatus,
+            version_type: resolvedVersionType,
+            owner: resolvedOwner,
+            items: itemsWithIds,
+            ownerInherited: !ownerProvided && resolvedOwner !== null,
+            shadowSync,
+          });
+        } else if (action === 'patch') {
+          // #1461 — COALESCE-by-default partial update. Every field is
+          // left alone unless the caller explicitly sends it. Items have an
+          // opt-in mode (replace | merge), default 'replace' (matches what
+          // upsert does today) but callers SHOULD send 'merge' to add items
+          // without clobbering existing ones.
+          //
+          // Differs from upsert in:
+          //   - Rejects (404) when the version doesn't exist (no create).
+          //   - Doesn't require title/status/items to be present.
+          //   - Honors items_mode for callers that want race-safer merges.
+          const existsRes = await client.query(
+            `SELECT id, title, status, items, version_type, owner, meta
+               FROM org_studio_roadmap_versions
+              WHERE project_id = $1 AND version = $2 AND workspace_id = $3
+              FOR UPDATE`,
+            [projectId, version, workspaceId],
+          );
+          if (existsRes.rows.length === 0) {
+            return NextResponse.json(
+              {
+                error: 'version_not_found',
+                message: `Version "${version}" not found for project ${projectId}. Use action:"create" to add a new version.`,
+              },
+              { status: 404 },
+            );
+          }
+          const existing = existsRes.rows[0];
+          const existingItems: any[] = Array.isArray(existing.items) ? existing.items : [];
+          const existingMeta: any = (existing.meta && typeof existing.meta === 'object') ? existing.meta : {};
+
+          // Validate any provided enum values up front.
+          if (versionType !== undefined && versionType !== null && !ALLOWED_VERSION_TYPES.includes(versionType)) {
+            return NextResponse.json(
+              { error: 'invalid_version_type', message: `versionType must be one of: ${ALLOWED_VERSION_TYPES.join(', ')}. Got: ${versionType}` },
+              { status: 400 },
+            );
+          }
+          if (status !== undefined && status !== null && !['planned', 'current', 'shipped'].includes(status)) {
+            return NextResponse.json(
+              { error: 'invalid_status', message: `status must be one of: planned, current, shipped. Got: ${status}` },
+              { status: 400 },
+            );
+          }
+          if (title !== undefined && title !== null && (typeof title !== 'string' || title.trim().length === 0)) {
+            return NextResponse.json(
+              { error: 'invalid_title', message: 'title must be a non-empty string when provided.' },
+              { status: 400 },
+            );
+          }
+
+          // Resolve final values via COALESCE semantics.
+          const newTitle = title === undefined ? existing.title : title.trim();
+          const newStatus = status === undefined ? existing.status : status;
+          const newVersionType = versionType === undefined ? existing.version_type : versionType;
+          const newOwner = ownerProvided ? ownerValue : existing.owner;
+
+          // Single-current guard — only if status is changing TO 'current'
+          // (and wasn't already current).
+          if (newStatus === 'current' && existing.status !== 'current') {
+            const guard = await guardSingleCurrent(client, projectId, workspaceId, version);
+            if (guard) return guard;
+          }
+
+          // Items handling.
+          const itemsMode = body.items_mode || body.itemsMode || 'replace';
+          if (!['replace', 'merge'].includes(itemsMode)) {
+            return NextResponse.json(
+              { error: 'invalid_items_mode', message: `items_mode must be 'replace' or 'merge'. Got: ${itemsMode}` },
+              { status: 400 },
+            );
+          }
+          let newItems: any[];
+          if (items === undefined) {
+            // No items in payload — keep existing untouched.
+            newItems = existingItems;
+          } else if (!Array.isArray(items)) {
+            return NextResponse.json(
+              { error: 'invalid_items', message: 'items must be an array when provided.' },
+              { status: 400 },
+            );
+          } else if (itemsMode === 'replace') {
+            newItems = items.map((it: any) => {
+              if (it && typeof it === 'object' && !it.id) {
+                const nid = `item-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`;
+                return { ...it, id: nid };
+              }
+              return it;
+            });
+          } else {
+            // merge: incoming items with an id update matching existing
+            // items; ones without an id (or with a new id) get appended.
+            const byId = new Map<string, any>();
+            for (const it of existingItems) if (it && it.id) byId.set(it.id, it);
+            const appended: any[] = [];
+            for (const it of items) {
+              if (!it || typeof it !== 'object') continue;
+              if (it.id && byId.has(it.id)) {
+                byId.set(it.id, { ...byId.get(it.id), ...it });
+              } else if (it.id) {
+                byId.set(it.id, it);
+              } else {
+                const nid = `item-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`;
+                appended.push({ ...it, id: nid });
+              }
+            }
+            // Preserve original order of existing items, then appended
+            // newcomers at the end.
+            newItems = [
+              ...existingItems.map((it: any) => (it && it.id && byId.has(it.id)) ? byId.get(it.id) : it),
+              ...appended,
+            ];
+          }
+
+          // Meta: partial merge same as upsert path.
+          const mergedMeta: any = { ...existingMeta };
+          for (const k of META_KEYS) {
+            if (metaProvided[k]) {
+              if (metaInput[k] === null || metaInput[k] === undefined) delete mergedMeta[k];
+              else mergedMeta[k] = metaInput[k];
+            }
+          }
+          const anyMetaProvided = META_KEYS.some((k) => metaProvided[k]);
+          const writeMeta = anyMetaProvided ? (Object.keys(mergedMeta).length > 0 ? JSON.stringify(mergedMeta) : null) : undefined;
+
+          // Update statement — COALESCE($n, current_value) for everything
+          // we might leave alone. Items + status + title are passed
+          // verbatim because we've already resolved them above.
+          const newSortOrder = versionSortKey(version);
+          if (writeMeta === undefined) {
+            await client.query(
+              `UPDATE org_studio_roadmap_versions
+                  SET title = $1, status = $2, items = $3, sort_order = $4,
+                      version_type = COALESCE($5, version_type),
+                      owner = COALESCE($6, owner)
+                WHERE project_id = $7 AND version = $8 AND workspace_id = $9`,
+              [newTitle, newStatus, JSON.stringify(newItems), newSortOrder, newVersionType, newOwner, projectId, version, workspaceId],
+            );
+          } else {
+            await client.query(
+              `UPDATE org_studio_roadmap_versions
+                  SET title = $1, status = $2, items = $3, sort_order = $4,
+                      version_type = COALESCE($5, version_type),
+                      owner = COALESCE($6, owner),
+                      meta = $7::jsonb
+                WHERE project_id = $8 AND version = $9 AND workspace_id = $10`,
+              [newTitle, newStatus, JSON.stringify(newItems), newSortOrder, newVersionType, newOwner, writeMeta, projectId, version, workspaceId],
+            );
+          }
+
+          if (newStatus === 'current' && existing.status !== 'current') {
+            try {
+              await fetch(`http://localhost:${process.env.PORT || 4501}/api/store`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  ...(process.env.ORG_STUDIO_API_KEY ? { 'Authorization': `Bearer ${process.env.ORG_STUDIO_API_KEY}` } : {}),
+                },
+                body: JSON.stringify({ action: 'updateProject', id: projectId, updates: { currentVersion: version } }),
+              });
+            } catch (e) {
+              console.warn('[Roadmap #1461 patch] currentVersion sync failed:', (e as any)?.message || e);
+            }
+          }
+
+          let shadowSync: { sectionsHit: number; componentsHit: number; touched: boolean } = {
+            sectionsHit: 0, componentsHit: 0, touched: false,
+          };
+          try {
+            shadowSync = await syncProjectShadowVersion(client, projectId, 'upsert', version, {
+              id: existing.id, version, title: newTitle, status: newStatus,
+              items: newItems, sort_order: newSortOrder, version_type: newVersionType,
+              owner: newOwner,
+            });
+          } catch (e) {
+            console.warn('[Roadmap #1461 patch] Shadow sync failed (non-fatal):', (e as any)?.message || e);
+          }
+
+          await notifyRoadmapChange(client, projectId, 'patch', version, undefined, workspaceId);
+          if (shadowSync.touched) await notifyProjectChange(client, projectId, workspaceId);
+
+          return NextResponse.json({
+            action: 'patched',
+            version,
+            id: existing.id,
+            title: newTitle,
+            status: newStatus,
+            version_type: newVersionType,
+            owner: newOwner,
+            items: newItems,
+            items_mode: itemsMode,
+            shadowSync,
           });
         } else if (action === 'delete') {
           await client.query(
