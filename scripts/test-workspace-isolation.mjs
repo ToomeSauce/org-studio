@@ -240,6 +240,185 @@ async function testRoadmapVersions() {
   assert(r2.rows.length === 1 && r2.rows[0].id === rvB, 'roadmap_versions: scoped read returns only ws-b row');
 }
 
+/**
+ * #1461 — Roadmap version-creation API hardening.
+ *
+ * Behavioral tests go through the live API (port 4501) instead of direct
+ * SQL because the invariants we're testing (single-current guard, owner
+ * inheritance, items_mode merge, etc.) live in the route layer.
+ *
+ * If the dashboard isn't running on 127.0.0.1:4501 these assertions are
+ * skipped with a clear note — same pattern as testStoreAuthGateA3.
+ */
+async function test1461RoadmapVersionAPI() {
+  console.log('\n🔍 Section: #1461 roadmap version-creation API hardening');
+
+  // Reachability probe.
+  const ctrl = AbortSignal.timeout(800);
+  try {
+    await fetch('http://127.0.0.1:4501/api/store', { signal: ctrl });
+  } catch (e) {
+    todo(false,
+      `#1461 behavioral tests SKIPPED — dashboard not reachable on :4501 (${e.message})`,
+      '1461-skip-no-server');
+    return;
+  }
+
+  const key = process.env.ORG_STUDIO_API_KEY;
+  if (!key) {
+    todo(false, '#1461 behavioral tests SKIPPED — ORG_STUDIO_API_KEY not in env', '1461-skip-no-key');
+    return;
+  }
+  const auth = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` };
+  const BASE = 'http://127.0.0.1:4501';
+
+  // Spin up a throwaway project to scope all of these writes to. We use
+  // the default workspace because the route's workspace resolution lives
+  // behind cookie auth; threading a custom workspace through the API key
+  // path is out of scope for this test — the invariant we care about
+  // (single-current per (workspace, project)) reduces to single-current
+  // per project within the default workspace, which is the dominant case.
+  const projectId = `proj-1461-iso-${RUN_ID}`;
+  const createProjRes = await fetch(`${BASE}/api/store`, {
+    method: 'POST', headers: auth,
+    body: JSON.stringify({
+      action: 'addProject',
+      project: {
+        id: projectId,
+        name: `#1461 iso test ${projectId}`,
+        components: [{ id: 'cmain', name: 'Main', owner: 'mikey-test' }],
+      },
+    }),
+  });
+  assert(createProjRes.ok, `#1461 setup: addProject returns 200 (${createProjRes.status})`);
+
+  const post = (body) => fetch(`${BASE}/api/roadmap/${projectId}`, { method: 'POST', headers: auth, body: JSON.stringify(body) });
+  const j = async (res) => ({ status: res.status, body: await res.json().catch(() => ({})) });
+
+  // 1) create without title → 400 missing_title
+  {
+    const r = await j(await post({ action: 'create', version: '0.1.0' }));
+    assert(r.status === 400 && r.body.error === 'missing_title',
+      `#1461.1 create-without-title returns 400 missing_title (got ${r.status} ${r.body.error || ''})`);
+  }
+
+  // 2) create with bogus versionType → 400 invalid_version_type
+  {
+    const r = await j(await post({ action: 'create', version: '0.1.0', title: 't', versionType: 'banana' }));
+    assert(r.status === 400 && r.body.error === 'invalid_version_type',
+      `#1461.2 create with versionType=banana returns 400 invalid_version_type (got ${r.status} ${r.body.error || ''})`);
+  }
+
+  // 3) create accepts qa versionType
+  {
+    const r = await j(await post({ action: 'create', version: '0.qa.0', title: 'qa pass', versionType: 'qa' }));
+    assert(r.status === 200 && r.body.action === 'created' && r.body.version_type === 'qa',
+      `#1461.3 create with versionType=qa succeeds (got ${r.status} type=${r.body.version_type})`);
+  }
+
+  // 4) create accepts gtm versionType
+  {
+    const r = await j(await post({ action: 'create', version: '0.gtm.0', title: 'launch', versionType: 'gtm' }));
+    assert(r.status === 200 && r.body.action === 'created' && r.body.version_type === 'gtm',
+      `#1461.4 create with versionType=gtm succeeds (got ${r.status} type=${r.body.version_type})`);
+  }
+
+  // 5) create inherits owner from the primary component
+  //    The project we created has component.owner='mikey-test'. We omit
+  //    owner in the payload → expect ownerInherited:true + owner:'mikey-test'.
+  {
+    const r = await j(await post({ action: 'create', version: '0.1.0', title: 'inherit owner', status: 'planned' }));
+    assert(
+      r.status === 200 && r.body.owner === 'mikey-test' && r.body.ownerInherited === true,
+      `#1461.5 create-with-component-owner inherits owner='mikey-test' (got owner=${r.body.owner} inherited=${r.body.ownerInherited})`
+    );
+  }
+
+  // 6) create duplicate → 409 version_exists
+  {
+    const r = await j(await post({ action: 'create', version: '0.1.0', title: 'dup' }));
+    assert(r.status === 409 && r.body.error === 'version_exists',
+      `#1461.6 create-duplicate returns 409 version_exists (got ${r.status} ${r.body.error || ''})`);
+  }
+
+  // 7) patch leaves title alone when not provided (COALESCE)
+  {
+    const r = await j(await post({ action: 'patch', version: '0.1.0', status: 'planned' }));
+    assert(r.status === 200 && r.body.title === 'inherit owner',
+      `#1461.7 patch-leaves-fields-alone preserves title (got status=${r.status} title=${r.body.title})`);
+  }
+
+  // 8) patch promote-to-current succeeds when no other is current
+  {
+    const r = await j(await post({ action: 'patch', version: '0.1.0', status: 'current' }));
+    assert(r.status === 200 && r.body.status === 'current',
+      `#1461.8 patch promote-to-current succeeds when no rival current exists (got ${r.status} ${r.body.status})`);
+  }
+
+  // 9) multi-current rejected: try to set 0.qa.0 to current while 0.1.0 is current
+  {
+    const r = await j(await post({ action: 'patch', version: '0.qa.0', status: 'current' }));
+    assert(
+      r.status === 409 && r.body.error === 'multi_current_rejected' && Array.isArray(r.body.currentVersions) && r.body.currentVersions.includes('0.1.0'),
+      `#1461.9 multi-current-rejected fires when another version already current (got ${r.status} ${r.body.error} cv=${JSON.stringify(r.body.currentVersions)})`
+    );
+  }
+
+  // 10) items_mode=merge appends without clobbering existing items
+  {
+    await post({ action: 'patch', version: '0.1.0', items: [{ title: 'first', done: false }], items_mode: 'replace' });
+    const r = await j(await post({ action: 'patch', version: '0.1.0', items: [{ title: 'second', done: false }], items_mode: 'merge' }));
+    const titles = (r.body.items || []).map((i) => i.title);
+    assert(
+      r.status === 200 && titles.includes('first') && titles.includes('second'),
+      `#1461.10 items_mode=merge appends new item without clobbering (got titles=${JSON.stringify(titles)})`
+    );
+  }
+
+  // 11) patch on nonexistent version → 404 version_not_found
+  {
+    const r = await j(await post({ action: 'patch', version: '99.99.99', title: 'nope' }));
+    assert(r.status === 404 && r.body.error === 'version_not_found',
+      `#1461.11 patch on missing version returns 404 version_not_found (got ${r.status} ${r.body.error || ''})`);
+  }
+
+  // 12) upsert still works for legacy callers (backward compat)
+  {
+    const r = await j(await post({
+      action: 'upsert',
+      version: '0.2.0',
+      title: 'legacy upsert',
+      status: 'planned',
+      versionType: 'foundation',
+      items: [],
+    }));
+    assert(r.status === 200 && r.body.action === 'upserted',
+      `#1461.12 upsert legacy path still returns 200 upserted (got ${r.status} ${r.body.action})`);
+  }
+
+  // 13) admin roadmap-audit endpoint returns the right shape and includes
+  //     our test project's multi-current pair if we created one. (We didn't
+  //     above, so we just assert shape.)
+  {
+    const res = await fetch(`${BASE}/api/admin/roadmap-audit`, { headers: { Authorization: `Bearer ${key}` } });
+    const body = await res.json().catch(() => ({}));
+    assert(
+      res.status === 200 &&
+      body.ok === true &&
+      typeof body.summary === 'object' &&
+      typeof body.findings === 'object' &&
+      ['multi_current','empty_title','missing_owner','unknown_version_type'].every((k) => k in body.summary),
+      `#1461.13 admin/roadmap-audit returns expected summary+findings shape (got ${res.status})`
+    );
+  }
+
+  // Cleanup: delete the test project (cascades to rv-rows via separate DELETE).
+  // The route doesn't have action:'delete' on /api/store for projects in
+  // every config, so do it directly.
+  await pool.query(`DELETE FROM org_studio_roadmap_versions WHERE project_id = $1`, [projectId]);
+  await pool.query(`DELETE FROM org_studio_projects WHERE id = $1`, [projectId]);
+}
+
 async function testVisionDocs() {
   console.log('\n🔍 Section: org_studio_vision_docs');
   const projA = rid('proj-a-vd');
@@ -886,6 +1065,7 @@ try {
   await testProjectsAndTasks();
   await testStoreProviderCodePath();
   await testRoadmapVersions();
+  await test1461RoadmapVersionAPI();
   await testVisionDocs();
   await testAgentMetrics();
   await testKudos();
