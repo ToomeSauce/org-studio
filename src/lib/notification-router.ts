@@ -32,6 +32,14 @@ export interface RouterComment {
    * #1268 — done-when #2.
    */
   type?: string;
+  /**
+   * Creation timestamp (ms since epoch). Used by the recency-suppression
+   * path in #1513: if a candidate recipient already authored a comment on
+   * the same task AFTER this one, the source comment is stale-on-arrival
+   * and the recipient should NOT be paged. Optional for backward compat;
+   * if unset, suppression is skipped (current behavior).
+   */
+  createdAt?: number;
 }
 
 export interface RouterTask {
@@ -93,6 +101,20 @@ export interface RouteParams {
     version?: RouterVersion;
     projectTasks?: { assignee?: string }[];
     watchers?: string[]; // agent ids watching this task (future, OK empty for now)
+    /**
+     * #1513 — recency suppression input. Caller (typically the bridge
+     * route) pre-computes a Map keyed by recipient agentId whose value is
+     * the timestamp (ms) of that recipient's MOST RECENT comment on this
+     * same task. If a candidate recipient's last reply is newer than
+     * comment.createdAt, the recipient is suppressed with
+     * reason: 'stale-superseded' — they've already replied; paging them
+     * about an older comment is noise.
+     *
+     * Optional: when undefined, the router falls back to current behavior
+     * (no recency suppression). Keeping this in `context` (vs. recomputing
+     * inside the router) keeps the router pure and trivially testable.
+     */
+    recipientLastReplies?: Map<string, number>;
   };
 }
 
@@ -430,6 +452,23 @@ export async function routeCommentNotifications(params: RouteParams): Promise<Ro
       continue;
     }
 
+    // #1513 — recency suppression. If the candidate recipient has already
+    // replied on this same task AFTER the source comment, the source is
+    // stale-on-arrival. Paging them produces "why are you telling me about
+    // a comment I already responded to" confusion + a duplicate-wake
+    // pattern that ate ~10–15min of latency in Henry's observation.
+    const sourceCreatedAt = comment.createdAt || 0;
+    const lastReply = params.context.recipientLastReplies?.get(agentId);
+    if (sourceCreatedAt > 0 && lastReply && lastReply > sourceCreatedAt) {
+      result.skipped.push({ agentId, reason: 'stale-superseded' });
+      console.log(
+        `[notify-router] commentId=${commentId} recipient=${agentId} reason=${reason} ` +
+        `sourceAge=${Date.now() - sourceCreatedAt}ms outcome=stale-superseded ` +
+        `(recipient last reply at ${lastReply}, source at ${sourceCreatedAt})`
+      );
+      continue;
+    }
+
     // Build message (template branches on the reason for task scope)
     const message = buildMessage(scope, comment, params.context, reason);
     const idempotencyKey = `notify-${scope.kind}-${commentId}-${agentId}`;
@@ -441,6 +480,16 @@ export async function routeCommentNotifications(params: RouteParams): Promise<Ro
       result.notified.push(agentId);
     } else {
       result.skipped.push({ agentId, reason: 'delivery-failed' });
+    }
+
+    // #1513 — per-delivery latency log so Henry can correlate
+    // (comment_created_at, dispatch_at, outcome) without parsing a join
+    // across multiple log lines.
+    if (sourceCreatedAt > 0) {
+      console.log(
+        `[notify-router] commentId=${commentId} recipient=${agentId} reason=${reason} ` +
+        `sourceAge=${Date.now() - sourceCreatedAt}ms outcome=${ok ? 'delivered' : 'failed'}`
+      );
     }
   }
 

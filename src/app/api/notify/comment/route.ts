@@ -23,8 +23,10 @@ import { getStoreProvider } from '@/lib/store-provider';
 import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
 import { routeCommentNotifications } from '@/lib/notification-router';
 import { resolveTaskComponent, resolveTaskVersion } from '@/lib/notification-context';
+import { computeRecipientLastReplies } from '@/lib/notification-recency';
 
 export async function POST(request: NextRequest) {
+  const bridgeStart = Date.now();
   const authCtx = await authenticateRequestWithContext(request);
   if (authCtx.error) return authCtx.error;
   const scopeFail = requireWriteScope(authCtx.context);
@@ -101,6 +103,7 @@ export async function POST(request: NextRequest) {
       author: comment.author,
       content: comment.content,
       type: comment.type,
+      createdAt: typeof comment.createdAt === 'number' ? comment.createdAt : undefined,
     },
     scope: scope as any,
     teammates,
@@ -116,8 +119,19 @@ export async function POST(request: NextRequest) {
       version: task ? resolveTaskVersion(project, task) : undefined,
       projectTasks,
       watchers: [],
+      // #1513 — recency suppression input. Walk this task's comment
+      // history once and record the latest createdAt per author (resolved
+      // to agentId via teammates). The router skips recipients whose last
+      // reply is newer than the source comment.
+      recipientLastReplies: computeRecipientLastReplies(task, teammates, comment),
     },
   });
+
+  console.log(
+    `[notify-bridge] commentId=${commentId || '<none>'} ` +
+    `bridge-latency=${Date.now() - bridgeStart}ms ` +
+    `recipients=${result.notified.length} suppressed=${result.skipped.length}`
+  );
 
   return NextResponse.json({ ok: true, ...result });
 }

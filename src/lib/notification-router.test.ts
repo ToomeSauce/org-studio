@@ -430,3 +430,119 @@ describe('#1287 — version + component owners replace project devOwner/qaOwner 
     expect(sentToKate!.message).not.toMatch(/commented on a task you own/);
   });
 });
+
+/**
+ * #1513 — Recency suppression: skip recipients who have already replied
+ * on the same task after the source comment.
+ *
+ * Background: Henry observed a 10-15 min latency + multi-delivery pattern
+ * where notifications would arrive AFTER the recipient had already replied
+ * to the underlying comment, often delivered multiple times. Suppressing
+ * stale-on-arrival notifications cuts the noise (Bug 2 of #1513).
+ *
+ * Contract:
+ *   - context.recipientLastReplies is a Map<agentId, lastCreatedAt>
+ *     pre-computed by the caller (bridge route).
+ *   - If lastReply > comment.createdAt → skip with reason 'stale-superseded'.
+ *   - If the map is undefined OR the recipient is absent OR comment.createdAt
+ *     is missing/0 → fall through to existing behavior (deliver).
+ */
+describe('#1513 — recency suppression (stale-on-arrival skip)', () => {
+  it('stale-superseded: recipient already replied AFTER source → skipped, not delivered', async () => {
+    sentMessages.length = 0;
+    const res = await routeCommentNotifications({
+      comment: { id: 'src-1', author: 'Basil', content: 'ping', createdAt: 1000 },
+      scope: { kind: 'task', taskId: baseTask.id },
+      teammates,
+      context: {
+        task: baseTask,
+        recipientLastReplies: new Map([['mikey', 2000]]),
+      },
+    });
+    expect(res.notified).not.toContain('mikey');
+    expect(res.skipped.find((s) => s.agentId === 'mikey')?.reason).toBe('stale-superseded');
+    expect(sentMessages.filter((m) => m.agentId === 'mikey').length).toBe(0);
+  });
+
+  it('fresh: recipient last reply is OLDER than source → still notified', async () => {
+    sentMessages.length = 0;
+    const res = await routeCommentNotifications({
+      comment: { id: 'src-2', author: 'Basil', content: 'ping', createdAt: 2000 },
+      scope: { kind: 'task', taskId: baseTask.id },
+      teammates,
+      context: {
+        task: baseTask,
+        recipientLastReplies: new Map([['mikey', 1000]]),
+      },
+    });
+    expect(res.notified).toContain('mikey');
+    expect(sentMessages.filter((m) => m.agentId === 'mikey').length).toBe(1);
+  });
+
+  it('backward compat: no recipientLastReplies map → behaves as before (always deliver)', async () => {
+    sentMessages.length = 0;
+    const res = await routeCommentNotifications({
+      // Even though createdAt is set, no map means no suppression.
+      comment: { id: 'src-3', author: 'Basil', content: 'ping', createdAt: 1000 },
+      scope: { kind: 'task', taskId: baseTask.id },
+      teammates,
+      context: { task: baseTask },
+    });
+    expect(res.notified).toContain('mikey');
+  });
+
+  it('backward compat: no createdAt on source comment → no suppression even if map present', async () => {
+    sentMessages.length = 0;
+    const res = await routeCommentNotifications({
+      // createdAt missing — map is irrelevant.
+      comment: { id: 'src-4', author: 'Basil', content: 'ping' },
+      scope: { kind: 'task', taskId: baseTask.id },
+      teammates,
+      context: {
+        task: baseTask,
+        recipientLastReplies: new Map([['mikey', 9999]]),
+      },
+    });
+    expect(res.notified).toContain('mikey');
+  });
+
+  it('mixed: one stale recipient, one fresh recipient → only fresh is notified', async () => {
+    sentMessages.length = 0;
+    // Mention both — mikey is assignee + mentioned, ana is mentioned only.
+    const res = await routeCommentNotifications({
+      comment: {
+        id: 'src-5',
+        author: 'Basil',
+        content: '@mikey @ana follow-up',
+        createdAt: 1500,
+      },
+      scope: { kind: 'task', taskId: baseTask.id },
+      teammates,
+      context: {
+        task: baseTask,
+        recipientLastReplies: new Map([
+          ['mikey', 2000], // newer than source → stale-superseded
+          ['ana', 1000],   // older than source → fresh, deliver
+        ]),
+      },
+    });
+    expect(res.notified).toContain('ana');
+    expect(res.notified).not.toContain('mikey');
+    expect(res.skipped.find((s) => s.agentId === 'mikey')?.reason).toBe('stale-superseded');
+  });
+
+  it('recipient absent from map (never replied) → still notified', async () => {
+    sentMessages.length = 0;
+    const res = await routeCommentNotifications({
+      comment: { id: 'src-6', author: 'Basil', content: 'first comment', createdAt: 5000 },
+      scope: { kind: 'task', taskId: baseTask.id },
+      teammates,
+      context: {
+        task: baseTask,
+        // Map exists but mikey isn't in it (never replied to this task before).
+        recipientLastReplies: new Map([['ana', 1000]]),
+      },
+    });
+    expect(res.notified).toContain('mikey');
+  });
+});
