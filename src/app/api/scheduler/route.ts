@@ -46,6 +46,10 @@ import {
   maxOtherTaskActivity as maxOtherTaskActivityLib,
   shouldEscalateAgainst,
 } from '@/lib/claim-contract';
+// #1492: lease-guard honors human STOP comments — pause counting (no warn,
+// no ping, no disable, no auto-bounce) on tasks held by an authority
+// (human/QA) STOP. See src/lib/stop-window.ts for the full detection spec.
+import { isTaskHeldByHumanStop } from '@/lib/stop-window';
 const DEFAULT_MODEL = 'foundry-openai-chat/gpt-5.4';
 
 // Minimum seconds between event-driven triggers for the same agent (debounce)
@@ -440,6 +444,46 @@ async function sweepExpiredLeases(store: StoreData): Promise<{ bounced: number; 
     // lib. Same predicate as before (status==='in-progress' && !loopPausedAt
     // && claim_lease_expires_at && now > stamp), just centralized for testing.
     if (!isLeaseExpired(t as any, now)) continue;
+
+    // #1492: STOP-window short-circuit. If the task is currently held by
+    // a human/QA STOP directive (per src/lib/stop-window.ts), the lease
+    // guard does NOT escalate against it — no warn, no ping, no disable,
+    // no auto-bounce. The lease clock effectively pauses for the duration
+    // of the hold. Best-effort: any error here returns held=false so the
+    // sweep falls through to normal classification (fail open).
+    try {
+      const settingsTeammates = store.settings?.teammates || [];
+      let taskComments: any[] = [];
+      if (typeof provider.listComments === 'function') {
+        taskComments = (await provider.listComments(
+          { kind: 'task', taskId: t.id } as any,
+          { limit: 50 },
+        )) as any[];
+      } else {
+        // Fallback: provider doesn't support listComments (legacy in-memory
+        // mode). Use the inline task.comments array if present.
+        taskComments = ((t as any).comments || []) as any[];
+      }
+      const hold = isTaskHeldByHumanStop(
+        { id: t.id, assignee: t.assignee },
+        taskComments || [],
+        settingsTeammates as any[],
+      );
+      if (hold.held) {
+        console.warn(
+          `[lease-sweep #1492] Skipping escalation for task ${t.id} — ` +
+          `held by STOP from ${hold.stopAuthor || '?'} (${hold.reason}).`,
+        );
+        skippedInactive++;
+        continue;
+      }
+    } catch (err: any) {
+      // Fail open — don't let listComments hiccups disable the lease guard.
+      console.warn(
+        `[lease-sweep #1492] STOP-window check failed for task ${t.id}: ` +
+        `${err?.message || err}; continuing with normal escalation.`,
+      );
+    }
 
     // Classification: bounce-only (active elsewhere) vs escalation-ladder
     // (inactive everywhere) vs no-assignee (always bounce). Mirrors the

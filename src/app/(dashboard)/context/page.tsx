@@ -126,6 +126,18 @@ function TaskCard({ task, projects, onDelete, onSelect, agents, nameColors }: {
             {hasSeedFields(task) && (
               <span className="text-xs" title="Has acceptance criteria">✓</span>
             )}
+            {/* #1492 — STOP-held badge. Visible when an authority (human/QA)
+                has paused work on this task; the lease guard will not
+                escalate while this is set. Cleared by a resume comment or
+                by the assignee's next reply. */}
+            {(task as any).heldByHuman && (
+              <span
+                className="text-[10px] px-1.5 py-0.5 rounded-sm bg-red-500/15 text-red-400 font-semibold"
+                title={`Held by ${(task as any).heldByHuman.author || 'authority'} — lease guard paused. Cleared on resume or assignee reply.`}
+              >
+                🛑 HELD
+              </span>
+            )}
           </div>
           <p className="text-[var(--text-sm)] font-semibold text-[var(--text-primary)] leading-snug break-words">{task.title}</p>
         </div>

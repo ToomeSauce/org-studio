@@ -21,6 +21,9 @@ import {
 import { validateUpdateTaskPayload } from '@/lib/update-task-validation';
 import { canonicalizeTeammate } from '@/lib/canonicalize-teammate';
 import { getRuntimeRegistry } from '@/lib/runtimes/registry';
+// #1492 — stamp heldByHuman on task snapshots so the UI can render a STOP
+// badge on the card without an extra round-trip per task.
+import { isTaskHeldByHumanStop } from '@/lib/stop-window';
 
 const SCHEDULER_URL = 'http://localhost:4501/api/scheduler';
 
@@ -490,10 +493,29 @@ export async function GET(req: NextRequest) {
     // evidence-detector, section-access, notify) call readStore() / the
     // provider directly and continue to see the inline blob — only the
     // JSON wire response from this endpoint is slimmed.
+    // #1492 — teammates roster passed to STOP-window detector so it can
+    // identify authority authors (humans + role=qa).
+    const teammates = (data.settings as any)?.teammates || [];
     const slimTasks = filteredTasks.map((t: any) => {
       const comments = Array.isArray(t.comments) ? t.comments : [];
       const { comments: _stripped, ...rest } = t;
-      return { ...rest, commentCount: comments.length };
+      // Held-by-human STOP detection runs against the inline comments blob
+      // (still dual-written per #1294/#1295 plan). Once #1295 drops the
+      // column, switch to fetching from org_studio_comments here.
+      const hold = isTaskHeldByHumanStop(
+        { id: t.id, assignee: t.assignee },
+        comments,
+        teammates,
+      );
+      const heldByHuman = hold.held
+        ? {
+            author: hold.stopAuthor,
+            at: hold.stopAt,
+            reason: hold.reason,
+            commentId: hold.stopCommentId,
+          }
+        : undefined;
+      return { ...rest, commentCount: comments.length, heldByHuman };
     });
 
     const filteredData = {

@@ -143,7 +143,7 @@ export interface Comment {
   author: string;
   content: string;
   createdAt: number;
-  type?: 'comment' | 'system'; // system = auto-generated (reopened, reassigned, etc.)
+  type?: 'comment' | 'system' | 'stop' | 'resume'; // system = auto-generated (reopened, reassigned, etc.); stop/resume = #1492 lease-guard STOP markers
   model?: string;
   mentions?: string[]; // @agent mentions for notification
   scope?: CommentScope;

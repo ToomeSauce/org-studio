@@ -977,6 +977,16 @@ export function TaskDetailPanel({
             {/* Composer at TOP — #UX-followup 2026-05-08: with newest-first
                 ordering and pagination, the input belongs above the freshest
                 comment, not buried below 25 stale ones. */}
+            {/* #1492 — held-by-human banner sits above the composer when active. */}
+            {(task as any).heldByHuman && (
+              <div className="mb-2 flex items-center gap-2 px-3 py-2 bg-red-500/10 border border-red-500/40 rounded-[var(--radius-md)] text-[11px]">
+                <span>🛑</span>
+                <span className="text-red-400 font-semibold">Lease guard paused</span>
+                <span className="text-[var(--text-muted)]">
+                  STOP from {(task as any).heldByHuman.author || 'authority'} — stale-claim counter will not tick on this task until a ▶️ RESUME comment is posted (or the assignee replies).
+                </span>
+              </div>
+            )}
             <div className="flex gap-2 mb-3">
               <textarea
                 ref={commentInputRef}
@@ -1000,27 +1010,96 @@ export function TaskDetailPanel({
               >
                 <Send size={14} />
               </button>
+              {/* #1492 — STOP/RESUME buttons. Server-side detection still
+                  requires an authority author (human/QA role); these buttons
+                  just make it a one-click action when the comment text is
+                  present. The author check happens at sweep time, not here. */}
+              {!(task as any).heldByHuman ? (
+                <button
+                  onClick={async () => {
+                    if (commentSending) return;
+                    const content = commentText.trim() || '🛑 STOP — work paused pending review.';
+                    setCommentSending(true);
+                    try {
+                      const mentions = extractMentions(content);
+                      const newComment = await onAddComment(task.id, {
+                        author: 'You',
+                        content,
+                        type: 'stop',
+                        ...(mentions.length ? { mentions } : {}),
+                      } as any);
+                      setCommentText('');
+                      setFetchedComments(prev => [newComment, ...prev]);
+                    } finally {
+                      setCommentSending(false);
+                    }
+                  }}
+                  disabled={commentSending}
+                  className="self-end px-3 py-2 bg-red-500/15 text-red-400 border border-red-500/40 rounded-[var(--radius-md)] hover:bg-red-500/25 transition-colors disabled:opacity-30 disabled:cursor-not-allowed shrink-0 text-[11px] font-semibold"
+                  title="Post a STOP marker — pauses the lease-guard escalation on this task (authority authors only — humans + QA)"
+                >
+                  🛑 STOP
+                </button>
+              ) : (
+                <button
+                  onClick={async () => {
+                    if (commentSending) return;
+                    const content = commentText.trim() || '▶️ RESUME — cleared to proceed.';
+                    setCommentSending(true);
+                    try {
+                      const mentions = extractMentions(content);
+                      const newComment = await onAddComment(task.id, {
+                        author: 'You',
+                        content,
+                        type: 'resume',
+                        ...(mentions.length ? { mentions } : {}),
+                      } as any);
+                      setCommentText('');
+                      setFetchedComments(prev => [newComment, ...prev]);
+                    } finally {
+                      setCommentSending(false);
+                    }
+                  }}
+                  disabled={commentSending}
+                  className="self-end px-3 py-2 bg-emerald-500/15 text-emerald-400 border border-emerald-500/40 rounded-[var(--radius-md)] hover:bg-emerald-500/25 transition-colors disabled:opacity-30 disabled:cursor-not-allowed shrink-0 text-[11px] font-semibold"
+                  title="Post a RESUME marker — resumes the lease-guard escalation on this task (authority authors only)"
+                >
+                  ▶️ RESUME
+                </button>
+              )}
             </div>
 
             {comments.length > 0 && (
               <div className="space-y-2.5 mb-3">
-                {comments.map(c => (
+                {comments.map(c => {
+                  const isStop = c.type === 'stop';
+                  const isResume = c.type === 'resume';
+                  const isSystem = c.type === 'system';
+                  return (
                   <div
                     key={c.id}
                     className={clsx(
                       'rounded-[var(--radius-md)] px-3 py-2',
-                      c.type === 'system'
-                        ? 'bg-[var(--warning-subtle)] border border-[var(--warning)]/20'
-                        : 'bg-[var(--bg-secondary)] border border-[var(--border-default)]'
+                      isStop
+                        ? 'bg-red-500/10 border border-red-500/40'
+                        : isResume
+                          ? 'bg-emerald-500/10 border border-emerald-500/40'
+                          : isSystem
+                            ? 'bg-[var(--warning-subtle)] border border-[var(--warning)]/20'
+                            : 'bg-[var(--bg-secondary)] border border-[var(--border-default)]'
                     )}
                   >
                     <div className="flex items-center gap-2 mb-1">
-                      {c.type === 'system' && <AlertTriangle size={11} className="text-[var(--warning)]" />}
+                      {isStop && <span className="text-[11px]">🛑</span>}
+                      {isResume && <span className="text-[11px]">▶️</span>}
+                      {isSystem && <AlertTriangle size={11} className="text-[var(--warning)]" />}
                       <span className={clsx(
                         'text-[11px] font-semibold',
-                        c.type === 'system' ? 'text-[var(--warning)]' : (nameColors[c.author] || 'text-[var(--text-secondary)]')
+                        isStop ? 'text-red-400' : isResume ? 'text-emerald-400' : isSystem ? 'text-[var(--warning)]' : (nameColors[c.author] || 'text-[var(--text-secondary)]')
                       )}>
                         {c.author}
+                        {isStop && <span className="ml-1.5 text-[9px] uppercase tracking-wider opacity-80">STOP — lease paused</span>}
+                        {isResume && <span className="ml-1.5 text-[9px] uppercase tracking-wider opacity-80">RESUME — lease ticking</span>}
                       </span>
                       {(c as any).model && (
                         <span className="text-[9px] px-1.5 py-0.5 rounded bg-[var(--bg-tertiary)] text-[var(--text-muted)] font-mono">
@@ -1031,7 +1110,8 @@ export function TaskDetailPanel({
                     </div>
                     <p className="text-[var(--text-sm)] text-[var(--text-secondary)] leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{renderCommentWithMentions(c.content)}</p>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
 
