@@ -2,6 +2,19 @@
 
 All notable changes to Org Studio. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is SemVer (pre-1.0 — minor bumps may include breaking changes).
 
+## [0.3.1] — 2026-05-20
+
+Docs + release-tooling pass. No runtime changes.
+
+### Added
+- `org-studio-api` skill (`SKILL.md` + `references/api-reference.md`) now documents the #1461 work: `action: "create"` (strict, title-required, owner-inherited), `action: "patch"` (COALESCE-by-default, `items_mode: replace|merge`), `qa` / `gtm` `versionType` values, the single-current invariant, and the new `/api/admin/roadmap-audit` admin endpoint.
+- `scripts/build-skill.sh` and `npm run build:skill` — repeatable build of `skills/dist/org-studio-api.skill` with a sidecar `org-studio-api.skill.sha` that captures `package_version`, `git_sha`, `built_at`, and `size_bytes`. The April-vintage stale zip is replaced.
+- README "Publishing the `org-studio-api` skill" section — the release flow used to be tribal knowledge; it's now a recipe.
+
+### Notes
+- Package was already at 0.3.0 in `package.json` without a CHANGELOG entry. This release bumps to 0.3.1 with a docs-only diff; backfilling 0.3.0's history is tracked separately.
+- Publishing the new bundle to ClawHub still requires a human with publish credentials.
+
 ## [0.2.0] — 2026-05-05
 
 First substantive release since v0.1.1. The headline shift is **per-component roadmaps**: every project can now have multiple Components (Main / QA / Frontend / Backend / etc.), each with its own version timeline, approval list, and dispatch gates. The legacy single-roadmap-per-project model is gone.

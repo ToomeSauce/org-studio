@@ -125,6 +125,29 @@ Org Studio exposes a REST API. Any agent that can make HTTP calls can participat
 
 See the [org-studio-api skill](skills/org-studio-api/SKILL.md) for the complete API reference with examples.
 
+## Publishing the `org-studio-api` skill
+
+The canonical source for the agent-facing skill is `skills/org-studio-api/` in this repo. Every per-workspace copy under `~/.openclaw/workspace*/skills/org-studio-api/` and `~/.agents/skills/org-studio-api/` is a downstream install — do **not** edit those directly, the next sync will overwrite them.
+
+When the skill content changes (new endpoints, new actions, behavioural docs), cut a release like this:
+
+1. **Edit the canonical source.** Update `skills/org-studio-api/SKILL.md` and/or `skills/org-studio-api/references/*.md` in this repo — nothing else.
+2. **Bump the package version** (`package.json` → SemVer; pre-1.0, so a docs-only release goes patch e.g. `0.3.0` → `0.3.1`). Add a [CHANGELOG.md](CHANGELOG.md) entry summarising what changed and why.
+3. **Rebuild the skill bundle:**
+   ```bash
+   npm run build:skill
+   ```
+   This writes `skills/dist/org-studio-api.skill` (a zip of the skill dir) plus a sidecar `skills/dist/org-studio-api.skill.sha` capturing the build's git SHA, package version, and size for traceability.
+4. **Commit + PR + merge to `main`.** The skill source and CHANGELOG go in; the `skills/dist/*.skill` bundle is gitignored (build artifacts — each consumer rebuilds from source or pulls from ClawHub).
+5. **Publish to ClawHub.** This step currently requires manual upload of `skills/dist/org-studio-api.skill` to <https://clawhub.ai> by someone with publish credentials. (CI-driven publish is on the wishlist — file an issue if you'd like to take it.)
+6. **Refresh agent workspaces.** From any workspace, run:
+   ```bash
+   openclaw skills update org-studio-api --all
+   ```
+   to pull the newly-published version into every tracked workspace. Workspaces still on the old version will keep working — the skill is additive.
+
+**Why this matters:** if you only edit your own workspace install, every other agent on the team is reading stale docs and will hit the bug you just fixed.
+
 ## Stack
 
 - **Frontend:** Next.js 16 + React 19 + TypeScript + Tailwind CSS v4
