@@ -23,12 +23,16 @@ vi.mock('pg', () => ({
   },
 }));
 
-// Mock store-provider
+// Mock store-provider.
+// auth.ts → resolveSessionUserId() uses getStoreProviderAllWorkspaces()
+// (token validation runs before workspace context is established).
+// We mock both factories so the test stays robust if the call site ever
+// flips back to the workspace-scoped getter.
 const mockStoreRead = vi.fn();
+const makeStore = () => ({ read: mockStoreRead });
 vi.mock('@/lib/store-provider', () => ({
-  getStoreProvider: () => ({
-    read: mockStoreRead,
-  }),
+  getStoreProvider: () => makeStore(),
+  getStoreProviderAllWorkspaces: () => makeStore(),
 }));
 
 describe('workspace-auth browser session flow', () => {
