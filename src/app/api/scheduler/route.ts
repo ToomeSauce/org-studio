@@ -1263,7 +1263,35 @@ export async function POST(request: NextRequest) {
         // actionable prompt (e.g. nothing passed the dispatch filter) or when
         // enqueue itself failed. Propagate that distinction so callers (and
         // the heartbeat watchdog) can tell a real dispatch from a fizzle.
-        const sessionKey = await fireOneShot(store, loop);
+        //
+        // #1515: re-read the store immediately before composing the dispatch
+        // summary. The outer `store` snapshot above (line ~1119) is now
+        // potentially stale because the lease sweep (line ~1228) can mutate
+        // task statuses (auto-bounce expired in-progress claims back to
+        // backlog), and the loop-detect path can pause stalled tasks. Without
+        // this fresh read, buildDispatchMessage tells the agent "resume
+        // in-progress: #X" when #X was just bounced to backlog by the sweep
+        // — the exact stale-claim symptom Billy reported on c0o2vy4qmpft88uu.
+        // Snapshot-at-delivery > snapshot-at-trigger.
+        const dispatchStoreReadAt = Date.now();
+        const dispatchStore = await readStore();
+        const snapshotAgeMs = Date.now() - dispatchStoreReadAt;
+        // Tiny ticket-status fingerprint for the diagnostic log (per ticket id
+        // for this agent). Cheap; only computed once per dispatch fire.
+        const nameLower = (agentName || '').toLowerCase();
+        const agentTicketStatuses = (dispatchStore.tasks || [])
+          .filter((t: any) => {
+            const a = (t.assignee || '').toLowerCase();
+            return (a === nameLower || a === agentId) && !t.isArchived;
+          })
+          .map((t: any) => `${t.ticketNumber ?? '?'}:${t.status}`)
+          .slice(0, 20)
+          .join(',');
+        console.info(
+          `[dispatch #1515] agent=${agentId} readMs=${snapshotAgeMs} ` +
+            `outerStoreAge=${Date.now() - now}ms tickets=[${agentTicketStatuses}]`,
+        );
+        const sessionKey = await fireOneShot(dispatchStore, loop);
         if (!sessionKey) {
           return recordAndReturn(
             {
