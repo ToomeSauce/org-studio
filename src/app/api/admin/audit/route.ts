@@ -28,6 +28,24 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithContext, type AuthContext } from '@/lib/auth';
 import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
 
+/**
+ * authenticateRequestWithContext returns a 401 NextResponse whenever
+ * ORG_STUDIO_API_KEY is set and the request has no matching Bearer or
+ * session. For this admin endpoint we want a *uniform* 403 admin_required
+ * response across every reject path (no auth, wrong key, agent token,
+ * non-admin session) — "visible but locked" beats "sometimes 401, sometimes
+ * 403" because it makes the gate behavior easy to reason about from outside.
+ *
+ * So we wrap the helper: any 401 from it is downgraded to a synthetic
+ * `{ method: 'noauth', userId: null }` context. isAdminRequest then runs
+ * uniformly and produces a single 403.
+ */
+async function loadAuthContextForAdminGate(req: NextRequest): Promise<AuthContext> {
+  const r = await authenticateRequestWithContext(req);
+  if (r.error) return { userId: null, method: 'noauth' };
+  return r.context;
+}
+
 export const dynamic = 'force-dynamic';
 
 const DEFAULT_LIMIT = 200;
@@ -90,9 +108,8 @@ function decodeCursor(raw: string): AuditCursor | null {
 
 export async function GET(req: NextRequest) {
   // Auth
-  const authResult = await authenticateRequestWithContext(req);
-  if (authResult.error) return authResult.error;
-  if (!isAdminRequest(req, authResult.context)) {
+  const authCtx = await loadAuthContextForAdminGate(req);
+  if (!isAdminRequest(req, authCtx)) {
     return NextResponse.json(
       {
         error: 'admin_required',
