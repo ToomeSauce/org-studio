@@ -1282,7 +1282,10 @@ export async function POST(request: NextRequest) {
         const agentTicketStatuses = (dispatchStore.tasks || [])
           .filter((t: any) => {
             const a = (t.assignee || '').toLowerCase();
-            return (a === nameLower || a === agentId) && !t.isArchived;
+            if (!(a === nameLower || a === agentId) || t.isArchived) return false;
+            // Only fingerprint actionable / visible-in-dispatch buckets;
+            // 'done'/'planning' aren't dispatched so they're noise here.
+            return ['in-progress', 'backlog', 'qa', 'blocked'].includes(t.status);
           })
           .map((t: any) => `${t.ticketNumber ?? '?'}:${t.status}`)
           .slice(0, 20)
