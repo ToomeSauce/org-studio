@@ -1,6 +1,6 @@
 {
   "name": "org-studio",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Org design and management for human-in-the-loop agent organizations",
   "license": "MIT",
   "bin": {
