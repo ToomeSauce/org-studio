@@ -17,6 +17,7 @@ import type { AgentLoop } from '@/lib/store';
 import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 import { writeHeartbeat } from '@/lib/heartbeats';
 import { getStoreProviderAllWorkspaces, type StoreData } from '@/lib/store-provider';
+import { bounceLeaseLevel3, type BounceProvider } from '@/lib/lease-bounce';
 import {
   isTaskAnyDispatchEligible,
   isTaskWaiting,
@@ -382,23 +383,24 @@ async function escalateInactiveClaim(
   }
 
   if (newCount >= LEVEL_DISABLE) {
-    const history = (task.statusHistory || []).concat([
-      { status: 'backlog', timestamp: now, by: 'System (lease-bounce: stale-claim Level 3)' },
-    ]);
-    try {
-      await provider.updateTask(task.id, {
-        status: 'backlog',
-        assignee: '',
-        claim_started_at: null,
-        claim_lease_expires_at: null,
-        loopCount: 0,
-        _lastDispatchedAt: null,
-        statusHistory: history,
-        lastActivityAt: now,
-      });
-    } catch (err: any) {
-      console.warn(`[lease-sweep #1352] Level 3 bounce failed for ${task.id}: ${err?.message || err}`);
-    }
+    // #1493 — Level 3 auto-bounce write reliability. See src/lib/lease-bounce.ts
+    // for the rationale, contract, and unit tests. Pre-#1493: single write,
+    // no verification, swallowed error → silent state-loss on #1487.
+    // Post-#1493: re-read → write → read-back verify → retry once → activity
+    // feed event on hard-fail.
+    const feedSink = (globalThis as any).__orgStudioActivityFeed || null;
+    await bounceLeaseLevel3(
+      provider as BounceProvider,
+      {
+        id: task.id,
+        title: task.title,
+        ticketNumber: task.ticketNumber,
+        projectId: task.projectId,
+      },
+      assigneeName,
+      now,
+      { feedSink },
+    );
   }
 
   return { level: newCount, reason: 'acted' };
