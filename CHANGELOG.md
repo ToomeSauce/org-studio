@@ -15,6 +15,67 @@ Docs + release-tooling pass. No runtime changes.
 - Package was already at 0.3.0 in `package.json` without a CHANGELOG entry. This release bumps to 0.3.1 with a docs-only diff; backfilling 0.3.0's history is tracked separately.
 - Publishing the new bundle to ClawHub still requires a human with publish credentials.
 
+## [0.3.0] — 2026-05-08
+
+Three-day sprint between v0.2.0 and v0.3.0. **Headline shifts:**
+
+1. **Outcome-bound versions** — roadmap versions can now declare a `successCriteria` + metric gate that blocks auto-completion until the metric is satisfied, even when every child ticket is `done`.
+2. **Two-state project model** — `Active` / `Inactive` toggle replaces the multi-state launch flow; the old "Launch" button is gone.
+3. **Postgres-only store** — `data/store.json` fallback removed; Postgres is the only persistence path (file mode is now offline/dev-only).
+4. **Column-position is the canonical priority signal** — `task.priority` field removed; drag-to-reorder is the source of truth.
+
+_This entry was backfilled retroactively in v0.3.1 (#1468); the original 0.3.0 release shipped without a CHANGELOG entry. See git log `397c4a6..1b956cf` for the source-of-truth commit history._
+
+### Added
+
+#### Roadmap & versions
+- **Outcome-bound versions** (#1263, PR #33) — `successCriteria`, `metricTarget`, `metricCurrent`, `metricComparator` (`gte` | `lte` | `eq`), `loopPaused` fields on `version.meta`. Version won't auto-complete or auto-advance until `metricCurrent` satisfies the comparator. Caps: 5 concurrent in-progress tasks per outcome-bound version (`MAX_OPEN_EXPERIMENTS`), 3 agent-created spike tickets per UTC day (`MAX_AUTO_TASKS_PER_VERSION_PER_DAY`, returns `429` past cap). Defense-in-depth: project promotion re-checks the metric after the approval-horizon gate.
+- **Rename version in place** (#1267, PR #32) — moves all child tickets to the new version string instead of duplicating the row.
+- **Auto-mint stub vision doc + roadmap row on first launch** (#1229) — bootstrap when a brand-new project is activated.
+- **Blocked deep-links** (#1266) — clickable blocker links across `/projects`, `/projects/[id]`, and `/context`.
+
+#### UX & dispatch
+- **Two-state project model** (`roto54a`) — `Active` / `Inactive` toggle; multi-state launch flow retired.
+- **Vertical drag-and-drop within columns** (#1250) — dispatcher reads `sortOrder` so reorder actually affects pickup order.
+- **`task.priority` field removed** (#1249) — column-position is canonical; high-priority is whatever's at the top.
+- **`diagnoseAgentBacklog` exposed via `POST /api/scheduler action=diagnose`** (#1194, PR #31).
+- **Auto-notify dev owner on every non-system ticket comment** (#1268) — comments now ping the assignee even if you don't `@`-mention.
+- **Auto-resolve `sectionId` in `addTask` / `updateTask`** (#1269) — agents no longer need to pass the section explicitly.
+- **Editable project metadata via settings slide-over** (#1281).
+
+#### Infra & deploy
+- **`npm run deploy`** (#1261) — single script: build → restart → health-check → print `BUILD_ID` + SHA. Boot-time `BUILD_ID` stamp in service logs (`[boot] org-studio dashboard live: BUILD_ID=... SHA=... branch=...`) — easy way to verify the running process matches `git rev-parse --short HEAD`.
+
+### Changed
+
+- **`approvedThrough` scalar dropped from type definitions** (#1224) — `approvedVersions[]` set is the sole source of truth (set-membership gate locked in by test #1222).
+- **Project rename: `proj-mc` → `proj-org-studio`** (#1234), with `addTask` now rejecting unknown `projectId`.
+- **Launch message** (#1230) — stale Telegram-proposal copy ripped out.
+- **Bearer auth in `activity-status` curl examples** (#1251) — agent prompt corrected.
+- **Notification envelope** (#1262) — assignee notifications now use the rich "reply on the task" format.
+- **Dispatch-blocker UI labels** — aligned with #1224 per-version approval model.
+
+### Fixed
+
+- **`data/store.json` file fallbacks retired** (#1265) — every `safeRead(STORE_PATH)` in `server.mjs` replaced with `cachedStore`-only (or `null` + warn). Postgres outages now surface explicitly instead of silently serving stale data. Initial-startup `ORG.md` sync also routed through `refreshCachedStore()` (was reading STORE_PATH, fed stale ORG.md on every restart — latent bug fixed). Final archive at `data/backups/store-1265-final-archive-*.json`.
+- **`/api/store` surfaces real error messages** (#1260) — was silently producing dead buttons.
+- **Activate button** (#1253) — optimistic state + error toast + double-click guard; was double-firing on slow networks.
+- **Orphan-blocked tasks** (#1235, #1254) — surfaced on project dashboard, rehome UI + project-scope opt-in.
+- **Mobile task detail panel** (#1248) — x-jitter + project header overlap.
+- **In-column rendering honors `sortOrder`** (#1250 fix) — drags were snapping back because render order ignored the sort.
+- **Current version block** (#1276, #1280) — edit/delete buttons restored; owner picker added then refined through three followups (positioning, then label chip, then dropping the `qaOwner` slot in favour of `devOwner`-only — #1281 followup).
+- **Backfill 6 historical tasks with `NULL ticketNumber`** (`okqrk04n`) — also added a guard against silent regression.
+- **`ComponentFixture` type alignment with #1224 `approvedVersions[]`** — CI was failing on stale fixtures.
+
+### Tests added
+
+- `#1222` — `approvedVersions[]` set-membership gate for auto-promote.
+- `#1246` — assignee auto-notification on every task comment.
+
+### Docs
+
+- **Outcome-bound versions documented** in skill, guide, README, and api-reference (#1263 docs commit `232b2ab`).
+
 ## [0.2.0] — 2026-05-05
 
 First substantive release since v0.1.1. The headline shift is **per-component roadmaps**: every project can now have multiple Components (Main / QA / Frontend / Backend / etc.), each with its own version timeline, approval list, and dispatch gates. The legacy single-roadmap-per-project model is gone.
