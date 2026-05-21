@@ -2,6 +2,18 @@
 
 All notable changes to Org Studio. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is SemVer (pre-1.0 — minor bumps may include breaking changes).
 
+## [0.3.2] — 2026-05-20
+
+Docs-only. Crystallizes host-specific build constraints into the `org-studio-api` skill so every agent gets them on session start.
+
+### Added
+
+- **`Local Environment: Host Constraints` section in `org-studio-api/SKILL.md`** — documents the `hanktank` rule (older Mac Mini, thermal-shutdowns on full builds). Forbidden vs allowed commands, preferred CI-driven validation workflow, and a self-check rule before running build-like commands. Lives near the top of the skill so it's the second thing an agent reads after Event-Driven Triggers, not buried.
+
+### Why
+
+Basil flagged that the hanktank build restriction was being learned ad-hoc per agent. Putting it in the shared skill means every agent on every Org Studio project picks it up automatically on next session start. Hardware-specific rules belong in the skill, not in individual agent memory files.
+
 ## [0.3.1] — 2026-05-20
 
 Docs + release-tooling pass. No runtime changes.
