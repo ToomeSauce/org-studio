@@ -2,17 +2,30 @@
 
 All notable changes to Org Studio. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is SemVer (pre-1.0 — minor bumps may include breaking changes).
 
+## [0.3.3] — 2026-05-20
+
+Docs-only follow-up to 0.3.2. Rewrites the `Local Environment: Host Constraints` section in `org-studio-api/SKILL.md` to remove operator-private specifics (host names, hardware details) that had landed in 0.3.2. The shared skill now describes only the **general pattern** — operators with specific constraints add details to their own `AGENTS.md` / workspace overlays.
+
+### Changed
+
+- **`Local Environment: Host Constraints`** in `SKILL.md` reduced to a generic, deployment-agnostic version. Same preferred validation workflow (targeted local checks, push, let CI build), but no hostnames or hardware caveats.
+- **CHANGELOG** for 0.3.2 also reworded along the same lines.
+
+### Notes
+
+v0.3.2 git history and release notes still contain the original wording; this is a forward-only correction. The shared skill that agents read on session start is now scrubbed.
+
 ## [0.3.2] — 2026-05-20
 
-Docs-only. Crystallizes host-specific build constraints into the `org-studio-api` skill so every agent gets them on session start.
+Docs-only. Adds a general-purpose `Local Environment: Host Constraints` section to the `org-studio-api` skill.
 
 ### Added
 
-- **`Local Environment: Host Constraints` section in `org-studio-api/SKILL.md`** — documents the `hanktank` rule (older Mac Mini, thermal-shutdowns on full builds). Forbidden vs allowed commands, preferred CI-driven validation workflow, and a self-check rule before running build-like commands. Lives near the top of the skill so it's the second thing an agent reads after Event-Driven Triggers, not buried.
+- **`Local Environment: Host Constraints` section in `org-studio-api/SKILL.md`** — documents the general pattern for deployments where the operator restricts full local builds (thermal-limited or low-memory hosts), so agents reach for the preferred CI-driven validation workflow instead. Lives near the top of the skill so it's the second thing an agent reads after Event-Driven Triggers. Operators with specific host names / hardware caveats should add those details to their own `AGENTS.md` / workspace overlays rather than to the shared skill.
 
 ### Why
 
-Basil flagged that the hanktank build restriction was being learned ad-hoc per agent. Putting it in the shared skill means every agent on every Org Studio project picks it up automatically on next session start. Hardware-specific rules belong in the skill, not in individual agent memory files.
+The pattern (targeted local checks, push, let CI build) is useful across many deployments; the specifics (which host has which constraint) are operator-private. The shared skill now covers the pattern only.
 
 ## [0.3.1] — 2026-05-20
 
