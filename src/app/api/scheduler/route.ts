@@ -456,8 +456,12 @@ async function sweepExpiredLeases(store: StoreData): Promise<{ bounced: number; 
     try {
       const settingsTeammates = store.settings?.teammates || [];
       let taskComments: any[] = [];
-      if (typeof provider.listComments === 'function') {
-        taskComments = (await provider.listComments(
+      // Local-bind so TS narrows past the optional-method check; #1495 stale-warning fix.
+      const listCommentsFn = (provider as any).listComments as
+        | ((scope: any, opts: any) => Promise<any[]>)
+        | undefined;
+      if (typeof listCommentsFn === 'function') {
+        taskComments = (await listCommentsFn(
           { kind: 'task', taskId: t.id } as any,
           { limit: 50 },
         )) as any[];

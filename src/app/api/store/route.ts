@@ -20,6 +20,7 @@ import {
 } from '@/lib/workspace-auth';
 import { validateUpdateTaskPayload } from '@/lib/update-task-validation';
 import { canonicalizeTeammate } from '@/lib/canonicalize-teammate';
+import { resolveWakeTrigger } from '@/lib/wake-trigger';
 import { getRuntimeRegistry } from '@/lib/runtimes/registry';
 // #1492 — stamp heldByHuman on task snapshots so the UI can render a STOP
 // badge on the card without an extra round-trip per task.
@@ -1183,18 +1184,23 @@ export async function POST(req: NextRequest) {
             }
           }
           const updated = { ...t, ...updates };
-          if ((updated.status === 'backlog') &&
-              (updates.status === 'backlog' || updates.assignee) &&
-              updated.assignee) {
-            triggeredAssignee = updated.assignee;
-          }
-
-          // #862: QA-bounce trigger removed (no more qa column). Reassignment on in-progress still triggers below.
-
-          // Trigger new assignee when an in-progress task is reassigned
-          if (updated.status === 'in-progress' && updates.assignee &&
-              updates.assignee !== t.assignee && updated.assignee) {
-            triggeredAssignee = updated.assignee;
+          // #1494 — Wake-trigger resolution centralized in lib/wake-trigger.ts.
+          // The helper is a pure function; route just consumes its decision.
+          // Coverage matrix (now exercised in lib/wake-trigger.test.ts):
+          //   backlog claim (T1)               — backlog→backlog + assignee
+          //   in-progress reassignment (T2)    — new assignee on in-progress
+          //   unblock to in-progress (T3, NEW) — any non-in-progress → in-progress
+          //
+          // Pre-#1494 behavior: three inline if-blocks scattered through
+          // the for-loop, with the blocked→in-progress (same assignee)
+          // gap that caused #1487. The new helper closes that gap and
+          // makes future trigger additions a one-place edit.
+          const wake = resolveWakeTrigger({
+            prevTask: { status: t.status, assignee: t.assignee },
+            updates: { status: updates.status, assignee: updates.assignee },
+          });
+          if (wake) {
+            triggeredAssignee = wake;
           }
 
           // #862: QA-column trigger removed — QA tickets follow standard backlog→in-progress assignee triggers.
