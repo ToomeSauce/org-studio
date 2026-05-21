@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createHash } from 'crypto';
 import { authenticateRequest, authenticateRequestWithContext, requireWriteScope, getSession, getSessionTokenFromCookie } from '@/lib/auth';
 import { rpc } from '@/lib/gateway-rpc';
 import { getStoreProvider, type StoreData } from '@/lib/store-provider';
@@ -27,6 +28,23 @@ import { getRuntimeRegistry } from '@/lib/runtimes/registry';
 import { isTaskHeldByHumanStop } from '@/lib/stop-window';
 
 const SCHEDULER_URL = 'http://localhost:4501/api/scheduler';
+
+/**
+ * #1506 — strip server-side audit metadata from a comment before returning
+ * it to a client. Removes both the top-level `auditMeta` field and the
+ * nested `data.audit` field (which the Postgres provider stores in the
+ * row's JSONB data bag). Defense-in-depth: provider read paths should also
+ * avoid emitting these, but this central helper guarantees no leak.
+ */
+function stripAuditMeta<T extends Record<string, any>>(comment: T): T {
+  if (!comment || typeof comment !== 'object') return comment;
+  const { auditMeta: _drop, ...rest } = comment as any;
+  if (rest.data && typeof rest.data === 'object' && 'audit' in rest.data) {
+    const { audit: _dropAudit, ...dataRest } = rest.data;
+    rest.data = dataRest;
+  }
+  return rest as T;
+}
 
 const DEFAULT_LOOP_STEPS = [
   {
@@ -542,6 +560,11 @@ export async function POST(req: NextRequest) {
   // rewrite, since the global API key has no real human owner).
   let requestUserId: string | null | undefined;
   let requestAuthMethod: 'session' | 'apikey' | 'noauth' | 'agent-token' | undefined;
+  // #1506 — audit-logging extras: capture tokenId (agent-token) and a short
+  // hash of the raw apikey Bearer token. Used only for forensics on the
+  // server-side audit trail; never returned to clients.
+  let requestTokenId: string | undefined;
+  let requestApiKeyHash: string | undefined;
   try {
     const authCtx = await authenticateRequestWithContext(req);
     if (!authCtx.error) {
@@ -549,6 +572,17 @@ export async function POST(req: NextRequest) {
       if (scopeFail) return scopeFail;
       requestUserId = authCtx.context.userId;
       requestAuthMethod = authCtx.context.method;
+      requestTokenId = authCtx.context.tokenId;
+      // For apikey method, hash the raw Bearer token (read directly from the
+      // header — we never persist or log the plaintext key). 16 hex chars of
+      // SHA-256 is enough to fingerprint a key for forensics.
+      if (requestAuthMethod === 'apikey') {
+        const ah = req.headers.get('authorization') || '';
+        const tok = ah.startsWith('Bearer ') ? ah.slice(7) : '';
+        if (tok) {
+          requestApiKeyHash = createHash('sha256').update(tok).digest('hex').slice(0, 16);
+        }
+      }
     }
   } catch { /* best-effort */ }
 
@@ -1988,6 +2022,20 @@ export async function POST(req: NextRequest) {
           author: canonicalAuthor,
           model: payload.comment?.model || model, // explicit > resolved
         };
+        // #1506 — attach audit metadata BEFORE handing to the provider.
+        // The provider persists this to the audit row but strips it from any
+        // client-facing read paths (defense-in-depth: also stripped below).
+        const auditMeta = {
+          authMethod: requestAuthMethod ?? null,
+          userId: requestUserId ?? null,
+          tokenId: requestTokenId ?? null,
+          apiKeyHash: requestApiKeyHash ?? null,
+          requestIp: req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || null,
+          userAgent: req.headers.get('user-agent') || null,
+          requestedAuthor: payload.comment?.author ?? null,
+          capturedAt: Date.now(),
+        };
+        (comment as any).auditMeta = auditMeta;
         // PERF: Use targeted provider.addComment() instead of full store write
         // But also update lastActivityAt on the task
         await getStoreProvider(workspace.id).addComment(commentScope, comment);
@@ -2107,7 +2155,7 @@ export async function POST(req: NextRequest) {
           }
         } // end if (task)
 
-        return NextResponse.json({ ok: true, comment, mentions: mentionResult });
+        return NextResponse.json({ ok: true, comment: stripAuditMeta(comment), mentions: mentionResult });
       }
 
       case 'listComments': {
@@ -2120,7 +2168,8 @@ export async function POST(req: NextRequest) {
         if (payload.limit) listOpts.limit = Number(payload.limit);
         if (payload.before) listOpts.before = Number(payload.before);
         const comments = await (provider as any).listComments(payload.scope, listOpts);
-        return NextResponse.json({ ok: true, comments });
+        // #1506 — defense-in-depth strip of audit fields from list responses.
+        return NextResponse.json({ ok: true, comments: (comments || []).map(stripAuditMeta) });
       }
 
       case 'listDmThreads': {

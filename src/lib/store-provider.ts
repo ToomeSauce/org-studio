@@ -958,7 +958,10 @@ export class PostgresStoreProvider implements StoreProvider {
             commentObj.type || null,
             commentObj.model || null,
             commentObj.mentions ? JSON.stringify(commentObj.mentions) : null,
-            JSON.stringify({ scope: commentObj.scope }),
+            // #1506 — persist audit metadata into the comment row's JSONB data
+            // bag for after-the-fact forensics. Read paths intentionally do not
+            // surface this field (see route.ts stripAuditMeta + listComments map).
+            JSON.stringify({ scope: commentObj.scope, audit: commentObj.auditMeta || null }),
           ]
         );
       } catch (e: any) {
@@ -977,7 +980,11 @@ export class PostgresStoreProvider implements StoreProvider {
 
         const current = this.reconstructTask(result.rows[0]);
         if (!current.comments) current.comments = [];
-        current.comments.push(commentObj);
+        // #1506 — the inline task.comments[] dual-write is a read-access path
+        // (the GET /api/store snapshot historically read from it). Audit data
+        // must NOT leak into this path; strip auditMeta before pushing.
+        const { auditMeta: _strippedForInline, ...commentForInline } = commentObj as any;
+        current.comments.push(commentForInline);
 
         const {
           id,
@@ -1046,7 +1053,9 @@ export class PostgresStoreProvider implements StoreProvider {
         `SELECT * FROM org_studio_comments WHERE scope_key = $1 AND created_at < $2 ORDER BY created_at DESC LIMIT $3`,
         [scopeKey, before, limit]
       );
-      // Reverse to ASC for rendering
+      // Reverse to ASC for rendering. #1506 — explicitly do NOT include
+      // row.data here; that JSONB bag carries audit metadata which must not
+      // leak to clients via list endpoints. (The shape below is the contract.)
       return result.rows.reverse().map((row: any) => ({
         id: row.id,
         author: row.author,
