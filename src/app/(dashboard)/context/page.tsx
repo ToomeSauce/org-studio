@@ -2,7 +2,7 @@
 
 import { PageHeader } from '@/components/PageHeader';
 import { TaskDetailPanel } from '@/components/TaskDetailPanel';
-import { addTask, updateTask, deleteTask, addComment, type Task, type Project, type TaskComment, getTaskActivityStatus, getActivityStatusDisplay, searchTasks, getActiveTasks, extractMentions, unarchiveTask, permanentlyDeleteTask, getArchivedTasks } from '@/lib/store';
+import { addTask, updateTask, deleteTask, addComment, type Task, type Project, type TaskComment, getTaskActivityStatus, getActivityStatusDisplay, searchTasks, getActiveTasks, extractMentions, unarchiveTask, permanentlyDeleteTask } from '@/lib/store';
 import { useWSData, useWSConnected } from '@/lib/ws';
 import { Plus, X, Circle, Bot, Activity, Eye, Pencil, Info, Target, Shield, FileText, Link as LinkIcon, ChevronDown, ChevronRight, MessageSquare, Maximize2, Search, Archive, RotateCcw, Trash2 } from 'lucide-react';
 import { clsx } from 'clsx';
@@ -785,7 +785,18 @@ function TasksPageInner() {
 {filterProject === 'archived' ? (
         // Archived tasks view
         (() => {
-          const archivedTasks = getArchivedTasks().filter(t => {
+          // #1495 Bug 1 — use the live `tasks` array from useWSData('store')
+          // instead of getArchivedTasks(). The latter reads from a module-
+          // local cache (`_tasks` in lib/store.ts) that is only populated by
+          // hydrateStore(), which is exported but never called from anywhere
+          // in the app. As a result the cache was always empty and the
+          // archived filter always rendered zero tasks. The live `tasks`
+          // array is already in scope (line ~430) and contains every task
+          // including archived ones; we just need to flip the filter sign
+          // from `!t.isArchived` (the board view at line ~447) to
+          // `t.isArchived` here.
+          const archivedTasks = tasks.filter(t => {
+            if (!t.isArchived) return false;
             if (filterAgent !== 'all' && t.assignee !== filterAgent) return false;
             if (searchQuery && !t.title?.toLowerCase().includes(searchQuery.toLowerCase())) return false;
             return true;
