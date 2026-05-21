@@ -76,6 +76,34 @@ async function writeStore(store: StoreData): Promise<void> {
   await getStoreProviderAllWorkspaces().write(store);
 }
 
+/**
+ * #1497 — targeted settings write that avoids the full-store DELETE+INSERT race.
+ *
+ * Background: `writeStore()` calls `PostgresStoreProvider.write()` which does
+ * `BEGIN; DELETE FROM org_studio_tasks; INSERT (every task from in-memory snapshot); COMMIT`.
+ * That is a classic read-modify-write race against EVERY concurrent task write: if
+ * an updateTask flip-to-done lands between this routes `readStore()` and
+ * `writeStore()`, our COMMITs DELETE wipes the just-landed done and INSERTs the
+ * pre-state back. Both writes return ok:true; the slower COMMIT silently wins.
+ *
+ * Most `writeStore()` calls in this file only mutate `store.settings.loops`
+ * (loop config, cronJobId, lastRun). For those, we route through the provider
+ * `updateSettings()` which does a row-level UPSERT on `org_studio_settings` and
+ * doesnt touch `org_studio_tasks` at all — eliminating the race against task
+ * writes entirely. Settings writes still have a narrow internal race with
+ * concurrent settings mutations (read-modify-write), but those are rare (loop
+ * enable/disable, cron resync) and bounded to settings fields, so they do not
+ * cause cross-domain silent loss of task state.
+ *
+ * Use `writeLoops()` instead of `writeStore()` whenever the only mutation is
+ * to `store.settings.loops`. For mutations that touch tasks, use targeted
+ * `provider.updateTask(taskId, ...)` instead of a full rewrite.
+ */
+async function writeLoops(store: StoreData): Promise<void> {
+  const loops = store.settings?.loops || [];
+  await getStoreProviderAllWorkspaces().updateSettings({ loops });
+}
+
 function getLoop(store: StoreData, loopId: string): AgentLoop | undefined {
   const loops: AgentLoop[] = store.settings?.loops || [];
   return loops.find(l => l.id === loopId);
@@ -190,6 +218,9 @@ async function detectAndIncrementLoops(store: StoreData, agentId: string): Promi
   const stalled: any[] = [];
   let incremented = 0;
   const now = Date.now();
+  // #1497: track per-task field updates so we can do targeted UPDATEs at the
+  // end instead of a full-store DELETE+INSERT (which races with task writes).
+  const taskFieldUpdates: Array<{ id: string; updates: Record<string, any> }> = [];
 
   for (let i = 0; i < store.tasks.length; i++) {
     const t = store.tasks[i];
@@ -206,11 +237,13 @@ async function detectAndIncrementLoops(store: StoreData, agentId: string): Promi
     const lastDispatchTime = t._lastDispatchedAt || 0;
     if (lastComment?.createdAt && lastComment.createdAt > lastDispatchTime) {
       store.tasks[i] = { ...t, loopCount: 0, _lastDispatchedAt: now };
+      taskFieldUpdates.push({ id: t.id, updates: { loopCount: 0, _lastDispatchedAt: now } });
       continue; // has recent activity, don't increment
     }
 
     const newCount = (t.loopCount || 0) + 1;
     store.tasks[i] = { ...t, loopCount: newCount, _lastDispatchedAt: now };
+    taskFieldUpdates.push({ id: t.id, updates: { loopCount: newCount, _lastDispatchedAt: now } });
     incremented++;
 
     if (newCount < MAX_LOOPS_BEFORE_ESCALATION) continue;
@@ -235,7 +268,13 @@ async function detectAndIncrementLoops(store: StoreData, agentId: string): Promi
   }
 
   if (incremented > 0) {
-    await writeStore(store);
+    // #1497: targeted per-task UPDATEs replace the full-store DELETE+INSERT race.
+    // Each updateTask is a row-level UPDATE that doesnt touch other tasks rows.
+    const provider = getStoreProviderAllWorkspaces();
+    for (const u of taskFieldUpdates) {
+      try { await provider.updateTask(u.id, u.updates); }
+      catch (e: any) { console.warn(`[detectAndIncrementLoops #1497] updateTask failed for ${u.id}:`, e?.message || e); }
+    }
   }
 
   return { stalled, incremented };
@@ -579,30 +618,53 @@ async function sweepExpiredLeases(store: StoreData): Promise<{ bounced: number; 
 async function pauseStalledTasks(store: StoreData, agentId: string, stalledTasks: any[]): Promise<void> {
   const agentName = getAgentName(store, agentId);
   const now = Date.now();
+  // #1497: targeted per-task UPDATEs + addComment via the provider instead of
+  // mutating the in-memory snapshot and then full-store rewriting. Eliminates
+  // the race where this writeStore() would wipe out concurrent updateTask
+  // flips landed between our readStore() and writeStore().
+  const provider = getStoreProviderAllWorkspaces();
 
   for (const task of stalledTasks) {
     const idx = store.tasks.findIndex(t => t.id === task.id);
     if (idx < 0) continue;
 
-    // Mark as paused
+    // Mark as paused (snapshot mirror still updated so any downstream uses of
+    // `store` in this tick see consistent state — actual persistence is the
+    // targeted provider call below).
     const reason = `Agent "${agentName}" ran ${task.loopCount} scheduler loops on this task without changing status. Pausing to prevent further resource waste.`;
     store.tasks[idx] = {
       ...store.tasks[idx],
       loopPausedAt: now,
       loopPauseReason: reason,
+      lastActivityAt: now,
     };
 
-    // Add system comment
-    const comments = store.tasks[idx].comments || [];
-    comments.push({
-      id: `sys-stall-${now}`,
-      author: 'System',
-      content: `⚠️ **Loop Detection — Agent Paused**\n\n${reason}\n\nTo resume: clear the pause via the task detail panel or move the task to a different status.`,
-      createdAt: now,
-      type: 'system',
-    });
-    store.tasks[idx].comments = comments;
-    store.tasks[idx].lastActivityAt = now;
+    try {
+      await provider.updateTask(task.id, {
+        loopPausedAt: now,
+        loopPauseReason: reason,
+        lastActivityAt: now,
+      });
+    } catch (e: any) {
+      console.warn(`[pauseStalledTasks #1497] updateTask failed for ${task.id}:`, e?.message || e);
+    }
+
+    // Add system comment via the targeted addComment path (writes to normalized
+    // comments table; no full-store rewrite).
+    try {
+      await provider.addComment(
+        { kind: 'task', taskId: task.id },
+        {
+          id: `sys-stall-${now}-${task.id}`,
+          author: 'System',
+          content: `⚠️ **Loop Detection — Agent Paused**\n\n${reason}\n\nTo resume: clear the pause via the task detail panel or move the task to a different status.`,
+          createdAt: now,
+          type: 'system',
+        },
+      );
+    } catch (e: any) {
+      console.warn(`[pauseStalledTasks #1497] addComment failed for ${task.id}:`, e?.message || e);
+    }
 
     // Send Telegram alert
     try {
@@ -616,10 +678,7 @@ async function pauseStalledTasks(store: StoreData, agentId: string, stalledTasks
       console.error(`Failed to send stall alert for task ${task.id}:`, e?.message || e);
     }
   }
-
-  if (stalledTasks.length > 0) {
-    await writeStore(store);
-  }
+  // #1497: no writeStore() — each task was persisted individually via provider.updateTask/addComment above.
 }
 
 /** Check if an agent has actionable work (backlog or in-progress tasks assigned to them). */
@@ -882,7 +941,7 @@ export async function POST(request: NextRequest) {
 
         // Persist back to store
         updateLoopInStore(store, loopId, { enabled: true, cronJobId });
-        await writeStore(store);
+        await writeLoops(store); // #1497: targeted settings write, not full-store rewrite
 
         return NextResponse.json({ ok: true, cronJobId });
       }
@@ -916,7 +975,7 @@ export async function POST(request: NextRequest) {
         // Re-read store in case it changed, then update
         const freshStore = await readStore();
         updateLoopInStore(freshStore, loopId, { enabled: false, cronJobId: undefined });
-        await writeStore(freshStore);
+        await writeLoops(freshStore); // #1497: targeted settings write
 
         return NextResponse.json({ ok: true });
       }
@@ -946,7 +1005,7 @@ export async function POST(request: NextRequest) {
             console.error('cron.run error:', e?.message || e);
             const freshStore2 = await readStore();
             updateLoopInStore(freshStore2, loopId, { cronJobId: undefined });
-            await writeStore(freshStore2);
+            await writeLoops(freshStore2); // #1497: targeted settings write
             await fireOneShot(store, loop);
           }
         } else {
@@ -956,7 +1015,7 @@ export async function POST(request: NextRequest) {
         // Update lastRun
         const freshStore = await readStore();
         updateLoopInStore(freshStore, loopId, { lastRun: Date.now() });
-        await writeStore(freshStore);
+        await writeLoops(freshStore); // #1497: targeted settings write
 
         return NextResponse.json({ ok: true });
       }
@@ -1029,7 +1088,7 @@ export async function POST(request: NextRequest) {
               const newId = result?.id || result?.jobId || result?.job?.id;
               freshStore = await readStore();
               updateLoopInStore(freshStore, loop.id, { cronJobId: newId });
-              await writeStore(freshStore);
+              await writeLoops(freshStore); // #1497: targeted settings write
               synced++;
             } catch (e: any) {
               console.error(`Failed to recreate cron for loop ${loop.id}:`, e?.message || e);
@@ -1043,7 +1102,7 @@ export async function POST(request: NextRequest) {
             }
             freshStore = await readStore();
             updateLoopInStore(freshStore, loop.id, { cronJobId: undefined });
-            await writeStore(freshStore);
+            await writeLoops(freshStore); // #1497: targeted settings write
             synced++;
           }
         }
@@ -1453,21 +1512,36 @@ export async function POST(request: NextRequest) {
           loopCount: 0,
           loopPausedAt: undefined,
           loopPauseReason: undefined,
+          lastActivityAt: Date.now(),
         };
 
-        // Add system comment
-        const comments = store.tasks[idx].comments || [];
-        comments.push({
-          id: `sys-resume-${Date.now()}`,
-          author: 'System',
-          content: '✅ **Loop resumed** — loopCount reset to 0. Agent will be re-triggered on next scheduler cycle.',
-          createdAt: Date.now(),
-          type: 'system',
-        });
-        store.tasks[idx].comments = comments;
-        store.tasks[idx].lastActivityAt = Date.now();
-
-        await writeStore(store);
+        // #1497: targeted UPDATE + addComment via the provider — no full-store rewrite.
+        const provider = getStoreProviderAllWorkspaces();
+        try {
+          await provider.updateTask(taskId, {
+            loopCount: 0,
+            loopPausedAt: null,
+            loopPauseReason: null,
+            lastActivityAt: Date.now(),
+          });
+        } catch (e: any) {
+          console.error('[resume #1497] updateTask failed:', e?.message);
+          return NextResponse.json({ error: `updateTask failed: ${e?.message}` }, { status: 500 });
+        }
+        try {
+          await provider.addComment(
+            { kind: 'task', taskId },
+            {
+              id: `sys-resume-${Date.now()}-${taskId}`,
+              author: 'System',
+              content: '✅ **Loop resumed** — loopCount reset to 0. Agent will be re-triggered on next scheduler cycle.',
+              createdAt: Date.now(),
+              type: 'system',
+            },
+          );
+        } catch (e: any) {
+          console.warn('[resume #1497] addComment failed (non-fatal):', e?.message);
+        }
 
         // Re-trigger the agent
         const assignee = task.assignee;

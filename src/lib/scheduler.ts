@@ -625,16 +625,18 @@ async function getRecentDmInbox(agentId: string, agentName: string): Promise<str
 export async function clearConsumedHandoffs(taskIds: string[]): Promise<void> {
   if (taskIds.length === 0) return;
   try {
-    const store = await getStoreProviderAllWorkspaces().read();
-    let changed = false;
+    // #1497: targeted per-task UPDATEs instead of a full-store rewrite. The
+    // old code read the entire store, mutated tasks in-memory, then
+    // .write(store) — which DELETEs+INSERTs every task and races with
+    // concurrent updateTask flips. Use provider.updateTask(taskId, ...) to
+    // clear just devHandoff on the affected rows.
+    const provider = getStoreProviderAllWorkspaces();
+    const store = await provider.read();
     for (const t of store.tasks) {
       if (taskIds.includes(t.id) && t.devHandoff) {
-        delete t.devHandoff;
-        changed = true;
+        try { await provider.updateTask(t.id, { devHandoff: null }); }
+        catch (e: any) { console.warn(`clearConsumedHandoffs #1497 updateTask failed for ${t.id}:`, e?.message || e); }
       }
-    }
-    if (changed) {
-      await getStoreProviderAllWorkspaces().write(store);
     }
   } catch (e) {
     console.warn('clearConsumedHandoffs error:', e);
