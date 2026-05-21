@@ -1092,114 +1092,17 @@ async function initializePostgresListener() {
             } catch (e) {
               console.warn('[LISTEN] notify-comment bridge sync error:', e?.message || e);
             }
-            try {
-              const freshStore = await refreshCachedStore(changeEvent.workspace_id);
-              if (freshStore) {
-                const task = freshStore.tasks?.find(t => t.id === changeEvent.taskId);
-                // Look up by commentId if available, fall back to last comment
-                let comment;
-                if (changeEvent.commentId && task?.comments) {
-                  comment = task.comments.find(c => c.id === changeEvent.commentId);
-                }
-                if (!comment) {
-                  comment = task?.comments?.[task.comments.length - 1];
-                }
-                if (comment?.content && comment.mentions?.length > 0) {
-                  const teammates = freshStore.settings?.teammates || [];
-                  for (const mentionName of comment.mentions) {
-                    const tm = teammates.find(t =>
-                      t.name?.toLowerCase() === mentionName.toLowerCase() ||
-                      t.agentId?.toLowerCase() === mentionName.toLowerCase()
-                    );
-                    if (tm?.agentId && !tm.isHuman) {
-                      const msg = `\ud83d\udcac **${comment.author}** mentioned you on task: **${task.title}**\n\n> ${comment.content}\n\nTask ID: ${task.id}\n\n**Reply on the task, not in chat.** Call \`addComment\` against this task id so ${comment.author} sees your response on the ticket. Include @${comment.author} in your reply to notify them.`;
-                      try {
-                        // Route based on agent type: Hermes → /v1/runs, OpenClaw → rpc
-                        if (tm.agentId.startsWith('hermes-')) {
-                          // Resolve Hermes profile URL from filesystem
-                          const profileName = tm.agentId.replace('hermes-', '');
-                          let hermesUrl = process.env.HERMES_URL || 'http://127.0.0.1:8642';
-                          try {
-                            const hermesHome = join(process.env.HOME || '', '.hermes');
-                            const cfgPath = profileName === 'default' 
-                              ? join(hermesHome, 'config.yaml')
-                              : join(hermesHome, 'profiles', profileName, 'config.yaml');
-                            if (existsSync(cfgPath)) {
-                              const cfg = readFileSync(cfgPath, 'utf-8');
-                              const portMatch = cfg.match(/port:\s*(\d+)/);
-                              if (portMatch) hermesUrl = `http://127.0.0.1:${portMatch[1]}`;
-                            }
-                          } catch {}
-                          if (hermesUrl) {
-                            const runRes = await fetch(`${hermesUrl}/v1/runs`, {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ input: msg, session_id: `mention-${task.id}` }),
-                            });
-                            if (runRes.ok) {
-                              const runData = await runRes.json();
-                              console.log(`[LISTEN] Mention routed to Hermes ${mentionName}: run ${runData.run_id}`);
-                            } else {
-                              console.warn(`[LISTEN] Hermes mention dispatch failed: ${runRes.status}`);
-                            }
-                          }
-                        } else {
-                          // OpenClaw agent — inject mention text directly via chat.send so the
-                          // mention content actually lands in the agent's session, not just
-                          // a generic scheduler wake. (The scheduler trigger path dispatches
-                          // task-work prompts that ignore comment content, so mentions on
-                          // paused/blocked tasks were silently dropped before this fix.)
-                          let delivered = false;
-                          try {
-                            const chatRes = await fetch(`http://127.0.0.1:${port}/api/gateway`, {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({
-                                method: 'chat.send',
-                                params: {
-                                  sessionKey: `agent:${tm.agentId}:main`,
-                                  message: msg,
-                                  idempotencyKey: `mention-${comment.id}-${tm.agentId}`,
-                                },
-                              }),
-                            });
-                            if (chatRes.ok) {
-                              delivered = true;
-                              console.log(`[LISTEN] Mention delivered via chat.send: recipient=${mentionName} agentId=${tm.agentId} commentId=${comment.id}`);
-                            } else {
-                              console.warn(`[LISTEN] chat.send failed for ${mentionName}: HTTP ${chatRes.status}`);
-                            }
-                          } catch (chatErr) {
-                            console.warn(`[LISTEN] chat.send threw for ${mentionName}:`, chatErr.message);
-                          }
-
-                          // Also nudge the scheduler — harmless if the session is already
-                          // awake from chat.send, and ensures a wake even if chat.send was
-                          // best-effort-lost.
-                          const apiKey = process.env.ORG_STUDIO_API_KEY || '';
-                          const triggerHeaders = { 'Content-Type': 'application/json' };
-                          if (apiKey) triggerHeaders['Authorization'] = `Bearer ${apiKey}`;
-                          try {
-                            const triggerRes = await fetch(`http://127.0.0.1:${port}/api/scheduler`, {
-                              method: 'POST',
-                              headers: triggerHeaders,
-                              body: JSON.stringify({ action: 'trigger', agentId: tm.agentId }),
-                            });
-                            if (!triggerRes.ok && !delivered) {
-                              console.warn(`[LISTEN] Mention trigger failed for ${mentionName}: HTTP ${triggerRes.status}`);
-                            }
-                          } catch { /* best-effort */ }
-                        }
-                      } catch (e) {
-                        console.warn(`[LISTEN] Mention dispatch failed for ${mentionName}:`, e.message);
-                      }
-                    }
-                  }
-                }
-              }
-            } catch (e) {
-              console.warn('[LISTEN] Mention processing error:', e.message);
-            }
+            // #1513 — Legacy inline @mention dispatch removed. The /api/notify/comment
+            // bridge above (lines ~1071-1093) calls routeCommentNotifications() which
+            // handles mentions + assignee + version-owner + project-owner with a single
+            // gateway-level idempotency key. The legacy block used a different idem key
+            // (`mention-${id}-${agentId}` vs `notify-task-${id}-${agentId}`), causing
+            // gateway to deliver both as separate messages. This was the root cause of
+            // the multi-delivery pattern in #1513. The redundant scheduler `trigger`
+            // call that lived in the legacy block was also removed — chat.send to a
+            // live session already wakes the agent, and `sendToAgent()` (in
+            // src/lib/runtimes/registry.ts, used by the unified router) auto-routes
+            // `hermes-*` agentIds to the Hermes runtime.
           }
 
           // Process new task creation — trigger agent dispatch
