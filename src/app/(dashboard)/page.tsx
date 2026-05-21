@@ -15,147 +15,15 @@ const OnboardingWizard = dynamic(
   { ssr: false, loading: () => <div className="p-8 text-center text-[var(--text-muted)]">Loading…</div> }
 );
 
-// ─── SECTION 2: Team Activity ─────────────────────────────────────────────
-
-function TeamActivitySection({ teammates, activityStatuses, tasks, projects, selectedAgent, onAgentClick }: { teammates: Teammate[]; activityStatuses: Record<string, any>; tasks: any[]; projects: any[]; selectedAgent?: string | null; onAgentClick?: (name: string | null) => void; }) {
-  const now = Date.now();
-
-  // Build project lookup
-  const projectMap = useMemo(() => {
-    const map: Record<string, string> = {};
-    for (const p of projects) map[p.id] = p.name;
-    return map;
-  }, [projects]);
-
-  // Find last activity per agent from task history
-  const lastTaskActivity = useMemo(() => {
-    const result: Record<string, { timestamp: number; projectName: string }> = {};
-    for (const task of tasks) {
-      const assignee = (task.assignee || '').toLowerCase();
-      if (!assignee) continue;
-      // Use the most recent meaningful timestamp
-      const ts = task.completedAt || task.lastActivityAt || task.startedAt || task.createdAt || 0;
-      const tsNum = typeof ts === 'string' ? new Date(ts).getTime() : ts;
-      if (tsNum && (!result[assignee] || tsNum > result[assignee].timestamp)) {
-        result[assignee] = {
-          timestamp: tsNum,
-          projectName: projectMap[task.projectId] || '',
-        };
-      }
-    }
-    return result;
-  }, [tasks, projectMap]);
-
-  // Deduplicate teammates by agentId
-  const seen = new Set<string>();
-  const uniqueTeammates = teammates.filter((tm: Teammate) => {
-    if (!tm.agentId) return false;
-    const key = tm.agentId.toLowerCase();
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-  const agents = uniqueTeammates
-    .map((tm: Teammate) => {
-      const status = activityStatuses[tm.agentId.toLowerCase()];
-      const lastActive = status?.updatedAt || 0;
-      const isActive = now - lastActive < 60 * 60 * 1000; // 1 hour
-      
-      // Also count as active if agent has in-progress tasks
-      const hasInProgressTask = (tasks || []).some((t: any) => (
-        (t.assignee?.toLowerCase() === tm.name.toLowerCase() || 
-         t.assignee?.toLowerCase() === tm.agentId.toLowerCase()) && 
-        t.status === 'in-progress' && !t.isArchived
-      ));
-
-      // Also check task statusHistory for recent activity (works without activity-status API)
-      const nameKey = tm.name.toLowerCase();
-      const agentKey = tm.agentId.toLowerCase();
-      const recentTaskActivity = (tasks || []).some((t: any) => {
-        if (!t.statusHistory?.length) return false;
-        const assignee = (t.assignee || '').toLowerCase();
-        if (assignee !== nameKey && assignee !== agentKey) return false;
-        const lastEntry = t.statusHistory[t.statusHistory.length - 1];
-        return lastEntry?.timestamp && (now - lastEntry.timestamp < 60 * 60 * 1000);
-      });
-      
-      const isActiveWithTasks = isActive || hasInProgressTask || recentTaskActivity;
-      let statusDetail = status?.status || status?.detail || '';
-
-      // Generate status from in-progress task if no self-reported status
-      let derivedStatus = statusDetail;
-      if (!derivedStatus && hasInProgressTask) {
-        const ipTask = (tasks || []).find((t: any) => (
-          (t.assignee?.toLowerCase() === tm.name.toLowerCase() || 
-           t.assignee?.toLowerCase() === tm.agentId.toLowerCase()) && 
-          t.status === 'in-progress'
-        ));
-        if (ipTask) {
-          const taskTitle = ipTask.title?.length > 40 ? ipTask.title.slice(0, 40) + '…' : ipTask.title;
-          const projName = projectMap[ipTask.projectId] || '';
-          derivedStatus = projName ? `${taskTitle} · ${projName}` : taskTitle || 'Working on task';
-        }
-      }
-
-      // For idle agents, find their last task activity
-      const lastTask = lastTaskActivity[nameKey] || lastTaskActivity[agentKey];
-
-      return {
-        emoji: tm.emoji,
-        name: tm.name,
-        isActive: isActiveWithTasks,
-        statusDetail: derivedStatus,
-        lastTask,
-      };
-    })
-    .sort((a, b) => (a.isActive !== b.isActive ? (a.isActive ? -1 : 1) : a.name.localeCompare(b.name)));
-
-  return (
-    <div>
-      <h2 className="text-[var(--text-md)] font-semibold text-[var(--text-primary)] mb-3">Team Activity</h2>
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-        {agents.map((agent) => (
-          <div key={agent.name} onClick={() => onAgentClick?.(agent.name === selectedAgent ? null : agent.name)} className={clsx("bg-[var(--card)] border rounded-[var(--radius-md)] p-4 text-center hover:border-[var(--border-strong)] transition-all cursor-pointer", agent.name === selectedAgent ? "border-[var(--accent-primary)] ring-1 ring-[var(--accent-primary)]" : "border-[var(--border-default)]")}>
-            <div className="text-2xl mb-2">{agent.emoji}</div>
-            <p className="text-[var(--text-sm)] font-semibold text-[var(--text-primary)] truncate mb-1">{agent.name}</p>
-            <div className="flex items-center justify-center gap-1.5">
-              <span
-                className={clsx(
-                  'w-2 h-2 rounded-full shrink-0',
-                  agent.isActive ? 'bg-[var(--success)]' : 'bg-[var(--text-muted)]'
-                )}
-              />
-              <p className={clsx(
-                'text-[var(--text-xs)] truncate',
-                agent.isActive ? 'text-[var(--text-secondary)]' : 'text-[var(--text-muted)]'
-              )}>
-                {agent.isActive ? agent.statusDetail : (
-                  agent.lastTask ? formatLastActive(agent.lastTask.timestamp, agent.lastTask.projectName) : 'No activity yet'
-                )}
-              </p>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function formatLastActive(timestamp: number, projectName: string): string {
-  const diff = Date.now() - timestamp;
-  const minutes = Math.floor(diff / 60000);
-  const hours = Math.floor(minutes / 60);
-  const days = Math.floor(hours / 24);
-
-  let timeStr: string;
-  if (minutes < 1) timeStr = 'just now';
-  else if (minutes < 60) timeStr = `${minutes}m ago`;
-  else if (hours < 24) timeStr = `${hours}h ago`;
-  else if (days < 7) timeStr = `${days}d ago`;
-  else timeStr = new Date(timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-
-  return projectName ? `${timeStr} · ${projectName}` : timeStr;
-}
+// #1495 Bug 3 — Team Activity section removed from home per Basil 2026-05-21.
+// Section, TeamActivitySection component, formatLastActive helper, the
+// activityStatuses useWSData('activity-status') hook, and the selectedAgent
+// state are all gone. The hook is still used in context/team/
+// ProjectDashboardPage — confirmed safe to drop from home only. Full prior
+// body lives in git history (SHA 705eaf7^).
+// ActivityFeedSection still renders (Section 3 below) — it now shows the
+// unfiltered feed since there's no longer a click-to-filter surface on this
+// page.
 
 
 // ─── SECTION: Activity Feed ───────────────────────────────────────────────────
@@ -575,8 +443,8 @@ export default function HomePage() {
 
   const wsConnected = useWSConnected();
   const storeData = useWSData<any>('store');
-  const rawStatuses = useWSData<any>('activity-status');
-  const activityStatuses = rawStatuses?.statuses || rawStatuses || {};
+  // #1495 Bug 3 — dropped useWSData('activity-status') hook; was the only
+  // home-page consumer. Hook still used in context/team/ProjectDashboardPage.
 
   const teammates: Teammate[] = storeData?.settings?.teammates || [];
   const projects = storeData?.projects || [];
@@ -593,7 +461,9 @@ export default function HomePage() {
     (!missionStatement || missionStatement === DEFAULT_MISSION);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [storeLoaded, setStoreLoaded] = useState(false);
-  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+  // #1495 Bug 3 — selectedAgent state removed with TeamActivitySection. The
+  // only setter was the team-card click handler. ActivityFeedSection now
+  // shows the unfiltered feed (selectedAgent prop is optional).
 
   useEffect(() => {
     if (storeData && !storeLoaded) setStoreLoaded(true);
@@ -622,13 +492,10 @@ export default function HomePage() {
       {/* Section 1: Blockers */}
       <AttentionSection tasks={tasks} projects={projects} />
 
-      {/* Section 2: Team Activity */}
-      {teammates.length > 0 && (
-        <TeamActivitySection teammates={teammates} activityStatuses={activityStatuses} tasks={tasks} projects={projects} selectedAgent={selectedAgent} onAgentClick={setSelectedAgent} />
-      )}
+      {/* Section 2: Team Activity — removed per #1495 (Basil 2026-05-21) */}
 
       {/* Section 3: Activity Feed */}
-      <ActivityFeedSection selectedAgent={selectedAgent || undefined} tasks={tasks} projects={projects} />
+      <ActivityFeedSection tasks={tasks} projects={projects} />
 
       {/* Section 4: Active Projects */}
       {projects.length > 0 && (
