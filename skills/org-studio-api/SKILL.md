@@ -35,56 +35,32 @@ Org Studio uses **push-based triggers** — not polling. When work lands in an a
 
 ## Local Environment: Host Constraints (READ BEFORE BUILDING)
 
-This skill is shared across host machines. Some hosts have hardware constraints that forbid running full project builds locally. **Check your host before running heavy commands.**
+Deployments may run agents on hosts with hardware constraints that forbid running full project builds locally (thermal limits, low memory, shared CPU). **Check your runtime banner before running heavy commands.**
 
-### `hanktank` (older Mac Mini) — NO full local builds
+If the operator has declared host-level build constraints, they will appear in your runtime banner or in an operator-provided workspace note (e.g. `AGENTS.md`, `SOUL.md`, or a per-host skill overlay). Treat those constraints as authoritative.
 
-If your runtime banner says `host=hanktank`, you are running on an older Mac Mini that **thermal-shutdowns** when full builds peg all CPU cores. Full project builds/tests have crashed this machine in the past.
+**General pattern when local-build constraints apply:**
 
-**❌ Forbidden on hanktank:**
-- `next build`
-- `vitest` / `npm test` (full suite)
-- `tsc --noEmit` (full-project typecheck)
-- `eslint .` (full repo)
-- Any command that compiles, bundles, lints, or typechecks the entire project
-- Long-running `npm install` of large dependency trees while other CPU work is happening
+- **Allowed:** targeted single-file checks (`vitest run path/to/file`, `npx tsc --noEmit path/to/file.ts`, `eslint path/to/file`), `next dev` for manual verification, reading/writing/editing code, git operations, focused scripts, database queries.
+- **Avoid:** whole-project commands like `next build`, full `vitest` / `npm test`, full-project `tsc --noEmit`, full-repo `eslint .`, or anything that compiles/bundles/lints/typechecks the entire project at once.
+- **Preferred validation workflow:**
+  1. Make changes locally.
+  2. Run only targeted local checks against the files you touched.
+  3. Use `next dev` for manual verification when useful.
+  4. Push the branch.
+  5. Let GitHub Actions CI run the full build / test / typecheck.
+  6. Watch CI and fix from logs:
+     ```bash
+     git push origin <branch-name>
+     gh pr checks <pr-number> --watch       # if the branch has a PR
+     # or, for a non-PR branch:
+     gh run list --branch=<branch-name> --limit=1
+     gh run watch <run-id>
+     ```
+  7. If CI does not exist, **create or repair `.github/workflows/ci.yml`** rather than running a full local build as a substitute.
+- **Self-check before running a build-like command:** *Does it touch the whole project?* → avoid it under host constraints. *Does it touch one file/test/path?* → fine. *Unsure?* → push and let CI run it.
 
-**✅ Allowed on hanktank:**
-- Targeted single-file checks:
-  - `vitest run path/to/specific-test-file`
-  - `npx tsc --noEmit path/to/specific-file.ts`
-  - `eslint path/to/file`
-- `next dev` (incremental, single-threaded enough)
-- Reading, writing, searching, editing code
-- Git operations (`add`, `commit`, `push`, `log`, `diff`, etc.)
-- Small focused scripts
-- Database queries via `psql` / direct `pg` connections
-
-**Preferred validation workflow on hanktank:**
-
-1. Make changes locally.
-2. Run only **targeted** local checks against the files you touched.
-3. Use `next dev` for manual verification when useful.
-4. Push the branch.
-5. **Let GitHub Actions CI run the full build / test / typecheck.**
-6. Watch CI and fix failures from CI logs:
-   ```bash
-   git push origin <branch-name>
-   gh pr checks <pr-number> --watch       # if the branch already has a PR
-   # or, for a non-PR branch:
-   gh run list --branch=<branch-name> --limit=1
-   gh run watch <run-id>
-   ```
-7. If CI does not exist for the repo, **create or repair `.github/workflows/ci.yml`** rather than running a full local build as a substitute.
-
-**Self-check before running a build-like command on hanktank:**
-- Does it touch the whole project? → forbidden
-- Does it touch one file/test/path? → allowed
-- Unsure? → push and let CI run it
-
-### Other hosts
-
-If your `host=` banner is anything else (cloud runners, beefier dev boxes), the above restrictions don't apply — full local builds are fine. The forbidden-on-hanktank rule is hardware-specific, not policy-wide.
+If your deployment has **no** host constraints (cloud runners, beefier dev machines, dedicated CI hosts), the above is a recommendation but not a restriction — full local builds are fine.
 
 ## Quick Reference
 
