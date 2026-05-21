@@ -102,35 +102,32 @@ export class OpenClawRuntime implements AgentRuntime {
     if (!gatewayPortExplicit && inContainerOrStaging) {
       return undefined;
     }
+    // #1495 Bug 4 — was: fetch('http://127.0.0.1:${GATEWAY_PORT||4501}/api/gateway'.
+    // That hit Org Studio's OWN port (4501), not the Gateway (18789), and was
+    // auth-walled to boot — every call returned 401, getAgentMetadata silently
+    // returned undefined, no model stamped on Billy/Thelma comments. Trevor
+    // (Hermes runtime) worked because Hermes is filesystem-only and never hit
+    // this broken HTTP path.
+    //
+    // Fix: use the same WebSocket rpc() helper that every other server-side
+    // caller uses (gateway.ts, scheduler/route.ts, server.mjs). The WS is a
+    // singleton across requests in the Node process, doesn't need auth, and
+    // talks to the real Gateway URL from GATEWAY_URL env (ws://127.0.0.1:18789
+    // by default). The 1s timeout discipline from #1344 is preserved via
+    // Promise.race — AbortController has no clean WS surface so we race the
+    // call against a sleep.
+    const withTimeout = <T>(p: Promise<T>, ms: number, label: string): Promise<T | undefined> =>
+      Promise.race<T | undefined>([
+        p,
+        new Promise<undefined>((resolve) =>
+          setTimeout(() => {
+            console.warn(`[OpenClawRuntime.getAgentMetadata] ${label} timed out (${ms}ms) for ${agentId}`);
+            resolve(undefined);
+          }, ms),
+        ),
+      ]);
     try {
-      // #1344: 1-second AbortController on the Gateway round-trip.
-      // Use the HTTP route (same path resolveAgentModel used) rather
-      // than direct rpc() because the AbortController surface is
-      // simpler over fetch.
-      const port = process.env.GATEWAY_PORT || '4501';
-      const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(), 1000);
-      let resp: Response;
-      try {
-        resp = await fetch(`http://127.0.0.1:${port}/api/gateway`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ method: 'sessions.list', params: { limit: 50 } }),
-          signal: ac.signal,
-        });
-      } catch (e: any) {
-        if (e?.name === 'AbortError') {
-          console.warn(`[OpenClawRuntime.getAgentMetadata] gateway fetch timed out for ${agentId}`);
-        }
-        return undefined;
-      } finally {
-        clearTimeout(timer);
-      }
-      const data = await resp.json().catch(() => null);
-      if (!data) return undefined;
-      const sessions = Array.isArray(data.result)
-        ? data.result
-        : (data.result?.sessions || data.result?.items || []);
+      await withTimeout(connect(), 1000, 'gateway connect');
       // 1. Primary source: latest active session keyed `agent:<id>:main`
       //    with a `model` stamp. This is what the agent is ACTUALLY
       //    running right now (may be a fallback model the runtime
@@ -138,6 +135,14 @@ export class OpenClawRuntime implements AgentRuntime {
       //    pre-#1353 behavior of route.ts — doneWhen #8 says Mikey
       //    still stamps opus-4.7 even though his configured primary
       //    is gpt-5.5.
+      const sessionsResult = await withTimeout(
+        rpc('sessions.list', { limit: 50 }),
+        1000,
+        'sessions.list',
+      );
+      const sessions = Array.isArray(sessionsResult)
+        ? sessionsResult
+        : (sessionsResult?.sessions || sessionsResult?.items || []);
       const agentSession = sessions.find(
         (s: any) => s.key?.startsWith(`agent:${agentId}:`) && s.model,
       );
@@ -150,13 +155,8 @@ export class OpenClawRuntime implements AgentRuntime {
       //    Gateway restart). Honest degraded answer: "this is what
       //    the config DECLARES, lacking a live signal."
       try {
-        const agentsResp = await fetch(`http://127.0.0.1:${port}/api/gateway`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ method: 'agents.list' }),
-        });
-        const agentsData = await agentsResp.json().catch(() => null);
-        const agents = agentsData?.result?.agents || [];
+        const agentsResult = await withTimeout(rpc('agents.list'), 1000, 'agents.list');
+        const agents = agentsResult?.agents || [];
         const match = agents.find((a: any) => a?.id === agentId);
         const primary = match?.model?.primary;
         if (primary) return { model: primary };
