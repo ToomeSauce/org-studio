@@ -26,6 +26,20 @@ vi.mock('@/lib/gateway-rpc', () => ({
   rpc: vi.fn(async () => undefined),
 }));
 
+// #1513 — mock the Postgres-backed dedup so unit tests don't need a DB.
+// Tests can override tryClaim's return value per-case via mockTryClaim.
+const auditWrites: any[] = [];
+let mockTryClaim: (key: string, agentId: string, commentId: string, scope: string) => Promise<boolean> =
+  async () => true;
+vi.mock('@/lib/notification-dedup', () => ({
+  tryClaim: vi.fn((key: string, agentId: string, commentId: string, scope: string) =>
+    mockTryClaim(key, agentId, commentId, scope)
+  ),
+  writeAudit: vi.fn(async (entry: any) => {
+    auditWrites.push(entry);
+  }),
+}));
+
 import { routeCommentNotifications, _resetDedupCache } from './notification-router';
 import type { Teammate } from './mentions';
 
@@ -40,6 +54,8 @@ const baseTask = { id: 't-1', title: 'Test task', projectId: 'proj-org-studio', 
 
 beforeEach(() => {
   sentMessages.length = 0;
+  auditWrites.length = 0;
+  mockTryClaim = async () => true;
   _resetDedupCache();
 });
 
@@ -544,5 +560,190 @@ describe('#1513 — recency suppression (stale-on-arrival skip)', () => {
       },
     });
     expect(res.notified).toContain('mikey');
+  });
+});
+
+/**
+ * #1513 (Change B) — Postgres-backed durable dedup integration.
+ *
+ * The router now calls tryClaim(idempotencyKey, ...) on every candidate
+ * recipient. First claim wins; subsequent claims are suppressed with
+ * reason 'duplicate-pg'. This complements the in-process LRU (kept as a
+ * fast-path hint) and survives restarts, LRU resets, and multi-emitter
+ * races.
+ *
+ * Billy's repro: duplicate fire of source comment `cwfykbpwmpfshboi`
+ * arrived 10 min apart — right at the LRU's 10min boundary. Postgres
+ * dedup makes that case impossible regardless of LRU state.
+ */
+describe('#1513 — Postgres-backed durable dedup', () => {
+  it('first claim delivers, second claim with same idempotency key is suppressed', async () => {
+    sentMessages.length = 0;
+    auditWrites.length = 0;
+    // Simulate Postgres: first call true, every subsequent call false.
+    const claimed = new Set<string>();
+    mockTryClaim = async (key: string) => {
+      if (claimed.has(key)) return false;
+      claimed.add(key);
+      return true;
+    };
+
+    const params = {
+      comment: { id: 'dup-1', author: 'Basil', content: 'ping' },
+      scope: { kind: 'task' as const, taskId: baseTask.id },
+      teammates,
+      context: { task: baseTask },
+    };
+
+    const first = await routeCommentNotifications(params);
+    expect(first.notified).toContain('mikey');
+    expect(sentMessages.filter((m) => m.agentId === 'mikey').length).toBe(1);
+
+    // Simulate the cousin failure mode: a second emit path (or a LISTEN
+    // reconnect replay) fires for the same comment + recipient. Reset the
+    // LRU first so we're exercising the PG path, not the in-process hint.
+    _resetDedupCache();
+    const second = await routeCommentNotifications(params);
+    expect(second.notified).not.toContain('mikey');
+    expect(second.skipped.find((s) => s.agentId === 'mikey')?.reason).toBe('duplicate-pg');
+    // No new send — total stays at 1.
+    expect(sentMessages.filter((m) => m.agentId === 'mikey').length).toBe(1);
+  });
+
+  it('dedup survives LRU reset (Postgres remains authoritative)', async () => {
+    sentMessages.length = 0;
+    auditWrites.length = 0;
+    const claimed = new Set<string>();
+    mockTryClaim = async (key: string) => {
+      if (claimed.has(key)) return false;
+      claimed.add(key);
+      return true;
+    };
+
+    const params = {
+      comment: { id: 'dup-2', author: 'Basil', content: 'ping' },
+      scope: { kind: 'task' as const, taskId: baseTask.id },
+      teammates,
+      context: { task: baseTask },
+    };
+
+    await routeCommentNotifications(params);
+    expect(sentMessages.filter((m) => m.agentId === 'mikey').length).toBe(1);
+
+    // Simulate process restart / cache eviction by clearing the LRU.
+    _resetDedupCache();
+
+    // Postgres still holds the claim → second attempt MUST NOT deliver.
+    const second = await routeCommentNotifications(params);
+    expect(second.notified).not.toContain('mikey');
+    expect(second.skipped.find((s) => s.agentId === 'mikey')?.reason).toBe('duplicate-pg');
+    expect(sentMessages.filter((m) => m.agentId === 'mikey').length).toBe(1);
+  });
+
+  it('Postgres unavailable (tryClaim returns true fail-open) → delivery still happens, LRU prevents same-process duplicate', async () => {
+    sentMessages.length = 0;
+    // Fail-open: tryClaim always returns true (as if DATABASE_URL was unset).
+    mockTryClaim = async () => true;
+
+    const params = {
+      comment: { id: 'dup-3', author: 'Basil', content: 'ping' },
+      scope: { kind: 'task' as const, taskId: baseTask.id },
+      teammates,
+      context: { task: baseTask },
+    };
+
+    await routeCommentNotifications(params);
+    expect(sentMessages.filter((m) => m.agentId === 'mikey').length).toBe(1);
+
+    // Second call in same process: LRU catches it.
+    const second = await routeCommentNotifications(params);
+    expect(second.skipped.find((s) => s.agentId === 'mikey')?.reason).toBe('duplicate');
+    expect(sentMessages.filter((m) => m.agentId === 'mikey').length).toBe(1);
+  });
+});
+
+/**
+ * #1513 (Change D) — Structured audit table.
+ *
+ * Every dispatch decision (delivered + every skipped variant) writes one
+ * row to org_studio_notification_audit. The router calls writeAudit() with
+ * a stable shape: commentId, sourceCommentCreatedAt, recipientAgentId,
+ * scopeKind, reason, outcome, skipReason, sourceAgeMs.
+ *
+ * Tested at the router layer by asserting the mocked writeAudit captured
+ * the right entries.
+ */
+describe('#1513 — audit-row written per dispatch decision', () => {
+  it('writes a "delivered" audit row on successful notify', async () => {
+    auditWrites.length = 0;
+    await routeCommentNotifications({
+      comment: { id: 'aud-1', author: 'Basil', content: 'ping', createdAt: 1000 },
+      scope: { kind: 'task', taskId: baseTask.id },
+      teammates,
+      context: { task: baseTask },
+    });
+    const row = auditWrites.find((a) => a.recipientAgentId === 'mikey' && a.outcome === 'delivered');
+    expect(row).toBeTruthy();
+    expect(row.commentId).toBe('aud-1');
+    expect(row.sourceCommentCreatedAt).toBe(1000);
+    expect(row.scopeKind).toBe('task');
+    expect(row.reason).toBe('assignee');
+    expect(typeof row.sourceAgeMs).toBe('number');
+  });
+
+  it('writes a "skipped/stale-superseded" audit row when recency suppresses', async () => {
+    auditWrites.length = 0;
+    await routeCommentNotifications({
+      comment: { id: 'aud-2', author: 'Basil', content: 'ping', createdAt: 1000 },
+      scope: { kind: 'task', taskId: baseTask.id },
+      teammates,
+      context: {
+        task: baseTask,
+        recipientLastReplies: new Map([['mikey', 2000]]),
+      },
+    });
+    const row = auditWrites.find((a) => a.recipientAgentId === 'mikey');
+    expect(row).toBeTruthy();
+    expect(row.outcome).toBe('skipped');
+    expect(row.skipReason).toBe('stale-superseded');
+  });
+
+  it('writes a "skipped/duplicate-pg" audit row when Postgres dedup wins', async () => {
+    auditWrites.length = 0;
+    // tryClaim always returns false → simulate "already claimed in PG".
+    mockTryClaim = async () => false;
+    await routeCommentNotifications({
+      comment: { id: 'aud-3', author: 'Basil', content: 'ping', createdAt: 1000 },
+      scope: { kind: 'task', taskId: baseTask.id },
+      teammates,
+      context: { task: baseTask },
+    });
+    const row = auditWrites.find((a) => a.recipientAgentId === 'mikey');
+    expect(row).toBeTruthy();
+    expect(row.outcome).toBe('skipped');
+    expect(row.skipReason).toBe('duplicate-pg');
+  });
+
+  it('writes a "skipped/duplicate-lru" audit row when LRU fast-path wins', async () => {
+    auditWrites.length = 0;
+    // First call seeds LRU.
+    await routeCommentNotifications({
+      comment: { id: 'aud-4', author: 'Basil', content: 'ping' },
+      scope: { kind: 'task', taskId: baseTask.id },
+      teammates,
+      context: { task: baseTask },
+    });
+    auditWrites.length = 0;
+    // Second call: LRU catches it before PG.
+    await routeCommentNotifications({
+      comment: { id: 'aud-4', author: 'Basil', content: 'ping' },
+      scope: { kind: 'task', taskId: baseTask.id },
+      teammates,
+      context: { task: baseTask },
+    });
+    const row = auditWrites.find((a) => a.recipientAgentId === 'mikey');
+    expect(row).toBeTruthy();
+    expect(row.outcome).toBe('skipped');
+    expect(row.skipReason).toBe('duplicate-lru');
   });
 });

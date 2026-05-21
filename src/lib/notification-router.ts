@@ -16,6 +16,7 @@ import { rpc } from '@/lib/gateway-rpc';
 import { parseMentions, getProjectTeammateNames } from '@/lib/mentions';
 import type { Teammate, MentionMatch } from '@/lib/mentions';
 import type { CommentScope } from '@/lib/store';
+import { tryClaim, writeAudit } from '@/lib/notification-dedup';
 
 // ---------- Types ----------
 
@@ -124,9 +125,16 @@ export interface RouteResult {
 }
 
 // ---------- Dedup LRU ----------
+//
+// #1513 — In-process LRU is now a FAST-PATH HINT only. The authoritative
+// dedup happens in Postgres via notification-dedup.tryClaim(), which
+// survives restarts and is shared across emit paths. TTL bumped to 60min
+// (was 10min — that boundary was exactly where Billy's duplicate fire
+// landed). Keep the LRU to short-circuit the obvious burst-duplicate case
+// without a DB roundtrip.
 
 const DEDUP_MAX_SIZE = 1000;
-const DEDUP_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const DEDUP_TTL_MS = 60 * 60 * 1000; // 60 minutes (was 10; #1513)
 
 interface DedupEntry {
   timestamp: number;
@@ -446,9 +454,21 @@ export async function routeCommentNotifications(params: RouteParams): Promise<Ro
       continue;
     }
 
-    // Dedup check
+    // Dedup check (in-process LRU fast-path hint)
     if (isDuplicate(agentId, commentId)) {
       result.skipped.push({ agentId, reason: 'duplicate' });
+      // #1513 — audit even the LRU-suppressed case so we can see when the
+      // fast-path was actually firing vs. when Postgres caught it.
+      writeAudit({
+        commentId,
+        sourceCommentCreatedAt: comment.createdAt ?? null,
+        recipientAgentId: agentId,
+        scopeKind: scope.kind,
+        reason,
+        outcome: 'skipped',
+        skipReason: 'duplicate-lru',
+        sourceAgeMs: comment.createdAt ? Date.now() - comment.createdAt : null,
+      });
       continue;
     }
 
@@ -466,12 +486,44 @@ export async function routeCommentNotifications(params: RouteParams): Promise<Ro
         `sourceAge=${Date.now() - sourceCreatedAt}ms outcome=stale-superseded ` +
         `(recipient last reply at ${lastReply}, source at ${sourceCreatedAt})`
       );
+      writeAudit({
+        commentId,
+        sourceCommentCreatedAt: sourceCreatedAt,
+        recipientAgentId: agentId,
+        scopeKind: scope.kind,
+        reason,
+        outcome: 'skipped',
+        skipReason: 'stale-superseded',
+        sourceAgeMs: Date.now() - sourceCreatedAt,
+      });
       continue;
     }
 
     // Build message (template branches on the reason for task scope)
     const message = buildMessage(scope, comment, params.context, reason);
     const idempotencyKey = `notify-${scope.kind}-${commentId}-${agentId}`;
+
+    // #1513 — Postgres-backed durable dedup. INSERT ... ON CONFLICT DO
+    // NOTHING returns true only for the FIRST claim of this idempotency
+    // key, even across process restarts / LRU resets / multi-emitter races.
+    // Fail-open if Postgres is unavailable (caller's LRU still helps).
+    const claimed = await tryClaim(idempotencyKey, agentId, commentId, scope.kind);
+    if (!claimed) {
+      result.skipped.push({ agentId, reason: 'duplicate-pg' });
+      // Mirror to LRU so subsequent loops in this process don't re-query PG.
+      markNotified(agentId, commentId);
+      writeAudit({
+        commentId,
+        sourceCommentCreatedAt: sourceCreatedAt > 0 ? sourceCreatedAt : null,
+        recipientAgentId: agentId,
+        scopeKind: scope.kind,
+        reason,
+        outcome: 'skipped',
+        skipReason: 'duplicate-pg',
+        sourceAgeMs: sourceCreatedAt > 0 ? Date.now() - sourceCreatedAt : null,
+      });
+      continue;
+    }
 
     // Deliver
     const ok = await deliverToAgent(agentId, message, idempotencyKey);
@@ -491,6 +543,18 @@ export async function routeCommentNotifications(params: RouteParams): Promise<Ro
         `sourceAge=${Date.now() - sourceCreatedAt}ms outcome=${ok ? 'delivered' : 'failed'}`
       );
     }
+
+    // #1513 — audit row for the delivery decision (success or failure).
+    writeAudit({
+      commentId,
+      sourceCommentCreatedAt: sourceCreatedAt > 0 ? sourceCreatedAt : null,
+      recipientAgentId: agentId,
+      scopeKind: scope.kind,
+      reason,
+      outcome: ok ? 'delivered' : 'failed',
+      skipReason: ok ? null : 'delivery-failed',
+      sourceAgeMs: sourceCreatedAt > 0 ? Date.now() - sourceCreatedAt : null,
+    });
   }
 
   return result;

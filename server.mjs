@@ -2708,6 +2708,45 @@ server.listen(port, async () => {
       console.log('[HealthMonitor] Dead-letter backlog monitor started (5min tick)');
     }, 15_000);
 
+    // #1513 — Hourly prune of the Postgres-backed notification dedup +
+    // audit tables. Dedup rows >7d gone, audit rows >30d gone. Inlined here
+    // (vs. importing src/lib/notification-dedup.ts from this .mjs server)
+    // because server.mjs is plain ESM and the TS lib is Next-compiled.
+    const safeNotifyPrune = async () => {
+      const dbUrl = process.env.DATABASE_URL;
+      if (!dbUrl) return;
+      try {
+        const { default: pg } = await import('pg');
+        const client = new pg.Client({ connectionString: dbUrl });
+        await client.connect();
+        try {
+          const d = await client.query(
+            `DELETE FROM org_studio_notification_dedup WHERE delivered_at < NOW() - INTERVAL '7 days'`
+          );
+          const a = await client.query(
+            `DELETE FROM org_studio_notification_audit WHERE occurred_at < NOW() - INTERVAL '30 days'`
+          );
+          if ((d.rowCount || 0) + (a.rowCount || 0) > 0) {
+            console.log(`[notify-prune] dedup=${d.rowCount || 0} audit=${a.rowCount || 0} rows pruned`);
+          }
+        } finally {
+          await client.end();
+        }
+      } catch (e) {
+        // Tables may not exist yet (first start before any notify happens).
+        // notification-dedup.ts ensures schema lazily; this is a best-effort
+        // janitor and a missing table just means there's nothing to prune.
+        if (!/relation .* does not exist/.test(e?.message || '')) {
+          console.warn('[notify-prune] error (non-fatal):', e?.message || e);
+        }
+      }
+    };
+    setTimeout(() => {
+      safeNotifyPrune();
+      setInterval(safeNotifyPrune, 60 * 60_000);
+      console.log('[notify-prune] Hourly dedup+audit prune started');
+    }, 30_000);
+
     // LISTEN stale check (every 5 min — KISS cleanup: was 60s)
     const safeCheckListen = async () => {
       try { await checkListenStale(); } catch (e) {
