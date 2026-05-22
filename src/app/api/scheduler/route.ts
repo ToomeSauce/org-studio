@@ -222,6 +222,33 @@ async function detectAndIncrementLoops(store: StoreData, agentId: string): Promi
   // end instead of a full-store DELETE+INSERT (which races with task writes).
   const taskFieldUpdates: Array<{ id: string; updates: Record<string, any> }> = [];
 
+  // #1524: bulk-fetch comments once for every in-progress task owned by
+  // this agent, so the inner loop avoids N+1 listComments calls and we
+  // stop reading the soon-to-be-removed inline `task.comments[]` blob.
+  // Falls back to the inline blob on provider error / file-provider mode.
+  let commentsByTask: Map<string, any[]> = new Map();
+  try {
+    const provider = getStoreProviderAllWorkspaces() as any;
+    if (typeof provider.listCommentsForTasks === 'function') {
+      const candidateIds = store.tasks
+        .filter((t: any) => {
+          const assignee = (t.assignee || '').toLowerCase();
+          return (assignee === nameLower || assignee === agentId)
+            && t.status === 'in-progress'
+            && !t.loopPausedAt;
+        })
+        .map((t: any) => t.id);
+      if (candidateIds.length > 0) {
+        commentsByTask = await provider.listCommentsForTasks(candidateIds);
+      }
+    }
+  } catch (err: any) {
+    console.warn(
+      `[detectAndIncrementLoops #1524] bulk listCommentsForTasks failed; ` +
+      `falling back to inline blob: ${err?.message || err}`,
+    );
+  }
+
   for (let i = 0; i < store.tasks.length; i++) {
     const t = store.tasks[i];
     const assignee = (t.assignee || '').toLowerCase();
@@ -231,7 +258,10 @@ async function detectAndIncrementLoops(store: StoreData, agentId: string): Promi
 
     // Reset loop count if agent posted a non-system comment since last dispatch
     // (comments = progress, even without status change)
-    const lastComment = (t.comments || []).filter((c: any) =>
+    // #1524: prefer the bulk-fetched comments map (from
+    // listCommentsForTasks); fall back to the inline blob for legacy mode.
+    const commentsForTask = commentsByTask.get(t.id) ?? (t.comments || []);
+    const lastComment = (commentsForTask as any[]).filter((c: any) =>
       (c.author?.toLowerCase() === nameLower || c.author?.toLowerCase() === agentId) && c.type !== 'system'
     ).pop();
     const lastDispatchTime = t._lastDispatchedAt || 0;

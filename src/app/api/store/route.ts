@@ -172,8 +172,18 @@ async function writeStore(workspaceId: string, data: any) {
   return await getStoreProvider(workspaceId).write(data);
 }
 
-/** Check if a task is stuck and fire event-driven trigger if so. Piggyback detection. */
-function checkAndTriggerStuckTask(task: any, store: StoreData) {
+/** Check if a task is stuck and fire event-driven trigger if so. Piggyback detection.
+ *
+ * #1524 — was previously mutating `task.comments[]` on the in-memory
+ * snapshot, which was a dead write in Postgres mode (the inline JSONB
+ * column isn't included in updateTask's UPDATE plan, and the slim
+ * snapshot path strips it anyway). The stuck-task system comment was
+ * effectively never persisted in production. This now routes through
+ * `provider.addComment` so it lands in the normalized
+ * org_studio_comments table for real. The async path is fire-and-forget
+ * — we intentionally don't block the updateTask response on it.
+ */
+function checkAndTriggerStuckTask(task: any, store: StoreData, workspaceId: string) {
   const STUCK_THRESHOLD_MS = 2 * 60 * 60 * 1000; // 2 hours
   const now = Date.now();
   const status = (task.status || '').toLowerCase();
@@ -207,14 +217,35 @@ function checkAndTriggerStuckTask(task: any, store: StoreData) {
 
   // Post a system comment notifying about stuck status
   const hours = Math.round((now - lastActivity) / (60 * 60 * 1000));
-  if (!task.comments) task.comments = [];
-  task.comments.push({
+  const systemComment = {
     id: Math.random().toString(36).slice(2, 10) + Date.now().toString(36),
     createdAt: now,
     author: 'System',
     content: `⏱️ **Task stuck** — in ${status} for ${hours}+ hours. Triggering agent to resume.`,
-    type: 'system',
-  });
+    type: 'system' as const,
+  };
+
+  // #1524: write through the provider so the comment lands in the
+  // normalized table (and triggers comment_added NOTIFY for the
+  // notification bridge). Fire-and-forget; failures log but don't block.
+  (async () => {
+    try {
+      const provider = getStoreProvider(workspaceId) as any;
+      if (typeof provider.addComment === 'function') {
+        await provider.addComment(
+          { kind: 'task', taskId: task.id },
+          systemComment,
+        );
+      } else {
+        // File-provider fallback: keep the inline mutation so legacy mode
+        // doesn't silently drop the comment.
+        if (!task.comments) task.comments = [];
+        task.comments.push(systemComment);
+      }
+    } catch (err: any) {
+      console.error(`[stuck-task #1524] addComment failed for ${task.id}: ${err?.message || err}`);
+    }
+  })();
 
   // Fire event-driven trigger (same as triggerAgentLoop)
   (async () => {
@@ -515,15 +546,38 @@ export async function GET(req: NextRequest) {
     // #1492 — teammates roster passed to STOP-window detector so it can
     // identify authority authors (humans + role=qa).
     const teammates = (data.settings as any)?.teammates || [];
+
+    // #1524 — bulk-fetch comments for STOP-window detection in a single
+    // windowed query, instead of reading the soon-to-be-removed inline
+    // task.comments[] blob per task. Falls back to the inline blob on
+    // provider error or file-provider mode (which still dual-writes today).
+    let stopCommentsByTask: Map<string, any[]> | undefined;
+    try {
+      const provider = getStoreProvider(workspace.id) as any;
+      if (typeof provider.listCommentsForTasks === 'function') {
+        const taskIds = filteredTasks.map((t: any) => t.id).filter((id: any) => typeof id === 'string');
+        if (taskIds.length > 0) {
+          stopCommentsByTask = await provider.listCommentsForTasks(taskIds);
+        }
+      }
+    } catch (err: any) {
+      console.warn(
+        `[store-slim #1524] bulk listCommentsForTasks failed; ` +
+        `falling back to inline blob for STOP-window check: ${err?.message || err}`,
+      );
+    }
+
     const slimTasks = filteredTasks.map((t: any) => {
-      const comments = Array.isArray(t.comments) ? t.comments : [];
+      const inlineComments = Array.isArray(t.comments) ? t.comments : [];
+      // Prefer the bulk-fetched comments list when available; fall back to
+      // the inline blob so file-provider mode and the error path keep
+      // working unchanged.
+      const commentsForStop = stopCommentsByTask?.get(t.id) ?? inlineComments;
       const { comments: _stripped, ...rest } = t;
-      // Held-by-human STOP detection runs against the inline comments blob
-      // (still dual-written per #1294/#1295 plan). Once #1295 drops the
-      // column, switch to fetching from org_studio_comments here.
+      // Held-by-human STOP detection.
       const hold = isTaskHeldByHumanStop(
         { id: t.id, assignee: t.assignee },
-        comments,
+        commentsForStop,
         teammates,
       );
       const heldByHuman = hold.held
@@ -534,7 +588,12 @@ export async function GET(req: NextRequest) {
             commentId: hold.stopCommentId,
           }
         : undefined;
-      return { ...rest, commentCount: comments.length, heldByHuman };
+      // commentCount uses the bulk-fetched length when available; the inline
+      // length is still accurate as long as the dual-write is in place
+      // (Phase 2b / #1294 removes that). After #1294, this branch becomes
+      // the only source.
+      const count = stopCommentsByTask?.get(t.id)?.length ?? inlineComments.length;
+      return { ...rest, commentCount: count, heldByHuman };
     });
 
     const filteredData = {
@@ -1262,7 +1321,7 @@ export async function POST(req: NextRequest) {
 
           store.tasks[i] = updated;
           // Piggyback stuck-task detection: check if this updated task is now stuck
-          checkAndTriggerStuckTask(updated, store);
+          checkAndTriggerStuckTask(updated, store, workspace.id);
           
           // PERF: Use targeted provider.updateTask() instead of full store write.
           // #948: wrap in try/catch so silent provider failures surface as 500 instead
