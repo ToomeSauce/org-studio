@@ -806,13 +806,80 @@ export function clearInFlightAgent(agentId: string) {
   bridgeClearInFlight(agentId);
 }
 
-async function fireOneShot(store: StoreData, loop: AgentLoop): Promise<string | undefined> {
+/**
+ * #1521 — Tagged dispatch source. Threads from each `fireOneShot` call
+ * site to the in-function diagnostic line so we can attribute a stale
+ * dispatch to a specific path:
+ *   primary       — case 'trigger' in this route (event-driven, addTask,
+ *                   watchdog, manual press; all funnel through this path).
+ *   watchdog      — reserved for future direct invocation (today the
+ *                   watchdog hits `case 'trigger'`, so it's tagged
+ *                   'primary'). Kept in the union so a future direct call
+ *                   site doesn't fall back to silent 'manual'.
+ *   sweep         — periodic sweep loops (backlog-orphan, stuck-in-progress).
+ *   cron-retry    — inline retry after enqueueOutbox failure.
+ *   cron-fallback — fallback when an existing cron job is missing.
+ *   resume        — re-trigger after a comment-driven resume.
+ *   manual        — explicit human/CLI trigger of fireOneShot.
+ */
+type FireOneShotSource =
+  | 'primary'
+  | 'watchdog'
+  | 'sweep'
+  | 'cron-retry'
+  | 'cron-fallback'
+  | 'resume'
+  | 'manual';
+
+async function fireOneShot(
+  _staleStore: StoreData,
+  loop: AgentLoop,
+  source: FireOneShotSource = 'manual',
+): Promise<string | undefined> {
+  // #1521 — ALWAYS re-read the store right before composing the dispatch
+  // message. The caller's `_staleStore` argument is intentionally ignored:
+  // we keep the parameter to avoid churning 7 call sites in this PR, but
+  // the fresh snapshot below is the only one we feed to buildDispatchMessage.
+  //
+  // Why: prior to this refactor, only the primary `case 'trigger'` path
+  // re-read the store (the #1515 fix from 2026-05-21). The other 6 call
+  // sites (cron-retry, cron-fallback, sweep×2, resume, manual retries)
+  // passed whatever stale `store` snapshot was sitting in scope from
+  // many seconds earlier. The diagnostic was also outside the function,
+  // so a stale-snapshot dispatch from a non-primary path produced no
+  // `[dispatch #1515]` log line — making the bug invisible by
+  // construction. Pushing both the freshness re-read AND the diagnostic
+  // INSIDE this function means every path benefits, every path is logged.
+  const readStartedAt = Date.now();
+  const store = await readStore();
+  const readMs = Date.now() - readStartedAt;
+
   const agentName = getAgentName(store, loop.agentId);
   const agentRole = getAgentRole(store, loop.agentId);
 
+  // #1521 — fingerprint actionable / awareness-only ticket states for
+  // this agent at the snapshot we're about to dispatch from. Cheap;
+  // computed once per dispatch.
+  const nameLower = (agentName || '').toLowerCase();
+  const agentIdLower = (loop.agentId || '').toLowerCase();
+  const agentTicketStatuses = (store.tasks || [])
+    .filter((t: any) => {
+      const a = (t.assignee || '').toLowerCase();
+      if (!(a === nameLower || a === agentIdLower) || t.isArchived) return false;
+      // 'done'/'planning' aren't dispatched so they're noise here.
+      return ['in-progress', 'backlog', 'qa', 'blocked'].includes(t.status);
+    })
+    .map((t: any) => `${t.ticketNumber ?? '?'}:${t.status}`)
+    .slice(0, 20)
+    .join(',');
+  console.info(
+    `[dispatch #1515 src=${source}] agent=${loop.agentId} ` +
+      `readMs=${readMs} tickets=[${agentTicketStatuses}]`,
+  );
+
   // Prevent duplicate dispatch if agent is already in-flight
   if (isInFlight(loop.agentId)) {
-    console.log(`[Dispatch] skipping ${agentName} — already in-flight`);
+    console.log(`[Dispatch src=${source}] skipping ${agentName} — already in-flight`);
     return undefined;
   }
 
@@ -902,7 +969,7 @@ async function fireOneShot(store: StoreData, loop: AgentLoop): Promise<string | 
         try {
           const freshStore = await readStore();
           const freshLoop = { ...loop, _retryCount: retryCount + 1 } as any;
-          await fireOneShot(freshStore, freshLoop);
+          await fireOneShot(freshStore, freshLoop, 'cron-retry');
         } catch (retryErr: any) {
           console.warn(`fireOneShot: retry ${retryCount + 1} failed for ${agentName}:`, retryErr?.message);
         }
@@ -1036,10 +1103,10 @@ export async function POST(request: NextRequest) {
             const freshStore2 = await readStore();
             updateLoopInStore(freshStore2, loopId, { cronJobId: undefined });
             await writeLoops(freshStore2); // #1497: targeted settings write
-            await fireOneShot(store, loop);
+            await fireOneShot(store, loop, 'cron-fallback');
           }
         } else {
-          await fireOneShot(store, loop);
+          await fireOneShot(store, loop, 'cron-fallback');
         }
 
         // Update lastRun
@@ -1294,37 +1361,15 @@ export async function POST(request: NextRequest) {
         // enqueue itself failed. Propagate that distinction so callers (and
         // the heartbeat watchdog) can tell a real dispatch from a fizzle.
         //
-        // #1515: re-read the store immediately before composing the dispatch
-        // summary. The outer `store` snapshot above (line ~1119) is now
-        // potentially stale because the lease sweep (line ~1228) can mutate
-        // task statuses (auto-bounce expired in-progress claims back to
-        // backlog), and the loop-detect path can pause stalled tasks. Without
-        // this fresh read, buildDispatchMessage tells the agent "resume
-        // in-progress: #X" when #X was just bounced to backlog by the sweep
-        // — the exact stale-claim symptom Billy reported on c0o2vy4qmpft88uu.
-        // Snapshot-at-delivery > snapshot-at-trigger.
-        const dispatchStoreReadAt = Date.now();
-        const dispatchStore = await readStore();
-        const snapshotAgeMs = Date.now() - dispatchStoreReadAt;
-        // Tiny ticket-status fingerprint for the diagnostic log (per ticket id
-        // for this agent). Cheap; only computed once per dispatch fire.
-        const nameLower = (agentName || '').toLowerCase();
-        const agentTicketStatuses = (dispatchStore.tasks || [])
-          .filter((t: any) => {
-            const a = (t.assignee || '').toLowerCase();
-            if (!(a === nameLower || a === agentId) || t.isArchived) return false;
-            // Only fingerprint actionable / visible-in-dispatch buckets;
-            // 'done'/'planning' aren't dispatched so they're noise here.
-            return ['in-progress', 'backlog', 'qa', 'blocked'].includes(t.status);
-          })
-          .map((t: any) => `${t.ticketNumber ?? '?'}:${t.status}`)
-          .slice(0, 20)
-          .join(',');
-        console.info(
-          `[dispatch #1515] agent=${agentId} readMs=${snapshotAgeMs} ` +
-            `outerStoreAge=${Date.now() - now}ms tickets=[${agentTicketStatuses}]`,
-        );
-        const sessionKey = await fireOneShot(dispatchStore, loop);
+        // #1521 — fireOneShot itself now re-reads the store immediately
+        // before composing the dispatch summary, and emits the diagnostic
+        // log line tagged with the source path. The outer per-handler
+        // re-read + diagnostic block (added by #1515 and lived here as
+        // ~25 lines) is gone: the in-function version covers EVERY
+        // call site instead of only this one, which is the whole point
+        // of #1521. Keep `recordTrigger` outside (cooldown bookkeeping
+        // only — doesn't need fresh task state).
+        const sessionKey = await fireOneShot(store, loop, 'primary');
         if (!sessionKey) {
           return recordAndReturn(
             {
@@ -1419,7 +1464,7 @@ export async function POST(request: NextRequest) {
               lastTriggerByAgent[agentId] = now;
               recordTrigger(agentId, now);
               try {
-                await fireOneShot(store, loop);
+                await fireOneShot(store, loop, 'sweep');
                 swept.push({ agentId, reason: `${backlogTasks.length} backlog orphan(s)`, triggered: true });
               } catch {
                 swept.push({ agentId, reason: `${backlogTasks.length} backlog orphan(s)`, triggered: false });
@@ -1453,7 +1498,7 @@ export async function POST(request: NextRequest) {
               lastTriggerByAgent[agentId] = now2;
               recordTrigger(agentId, now2);
               try {
-                await fireOneShot(store, loop);
+                await fireOneShot(store, loop, 'sweep');
                 swept.push({ agentId, reason: `${stuckTasks.length} stuck in-progress task(s)`, triggered: true });
               } catch {
                 swept.push({ agentId, reason: `${stuckTasks.length} stuck in-progress task(s)`, triggered: false });
@@ -1611,7 +1656,7 @@ export async function POST(request: NextRequest) {
           const loop = getLoopByAgent(store, agentId);
           if (loop) {
             try {
-              await fireOneShot(store, loop);
+              await fireOneShot(store, loop, 'resume');
             } catch (e: any) {
               console.warn('resume: trigger failed:', e?.message);
             }
