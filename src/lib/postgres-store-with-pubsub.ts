@@ -105,6 +105,17 @@ export class PostgresStoreProviderWithPubSub implements StoreProvider {
     return [];
   }
 
+  async listCommentsForTasks(taskIds: string[], opts?: { limit?: number; before?: number }): Promise<Map<string, any[]>> {
+    if (typeof (this.baseProvider as any).listCommentsForTasks === 'function') {
+      return (this.baseProvider as any).listCommentsForTasks(taskIds, opts);
+    }
+    // Fallback for non-Postgres providers — seed empties so callers can
+    // blindly `.get(id) || []` without checking has().
+    const out = new Map<string, any[]>();
+    for (const id of taskIds || []) out.set(id, []);
+    return out;
+  }
+
   async listDmThreads(forAgent?: string): Promise<any[]> {
     if (typeof (this.baseProvider as any).listDmThreads === 'function') {
       return (this.baseProvider as any).listDmThreads(forAgent);

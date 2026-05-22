@@ -113,8 +113,20 @@ function isHumanAuthor(author: string, teammates?: Array<{ name: string; agentId
 /**
  * SIGNAL 1: Silent Autonomy
  * Agent completed N tasks (N >= 3) in a row without any human comments
+ *
+ * #1524 — `commentsByTask` is the bulk-prefetched comments map, keyed by
+ * task id (ASC order per task). Callers should pre-fetch via
+ * `provider.listCommentsForTasks(taskIds)` once per detection cycle and
+ * pass the same map to every detector. If the map is undefined (e.g.
+ * file-provider mode), we fall back to the legacy inline `task.comments[]`
+ * blob.
  */
-function detectSilentAutonomy(tasks: Task[], agentName: string, teammates?: Array<{ name: string; agentId: string; isHuman?: boolean }>): DetectedSignal | null {
+function detectSilentAutonomy(
+  tasks: Task[],
+  agentName: string,
+  teammates?: Array<{ name: string; agentId: string; isHuman?: boolean }>,
+  commentsByTask?: Map<string, any[]>,
+): DetectedSignal | null {
   const doneTasks = tasks
     .filter(t => t.assignee === agentName && t.status === 'done' && !t.isArchived)
     .sort((a, b) => (b.lastActivityAt || b.createdAt) - (a.lastActivityAt || a.createdAt));
@@ -124,7 +136,8 @@ function detectSilentAutonomy(tasks: Task[], agentName: string, teammates?: Arra
   // Check the last 3 done tasks - are they all without human comments?
   const lastN = doneTasks.slice(0, 3);
   const allAutonomous = lastN.every(task => {
-    const hasHumanComment = (task.comments || []).some(c => isHumanAuthor(c.author, teammates));
+    const comments = commentsByTask?.get(task.id) ?? (task.comments || []);
+    const hasHumanComment = (comments as any[]).some((c: any) => isHumanAuthor(c.author, teammates));
     return !hasHumanComment;
   });
 
@@ -558,8 +571,17 @@ function detectScopeCreep(tasks: Task[], projects: Project[]): DetectedSignal[] 
 /**
  * Main detection function
  * Runs all detectors and returns list of suggested signals
+ *
+ * #1524 — `commentsByTask` lets callers pass a pre-fetched comments map
+ * (from `provider.listCommentsForTasks(taskIds)`) so detectors that need
+ * comments don't have to read the stale inline blob. When omitted, the
+ * detectors fall back to `task.comments[]` for the file-provider mode
+ * and legacy tests.
  */
-export async function detectSignals(store: StoreData): Promise<DetectedSignal[]> {
+export async function detectSignals(
+  store: StoreData,
+  commentsByTask?: Map<string, any[]>,
+): Promise<DetectedSignal[]> {
   const { tasks = [], projects = [] } = store;
   const teammates = store.teammates || store.settings?.teammates || [];
   const signals: DetectedSignal[] = [];
@@ -573,7 +595,7 @@ export async function detectSignals(store: StoreData): Promise<DetectedSignal[]>
 
   // POSITIVE SIGNALS: Run per registered agent
   for (const agentName of agentNames) {
-    const silentAuto = detectSilentAutonomy(tasks, agentName, teammates);
+    const silentAuto = detectSilentAutonomy(tasks, agentName, teammates, commentsByTask);
     if (silentAuto) signals.push(silentAuto);
 
     const cleanSprint = detectCleanSprint(tasks, agentName, projects);
