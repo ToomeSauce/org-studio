@@ -35,6 +35,14 @@ import {
   recordSweep,
   setTriggerCooldownMs,
 } from '@/lib/scheduler-state';
+// #1526 — Request-scoped store-read memoization for `case 'trigger'`.
+// Lets the trigger handler share one cached snapshot across the read-only
+// stretch (top → cooldown → loop lookup → actionable-work check →
+// pre-sweep) while still calling `.refresh()` between mutations so the
+// #1515 freshness contract holds. Only wired into the trigger case for
+// now — sync/runNow/disable do interleaved write→read inside loops where
+// memoization is unsafe. See ticket #1526 for the audit table.
+import { createMemoizedStoreReader } from '@/lib/memoized-store-reader';
 // #1352 slice 5: pure decision helpers. Logic mirrors what was inlined in
 // this file; importing them keeps route.ts in sync with the test suite
 // (src/lib/claim-contract.test.ts) so the contract can't silently drift.
@@ -1213,7 +1221,12 @@ export async function POST(request: NextRequest) {
         const { agentId } = body;
         if (!agentId) return NextResponse.json({ error: 'Missing agentId' }, { status: 400 });
 
-        const store = await readStore();
+        // #1526 — Shared memoized reader for this trigger invocation.
+        // Every `.read(label)` in this case body goes through `reader`.
+        // Between writes we call `reader.refresh()` to drop the cache so the
+        // next read fetches a fresh snapshot (preserving #1515 freshness).
+        const reader = createMemoizedStoreReader();
+        const store = await reader.read('trigger-top');
         // #1184: classify the trigger source so the dispatch-health view can
         // tell addTask hooks from sweeps from manual presses. Caller is
         // responsible for tagging; default to 'manual' (safe assumption —
@@ -1316,7 +1329,11 @@ export async function POST(request: NextRequest) {
         // dispatch to this very agent) on the next read. Best-effort —
         // any failure here must NOT block the dispatch path below.
         try {
-          const sweepStore = await readStore();
+          // #1526: cache HIT — between trigger-top and here we did only
+          // read-only checks (cooldown, loop lookup, hasActionableWork). The
+          // sweepStore can safely use the cached snapshot. After sweep
+          // writes, we `.refresh()` so the next read is fresh.
+          const sweepStore = await reader.read('trigger-pre-sweep');
           const sweepResult = await sweepExpiredLeases(sweepStore);
           if (sweepResult.bounced > 0 || sweepResult.skippedInactive > 0 || sweepResult.escalated > 0) {
             console.info(
@@ -1330,15 +1347,24 @@ export async function POST(request: NextRequest) {
 
         // Loop detection (#1138 v2): time-based stall detection only.
         // (Old stale-claim arm replaced by sweepExpiredLeases above — #1352.)
-        const freshStore = await readStore();
+        // #1526: sweep above may have written (lease bounces / level-3
+        // disables). Force a fresh read here so detectAndIncrementLoops
+        // sees the post-sweep state. This is the original #1515 contract.
+        reader.refresh();
+        const freshStore = await reader.read('trigger-post-sweep');
         const { stalled, incremented } = await detectAndIncrementLoops(freshStore, agentId);
 
         if (stalled.length > 0) {
           // Pause stalled tasks and send alerts instead of firing another loop
-          await pauseStalledTasks(await readStore(), agentId, stalled);
+          // #1526: detectAndIncrementLoops wrote loopCount updates above;
+          // refresh before pauseStalledTasks reads.
+          reader.refresh();
+          await pauseStalledTasks(await reader.read('trigger-pre-pause'), agentId, stalled);
           
           // Check if there's still non-paused actionable work
-          const postPauseStore = await readStore();
+          // #1526: pauseStalledTasks wrote loopPausedAt; refresh again.
+          reader.refresh();
+          const postPauseStore = await reader.read('trigger-post-pause');
           if (!hasActionableWork(postPauseStore, agentId)) {
             return recordAndReturn(
               { 
