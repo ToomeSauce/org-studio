@@ -207,14 +207,14 @@ describe('bounceLeaseLevel3 — write-lost (the #1487 bug pattern)', () => {
         return writeAttempts;
       },
       read: async () => ({ tasks: [{ ...stored }] }),
-      updateTask: async (id, updates) => {
+      updateTask: async (id: string, updates: Partial<Task>) => {
         writeAttempts++;
         // Returns "success" but doesn't actually persist on the first
         // `failCount` calls — exactly the silent-loss pattern.
         if (writeAttempts <= failCount) {
-          return { id, ...stored, ...updates }; // optimistic-merged shape
+          return { ...stored, ...updates, id }; // optimistic-merged shape
         }
-        stored = { ...stored, ...updates };
+        stored = { ...stored, ...updates, id };
         return stored;
       },
     } as any;
