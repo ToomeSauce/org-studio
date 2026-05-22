@@ -533,18 +533,40 @@ export class PostgresStoreProvider implements StoreProvider {
     const pool = await this.getPool();
     const client = await pool.connect();
     try {
-      const projectsResult = await client.query(
-        'SELECT * FROM org_studio_projects WHERE workspace_id = $1 ORDER BY created_at',
-        [this.workspaceId]
-      );
-      const tasksResult = await client.query(
-        'SELECT * FROM org_studio_tasks WHERE workspace_id = $1 ORDER BY created_at',
-        [this.workspaceId]
-      );
-      const settingsResult = await client.query(
-        'SELECT data FROM org_studio_settings WHERE id = $1 AND workspace_id = $2',
-        ['default', this.workspaceId]
-      );
+      // #1520 — build a slim task SELECT that excludes the inline `comments`
+      // JSONB column. Per the column-size audit on prod-shape data, that
+      // single column was 66% of every read payload (5977 KB out of 9093 KB
+      // for 1366 tasks). After #1524, every server-side reader fetches
+      // comments via `listComments` / `listCommentsForTasks` from the
+      // normalized `org_studio_comments` table, so we no longer need to
+      // ship the inline blob over the wire. The dual-write (until #1294)
+      // keeps the column populated for rollback; #1295 drops it.
+      //
+      // Use a column subset for BOTH the SELECT and the rowToObject
+      // reconstruction — the latter would otherwise default the missing
+      // typed field to `[]` and stamp it onto every task, which is wasted
+      // bytes and would shadow any stale `data.comments` overflow.
+      const READ_TASK_COLUMNS = TASK_COLUMNS.filter((c) => c.col !== 'comments');
+      const TASK_SELECT_COLS = READ_TASK_COLUMNS.map((c) => c.col).join(', ');
+
+      // #1520 — parallelize the three independent table reads. Was 3
+      // serial round-trips (projects → tasks → settings), now one
+      // Promise.all. hydrateComponentVersions runs after we have the
+      // project rows since it depends on the project id list.
+      const [projectsResult, tasksResult, settingsResult] = await Promise.all([
+        client.query(
+          'SELECT * FROM org_studio_projects WHERE workspace_id = $1 ORDER BY created_at',
+          [this.workspaceId],
+        ),
+        client.query(
+          `SELECT ${TASK_SELECT_COLS} FROM org_studio_tasks WHERE workspace_id = $1 ORDER BY created_at`,
+          [this.workspaceId],
+        ),
+        client.query(
+          'SELECT data FROM org_studio_settings WHERE id = $1 AND workspace_id = $2',
+          ['default', this.workspaceId],
+        ),
+      ]);
 
       const projects = projectsResult.rows.map((row: any) => this.reconstructProject(row));
 
@@ -559,7 +581,7 @@ export class PostgresStoreProvider implements StoreProvider {
       // are preserved (manual edits / legacy data).
       await this.hydrateComponentVersions(client, projects);
 
-      const tasks = tasksResult.rows.map((row: any) => this.reconstructTask(row));
+      const tasks = tasksResult.rows.map((row: any) => rowToObject(row, READ_TASK_COLUMNS));
       const rawSettings = settingsResult.rows[0]?.data;
       const settings = rawSettings
         ? (typeof rawSettings === 'string' ? JSON.parse(rawSettings) : rawSettings)
