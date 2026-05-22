@@ -494,9 +494,30 @@ export class PostgresStoreProvider implements StoreProvider {
       this.pool = new Pool({
         connectionString: this.connectionString,
         max: 10,
+        min: 1, // #1528: keep one connection warm so the first request of
+                // the burst doesn't pay the TLS+auth handshake cost (~500ms).
       });
     }
     return this.pool;
+  }
+
+  /**
+   * #1528: prewarm the pool so the first read after app start doesn't pay
+   * the cold TLS+auth handshake cost. Safe to call multiple times; cheap
+   * if the pool is already populated. Designed to be invoked at app boot
+   * from server.mjs / next.config bootstrap, but `read()` is the only
+   * mandatory entry point so missing prewarm degrades gracefully.
+   */
+  async prewarm(): Promise<void> {
+    const pool = await this.getPool();
+    try {
+      const c = await pool.connect();
+      try { await c.query('SELECT 1'); } finally { c.release(); }
+    } catch (e: any) {
+      // Don't block app start on a transient DB hiccup. The next real read
+      // will surface any persistent failure.
+      console.warn('[prewarm] PostgresStoreProvider warmup failed (non-fatal):', e?.message || e);
+    }
   }
 
   /**
@@ -551,9 +572,17 @@ export class PostgresStoreProvider implements StoreProvider {
 
       // #1520 — parallelize the three independent table reads. Was 3
       // serial round-trips (projects → tasks → settings), now one
-      // Promise.all. hydrateComponentVersions runs after we have the
-      // project rows since it depends on the project id list.
-      const [projectsResult, tasksResult, settingsResult] = await Promise.all([
+      // Promise.all.
+      //
+      // #1528 — also fold the roadmap-versions hydration query into the
+      // parallel batch. The original implementation ran it as a 4th
+      // SERIAL query after the projects rows arrived, costing 80-110ms.
+      // The hydration query only filters by workspace_id (no per-project
+      // narrowing) so it's safe to issue in parallel with the projects
+      // query — we just process the rows after both arrive. The
+      // workspace_id filter is sufficient because every roadmap_version
+      // row's project_id belongs to a project within the same workspace.
+      const [projectsResult, tasksResult, settingsResult, rvResult] = await Promise.all([
         client.query(
           'SELECT * FROM org_studio_projects WHERE workspace_id = $1 ORDER BY created_at',
           [this.workspaceId],
@@ -565,6 +594,12 @@ export class PostgresStoreProvider implements StoreProvider {
         client.query(
           'SELECT data FROM org_studio_settings WHERE id = $1 AND workspace_id = $2',
           ['default', this.workspaceId],
+        ),
+        client.query(
+          `SELECT project_id, id, version, title, status, items, sort_order, version_type, owner, shipped_at, created_at, meta
+             FROM org_studio_roadmap_versions
+            WHERE workspace_id = $1`,
+          [this.workspaceId],
         ),
       ]);
 
@@ -579,7 +614,10 @@ export class PostgresStoreProvider implements StoreProvider {
       // one-shot migration script (scripts/hydrate-component-versions.mjs).
       // Existing component.versions[] entries with no matching rv-table row
       // are preserved (manual edits / legacy data).
-      await this.hydrateComponentVersions(client, projects);
+      //
+      // #1528: rvResult is now fetched in the Promise.all above; this helper
+      // just processes the rows.
+      this.applyComponentVersionHydration(projects, rvResult.rows);
 
       const tasks = tasksResult.rows.map((row: any) => rowToObject(row, READ_TASK_COLUMNS));
       const rawSettings = settingsResult.rows[0]?.data;
@@ -607,20 +645,30 @@ export class PostgresStoreProvider implements StoreProvider {
    */
   private async hydrateComponentVersions(client: any, projects: any[]): Promise<void> {
     if (projects.length === 0) return;
-    const escapeForRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const projectIds = projects.map(p => p.id);
     const rvResult = await client.query(
       `SELECT project_id, id, version, title, status, items, sort_order, version_type, owner, shipped_at, created_at, meta
          FROM org_studio_roadmap_versions
-        WHERE project_id = ANY($1::text[]) AND workspace_id = $2`,
-      [projectIds, this.workspaceId]
+        WHERE workspace_id = $1`,
+      [this.workspaceId]
     );
-    if (rvResult.rows.length === 0) return;
+    this.applyComponentVersionHydration(projects, rvResult.rows);
+  }
+
+  /**
+   * #1528: row-processing half of hydrateComponentVersions, split out so
+   * the read() path can pass in rows already fetched by the parallel
+   * Promise.all batch. The query half is kept for any future caller that
+   * wants the convenient one-shot interface, but read() no longer uses it.
+   */
+  private applyComponentVersionHydration(projects: any[], rvRows: any[]): void {
+    if (projects.length === 0) return;
+    const escapeForRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (rvRows.length === 0) return;
 
     // Group rv rows by projectId, then sort by sort_order/version (parity
     // with migration script).
     const byProject = new Map<string, any[]>();
-    for (const r of rvResult.rows) {
+    for (const r of rvRows) {
       if (!byProject.has(r.project_id)) byProject.set(r.project_id, []);
       const meta = (r.meta && typeof r.meta === 'object') ? r.meta : {};
       byProject.get(r.project_id)!.push({
