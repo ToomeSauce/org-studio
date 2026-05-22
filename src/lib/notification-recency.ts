@@ -45,16 +45,26 @@ export interface RecencyTask {
   comments?: RecencyComment[];
 }
 
+/**
+ * Compute the latest non-system comment timestamp per agent author.
+ *
+ * #1524 — prefer the explicit `comments` argument (fetched via
+ * `listComments` / `listCommentsForTasks`). Falls back to `task.comments[]`
+ * for legacy callers and the file-provider mode; this fallback goes away
+ * with Phase 3 (#1295) when the inline column is dropped.
+ */
 export function computeRecipientLastReplies(
   task: RecencyTask | null | undefined,
   teammates: RecencyTeammate[],
   sourceComment: RecencyComment | null | undefined,
+  comments?: RecencyComment[],
 ): Map<string, number> | undefined {
-  if (!task || !Array.isArray(task.comments) || task.comments.length === 0) {
+  const list = comments ?? (task && Array.isArray(task.comments) ? task.comments : undefined);
+  if (!list || list.length === 0) {
     return undefined;
   }
   const map = new Map<string, number>();
-  for (const c of task.comments) {
+  for (const c of list) {
     if (!c || c.id === sourceComment?.id) continue;
     if (c.type === 'system') continue;
     const createdAt = typeof c.createdAt === 'number' ? c.createdAt : 0;
