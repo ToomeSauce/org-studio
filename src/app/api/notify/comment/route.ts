@@ -48,27 +48,51 @@ export async function POST(request: NextRequest) {
   }
 
   const workspaceId = await resolveWorkspaceIdForRequest(request);
-  const store = await getStoreProvider(workspaceId).read();
+  const provider = getStoreProvider(workspaceId) as any;
+  const store = await provider.read();
   const teammates = store.settings?.teammates || [];
 
   // Locate the comment + task
   let task: any = null;
   let comment: any = null;
+  let taskComments: any[] = [];
   if (scope.kind === 'task' && scope.taskId) {
     task = store.tasks.find((t: any) => t.id === scope.taskId);
     if (!task) {
       return NextResponse.json({ error: 'Task not found', taskId: scope.taskId }, { status: 404 });
     }
-    if (commentId && Array.isArray(task.comments)) {
-      comment = task.comments.find((c: any) => c.id === commentId);
+    // #1524 — fetch comments from the normalized org_studio_comments table
+    // (not the soon-to-be-removed inline task.comments[] blob). We pull the
+    // last 50 because we need both the source comment (latest) and enough
+    // history for the recency map. Falls back to the inline blob if the
+    // provider doesn't expose listComments (legacy file-provider mode).
+    if (typeof provider.listComments === 'function') {
+      try {
+        taskComments = await provider.listComments(
+          { kind: 'task', taskId: scope.taskId },
+          { limit: 50 },
+        );
+      } catch (err) {
+        console.warn(
+          `[notify-bridge] listComments failed for task ${scope.taskId}; ` +
+          `falling back to inline blob: ${err}`,
+        );
+        taskComments = Array.isArray(task.comments) ? task.comments : [];
+      }
+    } else {
+      taskComments = Array.isArray(task.comments) ? task.comments : [];
     }
-    if (!comment && Array.isArray(task.comments) && task.comments.length > 0) {
+
+    if (commentId && taskComments.length > 0) {
+      comment = taskComments.find((c: any) => c.id === commentId);
+    }
+    if (!comment && taskComments.length > 0) {
       // Fallback to most recent — the NOTIFY event may have raced ahead of
-      // the inline `task.comments[]` write, but that race is bounded by the
-      // same transaction in PostgresStoreProvider.addComment(). In that
-      // case, the LRU dedup will still suppress the duplicate when the
-      // correct commentId arrives later.
-      comment = task.comments[task.comments.length - 1];
+      // the comments-table write. The race is bounded by the same
+      // transaction in PostgresStoreProvider.addComment(), and LRU dedup
+      // will still suppress the duplicate when the correct commentId
+      // arrives later.
+      comment = taskComments[taskComments.length - 1];
     }
   }
 
@@ -123,7 +147,10 @@ export async function POST(request: NextRequest) {
       // history once and record the latest createdAt per author (resolved
       // to agentId via teammates). The router skips recipients whose last
       // reply is newer than the source comment.
-      recipientLastReplies: computeRecipientLastReplies(task, teammates, comment),
+      // #1524 — pass the listComments result explicitly; the legacy
+      // `task` arg keeps working for file-provider mode via the helper's
+      // internal fallback.
+      recipientLastReplies: computeRecipientLastReplies(task, teammates, comment, taskComments),
     },
   });
 

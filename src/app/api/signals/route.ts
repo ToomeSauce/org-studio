@@ -5,6 +5,8 @@ import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 import { join } from 'path';
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
 import { detectSignals, DetectedSignal } from '@/lib/signal-detector';
+import { getStoreProvider } from '@/lib/store-provider';
+import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
 
 /**
  * Signals API — Auto-detected cultural signals
@@ -59,6 +61,29 @@ async function loadStore() {
 }
 
 /**
+ * #1524 — bulk-fetch comments for every task in the store snapshot in one
+ * query, so signal detectors don't have to read the soon-to-be-removed
+ * inline `task.comments[]` blob. Best-effort — on any error we return an
+ * empty Map and detectors fall back to inline reads (which will degrade
+ * gracefully once the column is dropped in Phase 3).
+ */
+async function fetchCommentsForStore(req: NextRequest, store: any): Promise<Map<string, any[]>> {
+  try {
+    const workspaceId = await resolveWorkspaceIdForRequest(req);
+    const provider = getStoreProvider(workspaceId) as any;
+    if (typeof provider.listCommentsForTasks !== 'function') return new Map();
+    const taskIds = (store?.tasks || [])
+      .map((t: any) => t?.id)
+      .filter((id: any): id is string => typeof id === 'string' && id.length > 0);
+    if (taskIds.length === 0) return new Map();
+    return await provider.listCommentsForTasks(taskIds);
+  } catch (err) {
+    console.warn('[Signals API] Bulk comments fetch failed; detectors will fall back to inline blob:', err);
+    return new Map();
+  }
+}
+
+/**
  * Load recently-created kudos to avoid duplicate detections
  */
 async function loadRecentKudos(maxAge = 7 * 24 * 60 * 60 * 1000) {
@@ -105,7 +130,8 @@ async function deduplicateSignals(signals: DetectedSignal[]): Promise<DetectedSi
 async function handleGET(req: NextRequest) {
   try {
     const store = await loadStore();
-    let signals = await detectSignals(store);
+    const commentsByTask = await fetchCommentsForStore(req, store);
+    let signals = await detectSignals(store, commentsByTask);
     
     // Deduplicate
     signals = await deduplicateSignals(signals);
@@ -191,7 +217,8 @@ async function handlePOST(req: NextRequest) {
     if (action === 'confirm') {
       // Load the store to find the signal
       const store = await loadStore();
-      let signals = await detectSignals(store);
+      const commentsByTask = await fetchCommentsForStore(req, store);
+      let signals = await detectSignals(store, commentsByTask);
       signals = await deduplicateSignals(signals);
 
       const signal = signals.find(s => s.id === signalId);

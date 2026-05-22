@@ -82,6 +82,19 @@ export interface StoreProvider {
   listComments?(scope: { kind: string; taskId?: string; sectionId?: string; boardProjectId?: string; dmThreadId?: string }, opts?: { limit?: number; before?: number }): Promise<any[]>;
 
   /**
+   * Bulk-fetch comments for many tasks in a single query (#1524).
+   * Returns a Map keyed by taskId; missing tasks resolve to an empty array.
+   * This is the N+1-safe path for hot loops over `store.tasks` that previously
+   * read the inline `task.comments[]` blob. Server-side consumers (scheduler,
+   * signal-detector, evidence-detector, section-access, metrics, snapshot
+   * STOP-window detection) MUST use this rather than awaiting `listComments`
+   * per task.
+   *
+   * `opts.limit` caps comments **per task**, not total. Default 50.
+   */
+  listCommentsForTasks?(taskIds: string[], opts?: { limit?: number; before?: number }): Promise<Map<string, any[]>>;
+
+  /**
    * Update settings (mission statement, values, teammates, etc.)
    */
   updateSettings(updates: Partial<Record<string, any>>): Promise<any>;
@@ -1074,6 +1087,75 @@ export class PostgresStoreProvider implements StoreProvider {
       }));
     } catch (e: any) {
       if (e.code === '42P01') return []; // table not yet created
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Bulk-fetch comments for many tasks in one query (#1524).
+   * Used by hot loops over `store.tasks` that previously read the inline
+   * `task.comments[]` blob. Returns a Map<taskId, Comment[]> where each
+   * array is ASC-ordered (oldest first), matching the legacy inline shape.
+   *
+   * Tasks with no comments still return an entry with an empty array, so
+   * callers can do `byTask.get(taskId) || []` safely without checking has().
+   */
+  async listCommentsForTasks(taskIds: string[], opts?: { limit?: number; before?: number }): Promise<Map<string, any[]>> {
+    const out = new Map<string, any[]>();
+    if (!taskIds || taskIds.length === 0) return out;
+    // Seed empty arrays so callers can blindly `.get(id) || []`.
+    for (const id of taskIds) out.set(id, []);
+
+    const limit = opts?.limit ?? 50;
+    const before = opts?.before ?? (Date.now() + 1);
+    const pool = await this.getPool();
+    const client = await pool.connect();
+    try {
+      // Single query, IN-clause on task_id, plus a per-task row_number window
+      // to cap at `limit` per task. This is the N+1-safe shape.
+      // Note: we keep scope_kind='task' explicit so this never accidentally
+      // pulls in section/board/dm comments that happen to share an id.
+      const result = await client.query(
+        `SELECT id, author, content, created_at, type, model, mentions,
+                scope_kind, task_id, section_id, board_project_id, dm_thread_id
+         FROM (
+           SELECT *,
+                  ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY created_at DESC) AS rn
+           FROM org_studio_comments
+           WHERE scope_kind = 'task'
+             AND task_id = ANY($1::text[])
+             AND created_at < $2
+         ) sub
+         WHERE rn <= $3
+         ORDER BY task_id, created_at ASC`,
+        [taskIds, before, limit]
+      );
+
+      for (const row of result.rows) {
+        const c = {
+          id: row.id,
+          author: row.author,
+          content: row.content,
+          createdAt: typeof row.created_at === 'string' ? parseInt(row.created_at, 10) : row.created_at,
+          type: row.type || undefined,
+          model: row.model || undefined,
+          mentions: row.mentions || undefined,
+          scope: {
+            kind: row.scope_kind,
+            taskId: row.task_id || undefined,
+            sectionId: row.section_id || undefined,
+            boardProjectId: row.board_project_id || undefined,
+            dmThreadId: row.dm_thread_id || undefined,
+          },
+        };
+        const bucket = out.get(row.task_id);
+        if (bucket) bucket.push(c);
+      }
+      return out;
+    } catch (e: any) {
+      if (e.code === '42P01') return out; // table not yet created — return seeded empties
       throw e;
     } finally {
       client.release();

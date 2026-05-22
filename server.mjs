@@ -1924,6 +1924,62 @@ async function computeDailyMetrics(targetDate) {
 
     console.log(`[Metrics] Computing daily metrics for ${agents.length} agents (${today})`);
 
+    // #1524 — bulk-fetch all comments in the day window from
+    // org_studio_comments in one query, then index by task_id. Replaces
+    // the previous per-task inline task.comments[] reads which were
+    // about to silently break once #1294 stops the dual-write. Falls
+    // back to the inline blob on DB error so a stale Postgres
+    // connection doesn't drop daily metrics on the floor.
+    const commentsByTaskId = new Map();
+    let bulkOk = false;
+    const dbUrl = process.env.DATABASE_URL;
+    if (dbUrl) {
+      try {
+        const { default: pg } = await import('pg');
+        const client = new pg.Client({ connectionString: dbUrl });
+        await client.connect();
+        try {
+          const { rows } = await client.query(
+            `SELECT id, task_id, author, content, type, mentions, created_at
+               FROM org_studio_comments
+              WHERE scope_kind = 'task'
+                AND created_at >= to_timestamp($1 / 1000.0)
+                AND created_at <  to_timestamp($2 / 1000.0)
+              ORDER BY task_id, created_at ASC`,
+            [dayStart, dayEnd],
+          );
+          for (const row of rows) {
+            const c = {
+              id: row.id,
+              author: row.author,
+              content: row.content,
+              type: row.type,
+              mentions: Array.isArray(row.mentions) ? row.mentions : [],
+              createdAt: row.created_at instanceof Date ? row.created_at.getTime() : Number(row.created_at),
+            };
+            const list = commentsByTaskId.get(row.task_id) || [];
+            list.push(c);
+            commentsByTaskId.set(row.task_id, list);
+          }
+          bulkOk = true;
+        } finally {
+          await client.end();
+        }
+      } catch (err) {
+        console.warn(`[Metrics #1524] bulk comments query failed; falling back to inline blob: ${err?.message || err}`);
+      }
+    }
+
+    // #1524 — helper to resolve a task's comments preferring the bulk
+    // result (Postgres) and falling back to the inline blob. Returns the
+    // ALL-time comments list for the inline path (legacy compat) or the
+    // day-window comments from the bulk query (sufficient because every
+    // metrics check is already day-window-gated).
+    const getTaskComments = (task) => {
+      if (bulkOk) return commentsByTaskId.get(task.id) || [];
+      return Array.isArray(task.comments) ? task.comments : [];
+    };
+
     let computedCount = 0;
     for (const agent of agents) {
       const agentId = agent.agentId;
@@ -2011,7 +2067,7 @@ async function computeDailyMetrics(targetDate) {
       const mentionResponseTimes = []; // minutes between @mention and agent reply
 
       for (const task of store.tasks) {
-        const comments = task.comments || [];
+        const comments = getTaskComments(task);
         for (let ci = 0; ci < comments.length; ci++) {
           const comment = comments[ci];
           if (!comment.createdAt || comment.createdAt < dayStart || comment.createdAt >= dayEnd) continue;
@@ -2062,7 +2118,7 @@ async function computeDailyMetrics(targetDate) {
         }
 
         // Shared task detection: multiple agents commented on same task
-        const taskComments = (task.comments || []).filter(c =>
+        const taskComments = (getTaskComments(task)).filter(c =>
           c.createdAt >= dayStart && c.createdAt < dayEnd && c.type !== 'system'
         );
         const commentAuthors = new Set(taskComments.map(c => (c.author || '').toLowerCase()));

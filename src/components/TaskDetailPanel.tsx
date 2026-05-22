@@ -284,7 +284,7 @@ export function TaskDetailPanel({
       const proj = projects.find((p) => p.id === task.projectId);
       const projPriority = proj?.priority;
       if (projPriority === 'high') {
-        const evidence = detectEvidence(task);
+        const evidence = detectEvidence(task, allComments);
         if (!evidence.hasEvidence) {
           const proceed = window.confirm(
             `⚠️ This ticket is on a high-priority project but has no shipped-work evidence linked.\n\nMissing: ${evidence.missingLabel}.\n\nGood evidence looks like: a commit SHA in a comment, a #PR or github.com/.../pull/N URL, a populated test plan, or a duplicate_of pointer.\n\nClose anyway?`,

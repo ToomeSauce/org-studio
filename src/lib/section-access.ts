@@ -23,21 +23,26 @@ export function isDefaultMainSection(sectionId: string | undefined | null, proje
 }
 
 /**
- * Scan task.comments[] for @mentions of the agent.
+ * Scan task comments for @mentions of the agent.
  * Checks both structured `comment.mentions[]` and raw text fallback.
+ *
+ * #1524 — prefer the explicit `comments` argument (fetched via
+ * `listComments`). Falls back to `task.comments[]` for the file-provider
+ * mode and existing tests; that fallback comes off in Phase 3 (#1295).
  */
 export function agentIsMentionedOnTask(
   task: Pick<Task, 'comments'>,
   agentName: string,
   agentId?: string,
+  comments?: TaskComment[],
 ): boolean {
-  const comments = task.comments;
-  if (!comments || comments.length === 0) return false;
+  const list = comments ?? task.comments;
+  if (!list || list.length === 0) return false;
 
   const nameLower = agentName.toLowerCase();
   const idLower = agentId?.toLowerCase();
 
-  for (const comment of comments) {
+  for (const comment of list) {
     // Structured mentions array
     if (comment.mentions && comment.mentions.length > 0) {
       for (const m of comment.mentions) {
@@ -66,12 +71,17 @@ export function agentIsMentionedOnTask(
  *   3. Task has no sectionId or sectionId is the default Main → broadly visible
  *   4. Agent is @mentioned on the task (any comment)
  *   5. Task's section is orphaned (id not found in project.sections) → broadly visible
+ *
+ * #1524 — `comments` is an optional pre-fetched list (from `listComments`).
+ * Hot loops (e.g. scheduler prompt build) should bulk-fetch once via
+ * `provider.listCommentsForTasks(taskIds)` and pass the per-task slice.
  */
 export function agentHasTaskAccess(
   task: Pick<Task, 'assignee' | 'sectionId' | 'comments'>,
   project: Pick<Project, 'id' | 'sections'>,
   agentName: string,
   agentId?: string,
+  comments?: TaskComment[],
 ): boolean {
   const nameLower = agentName.toLowerCase();
   const idLower = agentId?.toLowerCase();
@@ -102,7 +112,7 @@ export function agentHasTaskAccess(
   }
 
   // 4. Agent is @mentioned on any comment
-  if (agentIsMentionedOnTask(task, agentName, agentId)) {
+  if (agentIsMentionedOnTask(task, agentName, agentId, comments)) {
     return true;
   }
 

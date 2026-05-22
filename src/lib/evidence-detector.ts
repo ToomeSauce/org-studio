@@ -41,13 +41,18 @@ const COMMIT_SHA_REGEX = /(?:^|[^0-9a-f])[`']?([0-9a-f]{7,40})[`']?(?:[^0-9a-f]|
 // #NNN where NNN is 1+ digits, OR a full github PR URL.
 const PR_REGEX = /(?:#\d+\b)|(?:github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+)/i;
 
-function collectText(task: Task): string {
+function collectText(task: Task, comments?: TaskComment[]): string {
   const parts: string[] = [];
   parts.push(task.title || '');
   parts.push(task.description || '');
   parts.push(task.reviewNotes || '');
   parts.push(task.testPlan || '');
-  for (const c of (task.comments || []) as TaskComment[]) {
+  // #1524 — prefer explicit `comments` arg (fetched via listComments).
+  // Fall back to the legacy inline `task.comments[]` blob for callers that
+  // haven't migrated yet (FileStoreProvider mode, legacy tests). Once the
+  // inline column is dropped in Phase 3 (#1295), the fallback is dead code.
+  const commentList = (comments ?? ((task.comments || []) as TaskComment[])) as TaskComment[];
+  for (const c of commentList) {
     const text = (c as any)?.content ?? (c as any)?.body ?? (c as any)?.text ?? '';
     if (typeof text === 'string') parts.push(text);
   }
@@ -62,9 +67,20 @@ export interface EvidenceReport {
   missingLabel: string;
 }
 
-export function detectEvidence(task: Task): EvidenceReport {
+/**
+ * Detect shipped-work evidence on a task.
+ *
+ * #1524 — callers that have access to a fetched comments array (e.g.
+ * TaskDetailPanel after listComments resolves) should pass it explicitly
+ * via the second argument. Callers that pre-date the comments migration
+ * (or have only the slim task snapshot) can omit it; the helper falls
+ * back to `task.comments[]` if present, otherwise scans only the title/
+ * description/reviewNotes/testPlan surfaces. The latter is the new
+ * baseline once the inline column is dropped.
+ */
+export function detectEvidence(task: Task, comments?: TaskComment[]): EvidenceReport {
   const kinds: EvidenceKind[] = [];
-  const text = collectText(task);
+  const text = collectText(task, comments);
 
   if (COMMIT_SHA_REGEX.test(text)) kinds.push('commit');
   if (PR_REGEX.test(text)) kinds.push('pr');
