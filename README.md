@@ -137,7 +137,7 @@ When the skill content changes (new endpoints, new actions, behavioural docs), c
    ```bash
    npm run build:skill
    ```
-   This writes `skills/dist/org-studio-api.skill` (a zip of the skill dir) plus a sidecar `skills/dist/org-studio-api.skill.sha` capturing the build's git SHA, package version, and size for traceability.
+   This writes `skills/dist/org-studio-api.skill` (a zip of the skill dir) plus a sidecar `skills/dist/org-studio-api.skill.sha` capturing the build's git SHA, package version, and size for traceability. **As of v0.4.0 (#1537), this also auto-syncs the canonical source into every local agent workspace** (`~/.openclaw/workspace-*/skills/org-studio-api/`) so agents pick up the new docs on their next session. Run `npm run sync-skills` standalone if you only want the workspace mirror without rebuilding the bundle.
 4. **Commit + PR + merge to `main`.** The skill source and CHANGELOG go in; the `skills/dist/*.skill` bundle is gitignored (build artifacts — each consumer rebuilds from source or pulls from ClawHub).
 5. **Publish to ClawHub.** This step currently requires manual upload of `skills/dist/org-studio-api.skill` to <https://clawhub.ai> by someone with publish credentials. (CI-driven publish is on the wishlist — file an issue if you'd like to take it.)
 6. **Refresh agent workspaces.** From any workspace, run:
