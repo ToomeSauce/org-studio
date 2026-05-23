@@ -18,6 +18,8 @@
  * Pure-ish: all IO is injected via `provider` + `feedSink`, all timing via
  * `now`. No `Date.now()`, no `process.env`, no globals. Easy to unit-test.
  */
+import { buildStatusTransition } from "./task-status";
+
 
 export type BounceProvider = {
   read: () => Promise<{ tasks: any[] }>;
@@ -105,21 +107,18 @@ export async function bounceLeaseLevel3(
         return { ok: true, reason: 'no-longer-in-progress' };
       }
 
-      // 2. Build update from fresh statusHistory.
-      const freshHistory = (freshTask.statusHistory || []).concat([
-        { status: 'backlog', timestamp: now, by: LEASE_BOUNCE_HISTORY_BY },
-      ]);
-
-      const updates: Record<string, any> = {
-        status: 'backlog',
-        assignee: '',
-        claim_started_at: null,
-        claim_lease_expires_at: null,
-        loopCount: 0,
-        _lastDispatchedAt: null,
-        statusHistory: freshHistory,
-        lastActivityAt: now,
-      };
+      // 2. Build update via the single source of truth (#1535).
+      //    Pass `detachAssignee: true` to get the lease-bounce flavor:
+      //    clears assignee and stamps _lastDispatchedAt=null. Lease bounce
+      //    is the only status writer that detaches the agent during the
+      //    transition.
+      const { updates } = buildStatusTransition({
+        task: freshTask,
+        newStatus: 'backlog',
+        by: LEASE_BOUNCE_HISTORY_BY,
+        now,
+        detachAssignee: true,
+      });
 
       // 3. Write.
       await provider.updateTask(taskSnapshot.id, updates);

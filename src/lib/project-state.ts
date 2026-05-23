@@ -1,3 +1,5 @@
+import { buildStatusTransition } from "./task-status";
+
 /**
  * project-state.ts
  *
@@ -371,24 +373,38 @@ export async function promoteProjectToNextVersion(
         [item.taskId, wsId],
       );
       if (taskRes.rows.length > 0 && taskRes.rows[0].status === 'planning') {
+        // #1535 — build the transition patch through the single source of
+        // truth even though we apply it via raw SQL (this UPDATE shares a
+        // transaction with the project/roadmap writes above and so can't
+        // route through provider.updateTask). The helper still owns the
+        // bookkeeping shape; we just translate JS field names to SQL
+        // column names below.
         const nowMs = Date.now();
-        const historyEntry = JSON.stringify({
-          status: 'backlog',
-          timestamp: nowMs,
+        const { updates } = buildStatusTransition({
+          task: { id: item.taskId, status: 'planning' },
+          newStatus: 'backlog',
           by: 'system-promote',
+          now: nowMs,
         });
+        const historyEntry = JSON.stringify(updates.statusHistory!.slice(-1)[0]);
+        // STATUS_TRANSITION_ALLOWED — invariant test (#1535) checks for
+        // this token nearby any raw `UPDATE org_studio_tasks SET status`
+        // statement; the only legitimate raw-SQL status writer is this
+        // one, gated inside the promote transaction.
         await client.query(
           `UPDATE org_studio_tasks
-           SET status = 'backlog',
-               version = $1,
-               assignee = COALESCE(NULLIF(assignee, ''), $2),
-               status_history = COALESCE(status_history, '[]'::jsonb) || $5::jsonb,
-               last_activity_at = $6,
+           SET status = $1,
+               version = $2,
+               assignee = COALESCE(NULLIF(assignee, ''), $3),
+               status_history = COALESCE(status_history, '[]'::jsonb) || $7::jsonb,
+               last_activity_at = $8,
                loop_count = 0,
                loop_paused_at = NULL,
-               loop_pause_reason = NULL
-           WHERE id = $3 AND workspace_id = $4`,
-          [targetVersion, devOwner, item.taskId, wsId, historyEntry, nowMs],
+               loop_pause_reason = NULL,
+               claim_started_at = NULL,
+               claim_lease_expires_at = NULL
+           WHERE id = $4 AND workspace_id = $5 AND status = $6`,
+          [updates.status, targetVersion, devOwner, item.taskId, wsId, 'planning', historyEntry, updates.lastActivityAt],
         );
         movedTasks++;
       }
