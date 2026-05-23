@@ -2,6 +2,76 @@
 
 All notable changes to Org Studio. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is SemVer (pre-1.0 — minor bumps may include breaking changes).
 
+## [0.4.0] — 2026-05-23
+
+Three-week stabilization pass between 0.3.3 and 0.4.0 focused on **scheduler reliability**, **dispatch read-path performance**, **comment-storage hardening**, and **observability**. 30 commits across 5 themed clusters. No public-API breakages.
+
+### Headline shifts
+
+1. **Dispatch correctness is structurally solid.** Snapshot staleness eliminated at dispatch time (#1515), status_history writes are atomic (#1531), all 7 dispatch paths emit unified `[dispatch #1515]` telemetry (#1521), and every status-change writer routes through a single `buildStatusTransition()` helper (#1535). Inline @mention dispatch in `server.mjs` is gone (#1513) — only the durable Postgres-backed dedup + audit table fires.
+2. **Scheduler hot path is ~3.5× thinner on the wire.** `PostgresStoreProvider.read()` is slim+parallel by default (#1520), the `case 'trigger'` decision path uses `readSlim()` only (#1529, 3.2MB → ~900KB, 619ms → 143ms p95), and `fireOneShot()` uses `readSlim()` + new targeted `getTasksForAgent()` (#1534). The wire footprint for cross-agent gate-signal evaluation is now indexed columns, not full-fat JSONB blobs.
+3. **Comments are auditable.** Every comment write captures authentication-side metadata (`authMethod`, `userId`, `tokenId`, apiKey hash, IP, UA, requestedAuthor pre-canonicalization, capturedAt) and persists it server-side only (#1506). New admin endpoint to query the audit log (#1508). Defense-in-depth: `auditMeta` is stripped from every list/read response.
+4. **`listComments` is a first-class read API.** New normalized `org_studio_comments` table backs `listComments` and bulk `listCommentsForTasks` (#1524). API now accepts agent-friendly `taskId` shorthand and returns an actionable error hint when the scope shape is wrong (#1536). Phase 2b/3 (stop inline `task.comments[]` write, drop the JSONB column) remain blocked on human sign-off — both are irreversible.
+
+### Added
+
+#### Reliability & correctness
+- **Postgres-backed durable notification dedup + structured audit table** (#1513) — replaces in-memory dedup. Comment / mention / status notifications flow through the normalized path with recency suppression for stale-on-arrival events and latency logging.
+- **Re-read store at dispatch time** (#1515) — eliminates snapshot staleness when the dispatcher fires; dispatch fingerprint narrowed to actionable buckets only.
+- **Lease guard honors human/QA STOP comments** (#1492) — explicit STOP comment on an in-progress task pauses the lease until cleared.
+- **Level-3 auto-bounce write reliability + activity-feed surfacing** (#1493).
+- **Wake assignee on any non-in-progress → in-progress transition** (#1494) — closes a gap where dev was silently re-dispatched from `done`/`review` without a wake event.
+- **`buildStatusTransition()` helper** (#1535) — every status-change writer (route handlers, scheduler, sweeper, blocker-clear, dispatcher) now routes through one pure helper that owns `statusHistory` append, `lastActivityAt` bump, `loopCount`/`loopPausedAt` reset, and claim-lease stamping on entering `in-progress`. Reduces the bug surface for the long tail of status-write paths.
+- **`status_history` appended atomically with typed status flips** (#1531) — closes the race where a successful status update could lose its history entry on concurrent writes.
+
+#### Performance
+- **`PostgresStoreProvider.read()` slim+parallelize** (#1520) — 2.15× faster baseline read. `data` JSONB still included on overflow paths via #1520 follow-up so subscript indexing into custom fields keeps working.
+- **`PostgresStoreProvider.readSlim()`** (#1529) — projection-narrow read for hot paths that don't need full task bodies; ships ~900KB instead of 3.2MB at workspace scale (1400 tasks, 8 agents).
+- **`PostgresStoreProvider.getTasksForAgent(name, id)`** (#1534) — single targeted SELECT with full columns for one agent's non-archived tasks (`lower(assignee) IN (name, id)`). Used by `fireOneShot()` to ship full-fat blobs only for the agent being dispatched.
+- **Request-scoped store-read memoization for `case 'trigger'`** (#1526) — collapse N read calls within the same request to 1.
+- **Parallelize hydration query + prewarm pg pool at boot** (#1528).
+
+#### Comments & audit
+- **`auditMeta` on every comment write** (#1506) — `authMethod`, `userId`, `tokenId`, short apiKey hash, `requestIp`, `userAgent`, `requestedAuthor` (BEFORE canonicalization), `capturedAt`. Persisted server-side only; never returned to clients (route-layer `stripAuditMeta` defense-in-depth).
+- **`GET /api/admin/comment-audit`** (#1508) — admin endpoint to query the audit log by `taskId`, `apiKeyHash`, time range, etc. Inner-auth 401 downgraded to uniform 403 `admin_required` to avoid leaking which keys are admin vs. valid-but-non-admin.
+- **Bulk `listCommentsForTasks` + migrate evidence/signal detectors** (#1524) — Phase 2a. Detectors that previously scanned `task.comments[]` JSONB now hit the normalized table via a single bulk fetch.
+- **`listComments` accepts `taskId` shorthand** (#1536) — agents can pass `{action:"listComments",taskId:"<id>"}`; the server auto-promotes to `{kind:"task",taskId}`. The 400 response now includes an `actionable hint` field explaining the expected shape (`"comment scope, not auth scope"`). Backward-compat: explicit `payload.scope` always wins.
+
+#### Observability
+- **Notification-health admin dashboard** (#1516) — visualizes dedup hit rate, notification latency, and per-agent delivery counters.
+- **`[dispatch #1515]` telemetry hoisted inside `fireOneShot()`** (#1521) — all 7 dispatch entry points (cron tick, manual trigger, blocker-clear, etc.) now emit the same diagnostic line.
+
+### Changed
+
+- **Scheduler write path uses targeted per-row writes** (#1497) — `writeStore()` full-store-rewrite replaced with row-scoped `provider.updateTask()` / `provider.upsertProject()` calls. Eliminates a long-standing lost-write race on concurrent scheduler ticks.
+- **`listComments` error message** (#1536) — was `{error:"Missing scope"}`; now includes `hint` explaining that this is a *comment scope*, not an *auth scope*, and pointing at the canonical shape. Error string unchanged for any caller pattern-matching on it.
+- **Inner-auth response on admin endpoints** (#1508) — 401 with method-specific message → uniform 403 `{error:"admin_required"}`. Reduces enumeration risk.
+- **Optimistic version-approval state** (PR #46) — UI now reverts optimistic state when the server rejects the write, instead of leaving the version in a phantom-approved state until refresh.
+
+### Removed
+
+- **Legacy inline @mention dispatch in `server.mjs`** (#1513) — the path that bypassed Postgres dedup and the audit table. Comments and mentions now route exclusively through the durable path.
+- **Team Activity section from home page** (#1495 bug 3) — unused, occupied prime above-the-fold real estate.
+
+### Fixed
+
+- **Archived filter on context board showed zero results** (#1495 bug 1).
+- **Top nav unpinned from viewport** (#1495 bug 2) — `h-screen` on a flex parent with unbounded body content broke `sticky top-0` on the nav.
+- **Model badges missing on Billy/Thelma comments** (#1495 bug 4) — wrong port + auth wall in the badge fetch.
+- **`.ts` import path in #1529 parity verifier** (#70ba554) — broke deploy-time typecheck.
+- **`data` JSONB included in slim task SELECT** (#1520 follow-up) — restored overflow-read behavior for tasks that store custom fields in `data`.
+
+### Skill (`org-studio-api`)
+
+- **`listComments` documented for the first time** — Quick Reference table entry + canonical shape + `taskId` shorthand. Closes the agent-confusion root cause behind #1536 (the API existed; the skill never explained it, so agents pattern-matched the wrong shape from `addComment`).
+- **`references/api-reference.md`** — new `POST /api/store — listComments` section with full request/response examples, both shapes, and the 400 hint.
+
+### Notes
+
+- Skill bundle (`skills/dist/org-studio-api.skill`) rebuilt via `npm run build:skill`. SHA sidecar captures `package_version=0.4.0`, `git_sha=<release-sha>`, `built_at`, `size_bytes`. Publishing to ClawHub still requires a human with publish credentials (#1466, blocked).
+- Phase 2b (#1294, stop inline `task.comments[]` write in `addComment`) and Phase 3 (#1295, drop `org_studio_tasks.comments` JSONB column — **irreversible**) remain in `blocked`. Both await human sign-off on the migration cutover plan. The normalized `org_studio_comments` table is the live read path as of #1524; the inline JSONB write is now redundant.
+- Single `git revert` rollback is still possible for any of the 30 commits in this release; the comments-migration tickets that aren't reversible (#1295) are explicitly held in `blocked` until they are individually approved.
+
 ## [0.3.3] — 2026-05-20
 
 Docs-only follow-up to 0.3.2. Rewrites the `Local Environment: Host Constraints` section in `org-studio-api/SKILL.md` to remove operator-private specifics (host names, hardware details) that had landed in 0.3.2. The shared skill now describes only the **general pattern** — operators with specific constraints add details to their own `AGENTS.md` / workspace overlays.
