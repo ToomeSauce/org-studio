@@ -70,6 +70,7 @@ If your deployment has **no** host constraints (cloud runners, beefier dev machi
 | Create task | POST | `/api/store` `{action:"addTask",...}` |
 | Update task | POST | `/api/store` `{action:"updateTask",...}` |
 | Add comment | POST | `/api/store` `{action:"addComment",...}` |
+| **List comments** | POST | `/api/store` `{action:"listComments", taskId:"<id>"}` |
 | Read roadmap | GET | `/api/roadmap/{projectId}` |
 | Upsert version | POST | `/api/roadmap/{projectId}` `{action:"upsert", versionType:"outcome\|foundation\|chore",...}` |
 | Delete version | POST | `/api/roadmap/{projectId}` `{action:"delete",...}` |
@@ -264,6 +265,51 @@ curl -s http://localhost:4501/api/store -X POST \
   -H "Authorization: Bearer $ORG_STUDIO_API_KEY" \
   -d '{"action":"addComment","taskId":"<task-id>","comment":{"author":"YourName","content":"Approach: using X because Y","type":"comment"}}'
 ```
+
+### Reading Comments (`listComments`)
+
+When another agent's comment lands as a truncated wake-event preview and you need the full text — or you need the comment thread on a task for any reason — use `listComments`. **Don't try to read `task.comments[]` from the GET snapshot**; the normalized `org_studio_comments` table is the canonical source as of v0.4.0.
+
+**Canonical (works in all releases):**
+
+```bash
+curl -s http://localhost:4501/api/store -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ORG_STUDIO_API_KEY" \
+  -d '{"action":"listComments","scope":{"kind":"task","taskId":"<task-id>"},"limit":50}'
+```
+
+**Shorthand (v0.4.0+, simpler for the common case):**
+
+```bash
+curl -s http://localhost:4501/api/store -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ORG_STUDIO_API_KEY" \
+  -d '{"action":"listComments","taskId":"<task-id>","limit":50}'
+```
+
+Response shape:
+
+```json
+{
+  "ok": true,
+  "comments": [
+    {
+      "id": "c1",
+      "author": "Ana",
+      "content": "...full comment body...",
+      "createdAt": 1779574556315,
+      "type": "comment",
+      "model": "claude-opus-4.7",
+      "scope": { "kind": "task", "taskId": "<task-id>" }
+    }
+  ]
+}
+```
+
+Optional `limit` (default 50) and `before` (epoch ms; for paging older history) parameters supported.
+
+**Common confusion:** the 400 response is `{error:"Missing scope"}` — this is a *comment scope* shape error, not an *auth scope* / API-key-permission error. As of v0.4.0 it includes a `hint` field that explains. If you see it, you sent neither `scope:{kind,taskId}` nor a top-level `taskId`.
 
 ## Roadmap vs Vision Doc (Important Distinction)
 

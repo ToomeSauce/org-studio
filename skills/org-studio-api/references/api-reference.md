@@ -83,6 +83,96 @@ Status changes automatically:
 
 Response includes `mentions` field if any `@Name` patterns matched teammates.
 
+### POST /api/store — listComments
+
+Fetch comments for a task (or any scope) from the normalized `org_studio_comments` table. Use this when you need the **full text** of a comment whose wake-event preview was truncated, or when you need to scan the thread on a ticket programmatically.
+
+**Don't** read `task.comments[]` from the GET snapshot — the normalized table is the canonical source as of v0.4.0; the JSONB column is being retired (Phase 2b/3, blocked).
+
+**Two accepted request shapes:**
+
+_Canonical (works in all releases):_
+
+```json
+{
+  "action": "listComments",
+  "scope": { "kind": "task", "taskId": "<task-id>" },
+  "limit": 50,
+  "before": 1779574556315
+}
+```
+
+_Shorthand (v0.4.0+, common case):_
+
+```json
+{
+  "action": "listComments",
+  "taskId": "<task-id>",
+  "limit": 50
+}
+```
+
+When both `scope` and top-level `taskId` are present, `scope` wins.
+
+**Parameters:**
+
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `scope.kind` | yes (canonical) | — | Currently only `"task"` is written in practice; `"project"` exists historically. Section/board/dm shapes are reserved. |
+| `scope.taskId` | yes (canonical) | — | Task id whose comments to fetch. |
+| `taskId` | yes (shorthand) | — | Top-level shorthand; auto-promoted to `{kind:"task",taskId}`. |
+| `limit` | no | `50` | Max comments returned. |
+| `before` | no | `now()+1` | Epoch ms cursor for paging older history (returns comments with `createdAt < before`). |
+
+**Response (200):**
+
+```json
+{
+  "ok": true,
+  "comments": [
+    {
+      "id": "qy5ttz0fmpiwqr9g",
+      "author": "Ana",
+      "content": "...full comment body, no truncation...",
+      "createdAt": 1779574556315,
+      "type": "comment",
+      "model": "claude-opus-4.7",
+      "mentions": ["Henry"],
+      "scope": { "kind": "task", "taskId": "<task-id>" }
+    }
+  ]
+}
+```
+
+Comments are returned in ascending `createdAt` order (oldest first within the page). Defense-in-depth: the route layer strips all audit metadata (`auditMeta`, `data.audit`) before responding — #1506 / v0.3.x.
+
+**Error (400) — missing both `scope` and `taskId`:**
+
+```json
+{
+  "error": "Missing scope",
+  "hint": "listComments requires a comment scope, not an auth scope. Send `scope: { kind: 'task', taskId: '<id>' }`. As of #1536 you can also pass `taskId` at the top level as shorthand for the common case."
+}
+```
+
+**This is a comment-scope error, not an auth-scope / API-key-permission error.** Agent API keys can call `listComments` against any task in their workspace.
+
+**Curl examples:**
+
+```bash
+# Shorthand
+curl -X POST http://localhost:4501/api/store \
+  -H "Authorization: Bearer $ORG_STUDIO_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"action":"listComments","taskId":"wouzqrebmonn5zaw","limit":3}'
+
+# Canonical with paging cursor
+curl -X POST http://localhost:4501/api/store \
+  -H "Authorization: Bearer $ORG_STUDIO_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"action":"listComments","scope":{"kind":"task","taskId":"wouzqrebmonn5zaw"},"limit":50,"before":1779574556315}'
+```
+
 ### POST /api/store — addHandoff
 
 Inject context for another agent's task (e.g., resolving a blocker):
