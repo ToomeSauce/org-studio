@@ -543,15 +543,45 @@ export function RoadmapWithApprovalHorizon({
       updates: { approvedVersions: next },
     };
 
+    // Snapshot the pre-write list so a failed server write can revert
+    // back to the *previous* approved set (not undefined, which would
+    // drop the optimistic state entirely — wrong when other entries
+    // were already in the list and persisted earlier).
+    const previousApprovedVersions = approvedVersionsList;
+
     fetch('/api/store', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-    }).catch((e) => {
-      console.error('Failed to update approval:', e);
-      // Revert on failure
-      setOptimisticApprovedVersions(undefined);
-    });
+    })
+      .then((res) => {
+        // #fix-approval-checkmark-revert: `fetch` resolves on HTTP 4xx/5xx
+        // (no throw), so the previous `.catch` only fired for network
+        // failures. A 401 from /api/store (e.g. expired session cookie)
+        // would let the optimistic green-checkmark UI stick around
+        // forever until the user refreshed — at which point the GET
+        // re-read would show the version as unchecked (because the
+        // server never wrote it). Symptom: "I clicked approve, the
+        // checkmark turned green, but after refresh it's gone." Now
+        // we explicitly check `res.ok` and revert the optimistic state
+        // when the server rejected the write, so the UI reflects the
+        // real persisted state immediately. We also log the response
+        // body for easier diagnosis (auth vs validation vs server).
+        if (!res.ok) {
+          res.json().catch(() => ({})).then((body) => {
+            console.error(
+              `Failed to update approval (HTTP ${res.status}):`,
+              body,
+            );
+          });
+          setOptimisticApprovedVersions(previousApprovedVersions);
+        }
+      })
+      .catch((e) => {
+        console.error('Failed to update approval (network):', e);
+        // Revert on network failure as well.
+        setOptimisticApprovedVersions(previousApprovedVersions);
+      });
   };
 
   /**
