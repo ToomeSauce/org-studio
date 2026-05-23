@@ -2202,7 +2202,31 @@ export async function POST(req: NextRequest) {
       }
 
       case 'listComments': {
-        if (!payload.scope) return NextResponse.json({ error: 'Missing scope' }, { status: 400 });
+        // #1536 — accept agent-friendly shorthand. The full shape is
+        // `scope: { kind, taskId | sectionId | boardProjectId | dmThreadId }`
+        // but agents (and humans typing curl) keep sending `{taskId}` at the
+        // top level because that's the obvious shape for the obvious case.
+        // Auto-promote `taskId` only — it's the only kind actually written
+        // to org_studio_comments in practice (verified 2026-05-23: 5299 rows
+        // kind='task', 2 rows kind='project', zero rows for section/board/dm).
+        // If we later start writing other kinds we'll add their shorthand
+        // here — keep this list aligned with the kinds the writer actually
+        // emits, not speculative ones. Explicit `payload.scope` always wins
+        // (so existing callers — UI, tests — are byte-identical).
+        if (!payload.scope && payload.taskId) {
+          payload.scope = { kind: 'task', taskId: payload.taskId };
+        }
+        if (!payload.scope) {
+          return NextResponse.json(
+            {
+              error: 'Missing scope',
+              hint:
+                "listComments requires a comment scope, not an auth scope. Send `scope: { kind: 'task', taskId: '<id>' }`. " +
+                'As of #1536 you can also pass `taskId` at the top level as shorthand for the common case.',
+            },
+            { status: 400 },
+          );
+        }
         const provider = getStoreProvider(workspace.id);
         if (typeof (provider as any).listComments !== 'function') {
           return NextResponse.json({ error: 'listComments not supported by current provider' }, { status: 501 });
