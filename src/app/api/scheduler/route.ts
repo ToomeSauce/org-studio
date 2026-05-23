@@ -870,11 +870,62 @@ async function fireOneShot(
   // `[dispatch #1515]` log line — making the bug invisible by
   // construction. Pushing both the freshness re-read AND the diagnostic
   // INSIDE this function means every path benefits, every path is logged.
+  // #1534 — SLIM dispatch read.
+  //
+  // Pre-#1534, this was `const store = await readStore()` which fetched
+  // ALL rows with ALL columns (3.2 MB, 470–880 ms p95 steady-state, then
+  // climbing as the task table grew). buildDispatchMessage only needs
+  // prompt-construction text fields (title/description/doneWhen/
+  // constraints/testPlan/devHandoff) on the dispatch target agent's
+  // tasks — typically 5–20 rows out of ~1400. Every other task it
+  // touches (cross-agent dispatch-gate signal, project lookups, settings)
+  // only needs the slim shape.
+  //
+  // So: slim-read for projects/settings/cross-agent gate signal +
+  // per-agent full-fetch for this agent's prompt-construction fields,
+  // then splice the full rows back into store.tasks so the in-place
+  // bucket filters in buildDispatchMessage see them.
+  //
+  // Expected wire footprint: 3.2 MB → ~900 KB + ~50 KB. p95 readMs:
+  // 600 ms → ~80–120 ms.
+  //
+  // Reversibility (per ticket constraint): single git revert restores
+  // the full readStore() call — the merge step is the only structural
+  // change; the rest of fireOneShot is untouched.
   const readStartedAt = Date.now();
-  const store = await readStore();
+  const provider = getStoreProviderAllWorkspaces() as any;
+  const slimStore = (typeof provider.readSlim === 'function'
+    ? await provider.readSlim()
+    : await readStore()) as StoreData;
+
+  // Resolve agent name BEFORE the per-agent fetch (matcher requires both).
+  const agentName = getAgentName(slimStore, loop.agentId);
+
+  // Per-agent full-row fetch. Optional on FileStoreProvider; fall back
+  // to the slim rows already in scope (file mode has the full text in
+  // them already — file readSlim() === read()).
+  const fullAgentTasks: any[] = typeof provider.getTasksForAgent === 'function'
+    ? await provider.getTasksForAgent(agentName, loop.agentId)
+    : [];
+
+  // Merge: replace any slim row whose id matches a full row, keep all
+  // others (other agents' tasks stay slim — dispatch-gate signal works
+  // off status/projectId/sectionId/version which slim already has).
+  // Iteration order preserved (Map keyed by id) so buildDispatchMessage's
+  // ORDER-BY-created_at-ASC bucket lists stay stable.
+  const store: StoreData =
+    fullAgentTasks.length > 0
+      ? (() => {
+          const fullById = new Map(fullAgentTasks.map((t: any) => [t.id, t]));
+          const mergedTasks = (slimStore.tasks || []).map((t: any) =>
+            fullById.has(t.id) ? fullById.get(t.id) : t,
+          );
+          return { ...slimStore, tasks: mergedTasks };
+        })()
+      : slimStore;
+
   const readMs = Date.now() - readStartedAt;
 
-  const agentName = getAgentName(store, loop.agentId);
   const agentRole = getAgentRole(store, loop.agentId);
 
   // #1521 — fingerprint actionable / awareness-only ticket states for

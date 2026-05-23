@@ -85,6 +85,30 @@ export interface StoreProvider {
   getTaskFull?(taskId: string): Promise<any | null>;
 
   /**
+   * #1534 — fetch the FULL field set for ALL tasks assigned to a single
+   * agent, in one targeted SELECT. Used by fireOneShot() to slim the
+   * per-dispatch wire footprint: pre-#1534, fireOneShot() did a full
+   * readStore() (3.2MB, ~600ms p95) so buildDispatchMessage() could
+   * compose the prompt from title/description/doneWhen/etc on the
+   * agent's tasks. Post-#1534, fireOneShot() reads slim (for project
+   * state + cross-agent dispatch gates) plus this method (for the
+   * agent's prompt-construction fields). Typical result set is 5–20
+   * rows per agent.
+   *
+   * Filter is `lower(assignee) IN (lower(agentName), agentId)` so
+   * canonical-name and id-shaped assignees both match (mirrors the
+   * dispatch caller's matcher set). isArchived rows are excluded
+   * server-side — they're never dispatched.
+   *
+   * Returns rows shape-identical to a task element from a full
+   * readStore() (uses the same rowToObject() reconstruction).
+   *
+   * Optional — omitted on FileStoreProvider; callers fall back to
+   * filtering the full read() result.
+   */
+  getTasksForAgent?(agentName: string, agentId: string): Promise<any[]>;
+
+  /**
    * Write the entire store (atomic operation)
    */
   write(data: StoreData): Promise<void>;
@@ -872,6 +896,64 @@ export class PostgresStoreProvider implements StoreProvider {
       );
       if (r.rows.length === 0) return null;
       return rowToObject(r.rows[0], READ_TASK_COLUMNS);
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * #1534 — see interface doc above. Targeted multi-row fetch for one
+   * agent's tasks, used by fireOneShot() to avoid a full readStore() on
+   * every dispatch tick.
+   *
+   * # Why server-side filter
+   *
+   * Pre-#1534 the dispatch caller fetched ALL ~1400 task rows over the
+   * wire, then filtered to ~5–20 client-side. Cost: ~3.2 MB, ~600 ms p95.
+   * Post-#1534 the filter runs in Postgres against an index-friendly
+   * `lower(assignee) IN (…)` predicate (assignee column is btree-indexed
+   * already; lower() is sargable). Cost: ~50 KB, ~10–30 ms.
+   *
+   * # Why no isArchived rows
+   *
+   * Archived tasks aren't dispatched. Filtering them out server-side
+   * saves wire bytes; the caller's bucket filters would have dropped
+   * them anyway. The `(data->>'isArchived')::boolean IS NOT TRUE` form
+   * matches the slim path's convention and is null-safe (NULL counts
+   * as 'not archived', which is what we want for un-stamped rows).
+   *
+   * # Why all statuses (no status filter)
+   *
+   * buildDispatchMessage walks in-progress, backlog, qa, AND blocked
+   * tasks for this agent. Adding a status filter here would split the
+   * fetch into two queries OR risk missing a bucket if the caller's
+   * status list drifted. One query, all statuses for this agent,
+   * filter buckets client-side — the result set is already tiny.
+   */
+  async getTasksForAgent(agentName: string, agentId: string): Promise<any[]> {
+    const pool = await this.getPool();
+    const client = await pool.connect();
+    try {
+      const READ_TASK_COLUMNS = TASK_COLUMNS.filter((c) => c.col !== 'comments');
+      const TASK_SELECT_COLS = [...READ_TASK_COLUMNS.map((c) => c.col), 'data'].join(', ');
+      // lower(assignee) match against BOTH the canonical name and the
+      // agent id — same matcher set the dispatch caller uses (#1189).
+      // Lowercasing the candidates client-side so the comparison is a
+      // simple IN against pre-lowered values; lower(assignee) is fine
+      // at this row count (small set per agent, no need for a functional
+      // index yet).
+      const nameLower = (agentName || '').toLowerCase();
+      const idLower = (agentId || '').toLowerCase();
+      const r = await client.query(
+        `SELECT ${TASK_SELECT_COLS}
+           FROM org_studio_tasks
+          WHERE workspace_id = $1
+            AND lower(assignee) IN ($2, $3)
+            AND (data->>'isArchived')::boolean IS NOT TRUE
+          ORDER BY created_at`,
+        [this.workspaceId, nameLower, idLower],
+      );
+      return r.rows.map((row: any) => rowToObject(row, READ_TASK_COLUMNS));
     } finally {
       client.release();
     }
