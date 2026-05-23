@@ -351,6 +351,16 @@ export async function promoteProjectToNextVersion(
   );
 
   // 7. Move linked planning tasks → backlog
+  //
+  // #1531 — status_history MUST be appended in the SAME UPDATE that flips
+  // the typed `status` column. Without this append, the row drifts:
+  // typed.status = 'backlog' (new) but statusHistory.tail.status =
+  // 'planning' (stale). Scheduler queries against typed status see one
+  // truth; UI history badges see another. The history append + last_activity_at
+  // bump mirror what src/app/api/store/route.ts:~1224 does for normal
+  // user/agent status changes. Future status-mutating SQL paths must do
+  // the same OR funnel through src/lib/task-status.ts:applyStatusTransition()
+  // (see followup #TBD). Test guard: src/__tests__/status-drift.test.ts.
   const devOwner = projData.devOwner || '';
   let movedTasks = 0;
   for (const item of items) {
@@ -361,13 +371,24 @@ export async function promoteProjectToNextVersion(
         [item.taskId, wsId],
       );
       if (taskRes.rows.length > 0 && taskRes.rows[0].status === 'planning') {
+        const nowMs = Date.now();
+        const historyEntry = JSON.stringify({
+          status: 'backlog',
+          timestamp: nowMs,
+          by: 'system-promote',
+        });
         await client.query(
           `UPDATE org_studio_tasks
            SET status = 'backlog',
                version = $1,
-               assignee = COALESCE(NULLIF(assignee, ''), $2)
+               assignee = COALESCE(NULLIF(assignee, ''), $2),
+               status_history = COALESCE(status_history, '[]'::jsonb) || $5::jsonb,
+               last_activity_at = $6,
+               loop_count = 0,
+               loop_paused_at = NULL,
+               loop_pause_reason = NULL
            WHERE id = $3 AND workspace_id = $4`,
-          [targetVersion, devOwner, item.taskId, wsId],
+          [targetVersion, devOwner, item.taskId, wsId, historyEntry, nowMs],
         );
         movedTasks++;
       }
