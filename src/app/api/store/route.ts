@@ -7,6 +7,7 @@ import { parseMentions } from '@/lib/mention-notifier';
 import { routeCommentNotifications } from '@/lib/notification-router';
 import { resolveTaskComponent, resolveTaskVersion } from '@/lib/notification-context';
 import { syncRoadmapItemForTask } from '@/lib/roadmap-sync';
+import { buildStatusTransition } from '@/lib/task-status';
 import { checkArchivedProject } from '@/lib/archived-project-compat';
 import { getEffectiveOwner } from '@/lib/component-helpers';
 import { isTelegramCommsEnabled } from '@/lib/telegram-guard';
@@ -1218,43 +1219,26 @@ export async function POST(req: NextRequest) {
           }
 
           if (updates.status && updates.status !== t.status) {
-            const history = t.statusHistory || [];
+            // #1535 — single source of truth for status-change bookkeeping.
+            //   statusHistory append, lastActivityAt bump, loop reset,
+            //   claim lease lifecycle, and notification rule all live in
+            //   buildStatusTransition(). Any future status-touching path
+            //   must go through this helper (enforced by
+            //   src/__tests__/status-transition-invariant.test.ts).
+            //
+            // #862: QA is a component, not a column. Moving to 'qa' is no
+            // longer supported. The status validation above already
+            // rejected it; the branch was removed pre-#1535.
             const model = await resolveAgentModel(t.assignee, store);
-            history.push({ status: updates.status, timestamp: Date.now(), by: t.assignee, model });
-            updates.statusHistory = history;
-            updates.lastActivityAt = Date.now();  // Update last activity on status change
+            const { updates: transitionPatch, sideEffects } = buildStatusTransition({
+              task: t,
+              newStatus: updates.status as any,
+              by: t.assignee,
+              model,
+            });
+            Object.assign(updates, transitionPatch);
 
-            // Reset loop detection counters on status change
-            (updates as any).loopCount = 0;
-            (updates as any).loopPausedAt = null;
-            (updates as any).loopPauseReason = null;
-
-            // #1352 — Claim contract lifecycle on status transitions.
-            //  Moving INTO in-progress → stamp a fresh lease.
-            //  Moving OUT of in-progress → clear the lease.
-            // Idempotent on no-op transitions (already guarded by
-            // `updates.status !== t.status` outer check). Using null
-            // rather than undefined keeps the Postgres path consistent
-            // with the loopPausedAt clear above — the store provider
-            // strips nulls on write, JSONB-overflow safe.
-            const LEASE_WINDOW_MS = 60 * 60 * 1000; // 60min, Basil-confirmed
-            if (updates.status === 'in-progress') {
-              const nowTs = Date.now();
-              (updates as any).claim_started_at = nowTs;
-              (updates as any).claim_lease_expires_at = nowTs + LEASE_WINDOW_MS;
-            } else {
-              (updates as any).claim_started_at = null;
-              (updates as any).claim_lease_expires_at = null;
-            }
-
-            // #862: QA is a component, not a column. Moving to 'qa' is no longer supported.
-            // The status validation above already rejected it; this branch is removed.
-
-            // Notify on status changes FROM in-progress (tracked work transitions)
-            // OR notify on transitions TO in-progress/done/blocked (significant state changes) — #1290 dropped 'review'.
-            const shouldNotify = (t.status === 'in-progress') || 
-                                  ['in-progress', 'done', 'blocked'].includes(updates.status);
-            if (shouldNotify) {
+            if (sideEffects.notify) {
               const merged = { ...t, ...updates };
               notifyTaskStatusChange(merged, updates.status, store);
             }

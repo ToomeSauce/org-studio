@@ -66,13 +66,20 @@ describe('#1531 — promoteProjectToNextVersion writes status_history atomically
       workspaceId: 'default-workspace',
     });
 
-    // Find the task UPDATE that flips status.
+    // Find the task UPDATE that flips status. Match the UPDATE that
+    // also touches `status_history` (the bug fingerprint) — the helper
+    // now writes status as $1 rather than the literal 'backlog', so we
+    // identify the right UPDATE by its structural signature.
     const taskUpdate = fake.captured.find(
       q =>
         /UPDATE org_studio_tasks/i.test(q.sql) &&
-        /status\s*=\s*'backlog'/i.test(q.sql),
+        /SET\s+status\s*=\s*\$1/i.test(q.sql) &&
+        /status_history/i.test(q.sql),
     );
     expect(taskUpdate, 'expected planning→backlog UPDATE on org_studio_tasks').toBeTruthy();
+
+    // The $1 parameter value must be 'backlog' — the helper computes it.
+    expect(taskUpdate!.values?.[0]).toBe('backlog');
 
     // PRIMARY REGRESSION GUARD: status_history must be touched in the same UPDATE.
     expect(
@@ -84,6 +91,10 @@ describe('#1531 — promoteProjectToNextVersion writes status_history atomically
     // (mirrors the route.ts behavior — keeps stalled-task detection accurate).
     expect(taskUpdate!.sql).toMatch(/last_activity_at/i);
     expect(taskUpdate!.sql).toMatch(/loop_count\s*=\s*0/i);
+
+    // #1535 — claim lease must be cleared on transition OUT of in-progress.
+    expect(taskUpdate!.sql).toMatch(/claim_started_at\s*=\s*NULL/i);
+    expect(taskUpdate!.sql).toMatch(/claim_lease_expires_at\s*=\s*NULL/i);
 
     // And the result reports the move.
     expect(result.promoted).toBe(true);
