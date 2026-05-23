@@ -34,7 +34,8 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "build:skill": "bash scripts/build-skill.sh"
+    "build:skill": "bash scripts/build-skill.sh && bash scripts/sync-skills.sh --quiet",
+    "sync-skills": "bash scripts/sync-skills.sh"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^18.0.1",
