@@ -27,12 +27,12 @@ async function main() {
   if (!process.env.ORG_STUDIO_API_KEY) process.env.ORG_STUDIO_API_KEY = env.ORG_STUDIO_API_KEY;
 
   const { getStoreProviderAllWorkspaces, readSlimStoreAllWorkspaces } =
-    await import('/home/openclaw_user/org-studio/src/lib/store-provider.ts');
+    await import('/home/openclaw_user/org-studio/src/lib/store-provider' as any);
   const { isTaskAnyDispatchEligible } = await import(
-    '/home/openclaw_user/org-studio/src/lib/dispatch-gate.ts'
+    '/home/openclaw_user/org-studio/src/lib/dispatch-gate' as any
   );
   const { diagnoseAgentBacklog, classifyBlocker } = await import(
-    '/home/openclaw_user/org-studio/src/lib/dispatch-attempts.ts'
+    '/home/openclaw_user/org-studio/src/lib/dispatch-attempts' as any
   );
 
   const provider = getStoreProviderAllWorkspaces();
