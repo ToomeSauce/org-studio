@@ -706,10 +706,22 @@ async function pauseStalledTasks(store: StoreData, agentId: string, stalledTasks
 
     // Send Telegram alert
     try {
+      // #1529: this function is called with a slim store (no `title`).
+      // Fetch the full row just for the alert. Stalled tasks are rare
+      // (typically 0 per tick); the extra round-trip is acceptable.
+      let alertTitle: string = task.title;
+      if (!alertTitle && typeof (provider as any).getTaskFull === 'function') {
+        try {
+          const full = await (provider as any).getTaskFull(task.id);
+          alertTitle = full?.title || `(no title — task ${task.id})`;
+        } catch {
+          alertTitle = `(title unavailable — task ${task.id})`;
+        }
+      }
       const sessionKey = `agent:main:main`; // Route via main agent for Telegram delivery
       await rpc('chat.send', {
         sessionKey,
-        message: `⚠️ **Stall Alert — ${agentName}**\n\nTask: "${task.title}" (#${task.ticketNumber || '?'})\nLoops: ${task.loopCount} without progress\nStatus: ${task.status}\n\nAgent loop paused. Manual review needed.`,
+        message: `⚠️ **Stall Alert — ${agentName}**\n\nTask: "${alertTitle}" (#${task.ticketNumber || '?'})\nLoops: ${task.loopCount} without progress\nStatus: ${task.status}\n\nAgent loop paused. Manual review needed.`,
         idempotencyKey: `stall-${task.id}-${now}`,
       });
     } catch (e: any) {
@@ -1225,8 +1237,36 @@ export async function POST(request: NextRequest) {
         // Every `.read(label)` in this case body goes through `reader`.
         // Between writes we call `reader.refresh()` to drop the cache so the
         // next read fetches a fresh snapshot (preserving #1515 freshness).
+        //
+        // #1529 — the dispatch-decision path now uses `.readSlim()` instead
+        // of `.read()`. The slim shape excludes heavy text columns
+        // (title/description/done_when/constraints/test_plan/review_notes)
+        // and the inline comments JSONB, and projects overflow fields
+        // (sectionId/taskType/isArchived/claim_*/blockedBy/waitsFor) as
+        // scalars off the data column. End-to-end this drops the tasks
+        // payload from ~3.2 MB to ~900 KB on prod-shape data (1369 tasks),
+        // and the tasks query alone from 1124ms→143ms p95.
+        //
+        // Helpers in this case are all slim-safe:
+        //   - hasActionableWork — reads status, assignee, loopPausedAt, version
+        //   - sweepExpiredLeases — reads claim_*, statusHistory, id; uses
+        //     provider.listComments for STOP-window checks (not inline)
+        //   - detectAndIncrementLoops — reads status, assignee, loopCount,
+        //     loopPausedAt, lastActivityAt, createdAt; uses
+        //     provider.listCommentsForTasks for comment-based activity
+        //   - diagnoseAgentBacklog/classifyBlocker — reads sectionId,
+        //     taskType, version, waitsFor, projectId, isArchived,
+        //     loopPausedAt (all in slim shape)
+        //   - pauseStalledTasks — reads task.title for the alert Telegram;
+        //     fetches title via provider.getTaskFull(id) per stalled task
+        //     (typically 0–1 per tick, not in the hot loop)
+        //
+        // fireOneShot still does its OWN full readStore() internally — it
+        // composes prompt text from title/description/doneWhen/etc and
+        // that path is a separate followup (see #1534). Slimming the
+        // pre-dispatch decision path is the win here.
         const reader = createMemoizedStoreReader();
-        const store = await reader.read('trigger-top');
+        const store = await reader.readSlim('trigger-top');
         // #1184: classify the trigger source so the dispatch-health view can
         // tell addTask hooks from sweeps from manual presses. Caller is
         // responsible for tagging; default to 'manual' (safe assumption —
@@ -1333,7 +1373,7 @@ export async function POST(request: NextRequest) {
           // read-only checks (cooldown, loop lookup, hasActionableWork). The
           // sweepStore can safely use the cached snapshot. After sweep
           // writes, we `.refresh()` so the next read is fresh.
-          const sweepStore = await reader.read('trigger-pre-sweep');
+          const sweepStore = await reader.readSlim('trigger-pre-sweep');
           const sweepResult = await sweepExpiredLeases(sweepStore);
           if (sweepResult.bounced > 0 || sweepResult.skippedInactive > 0 || sweepResult.escalated > 0) {
             console.info(
@@ -1351,7 +1391,7 @@ export async function POST(request: NextRequest) {
         // disables). Force a fresh read here so detectAndIncrementLoops
         // sees the post-sweep state. This is the original #1515 contract.
         reader.refresh();
-        const freshStore = await reader.read('trigger-post-sweep');
+        const freshStore = await reader.readSlim('trigger-post-sweep');
         const { stalled, incremented } = await detectAndIncrementLoops(freshStore, agentId);
 
         if (stalled.length > 0) {
@@ -1359,18 +1399,23 @@ export async function POST(request: NextRequest) {
           // #1526: detectAndIncrementLoops wrote loopCount updates above;
           // refresh before pauseStalledTasks reads.
           reader.refresh();
-          await pauseStalledTasks(await reader.read('trigger-pre-pause'), agentId, stalled);
+          await pauseStalledTasks(await reader.readSlim('trigger-pre-pause'), agentId, stalled);
           
           // Check if there's still non-paused actionable work
           // #1526: pauseStalledTasks wrote loopPausedAt; refresh again.
           reader.refresh();
-          const postPauseStore = await reader.read('trigger-post-pause');
+          const postPauseStore = await reader.readSlim('trigger-post-pause');
           if (!hasActionableWork(postPauseStore, agentId)) {
             return recordAndReturn(
               { 
                 ok: true, skipped: true, 
                 reason: `Stall detected: ${stalled.length} task(s) paused after ${MAX_LOOPS_BEFORE_ESCALATION}+ loops`,
-                paused: stalled.map(t => ({ id: t.id, title: t.title, loopCount: t.loopCount })),
+                // #1529: slim tasks don't carry `title`; pauseStalledTasks
+                // re-fetches the full task internally for the alert, but
+                // here we only have the slim shape on hand. Surface ids
+                // + loopCount; the full title lives in the alert + the
+                // task itself, so this response is informational anyway.
+                paused: stalled.map(t => ({ id: t.id, loopCount: t.loopCount })),
               },
               { outcome: 'skipped', reason: 'stalled-paused' },
             );

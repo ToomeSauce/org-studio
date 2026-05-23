@@ -20,11 +20,69 @@ export interface StoreData {
   settings?: Record<string, any>;
 }
 
+/**
+ * #1529 — slim store shape for the scheduler hot path.
+ *
+ * Structurally identical to StoreData (so existing helpers compile without
+ * changes), but the tasks come back with a deliberately narrow column set:
+ * only the fields the dispatch gate, lease sweep, stall detector, and
+ * loop-count incrementer actually read. Wire size on prod-shape data
+ * (1369 tasks) drops from ~3.2 MB → ~600–800 KB depending on overflow
+ * extraction, and node-pg deserialization drops correspondingly.
+ *
+ * Fields populated on a slim task:
+ *   id, ticketNumber, status, projectId, assignee, version, sortOrder,
+ *   loopCount, loopPausedAt, lastActivityAt, createdAt, statusHistory,
+ *   workspaceId, sectionId, taskType, isArchived, roadmapItemId,
+ *   claim_started_at, claim_lease_expires_at, blockedBy.
+ *
+ * Fields NOT populated (use getTaskFull() if you need them):
+ *   title, description, doneWhen, constraints, testPlan, reviewNotes,
+ *   testType, testAssignee, initiatedBy, loopPauseReason, devHandoff,
+ *   comments, and every other overflow field.
+ *
+ * Callers MUST NOT read prompt-construction text fields from a slim task.
+ * Code that crosses the slim/full boundary (e.g. fireOneShot → build
+ * dispatch message) fetches full rows via getTaskFull() once it has
+ * picked the actual task to dispatch.
+ */
+export interface SlimStoreData {
+  projects: any[];
+  tasks: any[];
+  settings?: Record<string, any>;
+}
+
 export interface StoreProvider {
   /**
    * Read the entire store (projects, tasks, settings)
    */
   read(): Promise<StoreData>;
+
+  /**
+   * #1529 — slim read for the scheduler hot path. Returns a payload with
+   * only the routing-relevant fields populated on tasks. Default
+   * implementation falls back to read() for providers that don't implement
+   * a real slim path (FileStoreProvider); the Postgres provider overrides
+   * with a column-projected SELECT that's ~5× smaller and ~3× faster on
+   * production-shape data.
+   *
+   * Optional — callers may always use read() instead. When omitted on a
+   * provider, the umbrella accessor getStoreProviderAllWorkspaces().readSlim()
+   * falls back to read() transparently.
+   */
+  readSlim?(): Promise<SlimStoreData>;
+
+  /**
+   * #1529 — fetch a single task with the FULL field set (all typed columns
+   * + the `data` JSONB overflow). Use this after the scheduler picks the
+   * actual task to dispatch and needs prompt-construction text fields
+   * (title/description/doneWhen/constraints/testPlan/devHandoff) that
+   * readSlim() omits. Returns null if the task is missing.
+   *
+   * Optional — omitted on FileStoreProvider; callers that need a full
+   * row in that mode just iterate over the full read() result.
+   */
+  getTaskFull?(taskId: string): Promise<any | null>;
 
   /**
    * Write the entire store (atomic operation)
@@ -644,12 +702,193 @@ export class PostgresStoreProvider implements StoreProvider {
   }
 
   /**
+   * #1529 — slim read for the scheduler hot path.
+   *
+   * Differences from read():
+   *  - Task SELECT projects ONLY the columns dispatch-gate / lease-sweep /
+   *    stall-detect / loop-incrementer actually touch. Heavyweight text
+   *    columns (title, description, done_when, constraints, test_plan,
+   *    review_notes) and the inline `comments` blob are excluded.
+   *  - The `data` JSONB overflow column is NOT shipped wholesale. Instead
+   *    the SELECT extracts the specific overflow keys the hot path reads:
+   *    sectionId, taskType, isArchived, claim_started_at,
+   *    claim_lease_expires_at, blockedBy, roadmapItemId. These come back
+   *    as plain scalar columns aliased to their JS field names.
+   *  - Projects and settings are read in full — they're not the bottleneck
+   *    (projects ~80 rows on prod, settings is a singleton).
+   *
+   * Preserves the #1528 parallel-fetch + #1125 component-version hydration
+   * (same shape as read()) so callers can swap read() → readSlim() without
+   * losing component.approvedVersions or component.versions[] data.
+   *
+   * Wire footprint on prod-shape data (1369 tasks):
+   *   read()      — 3.2 MB, 470–880 ms steady-state
+   *   readSlim()  — ~700–900 KB, target <200 ms steady-state
+   *
+   * Callers MUST NOT read prompt-construction text fields from a slim
+   * task. If you need title/description/doneWhen/constraints/testPlan,
+   * call getTaskFull(taskId) once you've picked the actual dispatch target.
+   */
+  async readSlim(): Promise<SlimStoreData> {
+    const pool = await this.getPool();
+    const client = await pool.connect();
+    try {
+      // Routing-only typed columns. Statushistory stays in because the
+      // sweep + stall detector both walk it for the last status-change
+      // timestamp; per #1528 measurements, including it costs ~365 KB on
+      // 1369 tasks (vs ~560 KB w/o), still well under the <200 ms budget.
+      //
+      // sectionId/taskType/isArchived/claim_*/blockedBy/roadmapItemId are
+      // extracted as scalars from the `data` JSONB column via the ->> /
+      // -> operators. Numeric/boolean fields use -> + a Postgres-side cast
+      // so the wire shape matches what rowToObject() would have produced.
+      const SLIM_TASK_SELECT = `
+        SELECT
+          id,
+          ticket_number,
+          status,
+          project_id,
+          assignee,
+          version,
+          sort_order,
+          loop_count,
+          loop_paused_at,
+          last_activity_at,
+          created_at,
+          status_history,
+          workspace_id,
+          data->>'sectionId'              AS section_id,
+          data->>'taskType'               AS task_type,
+          data->>'roadmapItemId'          AS roadmap_item_id,
+          (data->>'isArchived')::boolean  AS is_archived,
+          (data->>'claim_started_at')::bigint        AS claim_started_at,
+          (data->>'claim_lease_expires_at')::bigint  AS claim_lease_expires_at,
+          data->'blockedBy'               AS blocked_by,
+          data->'waitsFor'                AS waits_for
+        FROM org_studio_tasks
+        WHERE workspace_id = $1
+        ORDER BY created_at
+      `;
+
+      const [projectsResult, tasksResult, settingsResult, rvResult] = await Promise.all([
+        client.query(
+          'SELECT * FROM org_studio_projects WHERE workspace_id = $1 ORDER BY created_at',
+          [this.workspaceId],
+        ),
+        client.query(SLIM_TASK_SELECT, [this.workspaceId]),
+        client.query(
+          'SELECT data FROM org_studio_settings WHERE id = $1 AND workspace_id = $2',
+          ['default', this.workspaceId],
+        ),
+        client.query(
+          `SELECT project_id, id, version, title, status, items, sort_order, version_type, owner, shipped_at, created_at, meta
+             FROM org_studio_roadmap_versions
+            WHERE workspace_id = $1`,
+          [this.workspaceId],
+        ),
+      ]);
+
+      const projects = projectsResult.rows.map((row: any) => this.reconstructProject(row));
+      this.applyComponentVersionHydration(projects, rvResult.rows);
+
+      // Hand-rolled row reconstruction: snake_case Postgres columns →
+      // camelCase JS fields. We don't go through rowToObject() because that
+      // helper is keyed off TASK_COLUMNS and would default-stamp missing
+      // typed fields onto the slim task (e.g. comments=[], description='')
+      // — which would shadow the slim shape's deliberate omissions.
+      const tasks = tasksResult.rows.map((row: any) => {
+        // status_history arrives as jsonb → pg returns parsed JS array
+        const statusHistory = Array.isArray(row.status_history)
+          ? row.status_history
+          : (row.status_history ? (typeof row.status_history === 'string' ? JSON.parse(row.status_history) : row.status_history) : []);
+        const blockedBy = Array.isArray(row.blocked_by)
+          ? row.blocked_by
+          : (row.blocked_by ? (typeof row.blocked_by === 'string' ? JSON.parse(row.blocked_by) : row.blocked_by) : undefined);
+        const waitsFor = Array.isArray(row.waits_for)
+          ? row.waits_for
+          : (row.waits_for ? (typeof row.waits_for === 'string' ? JSON.parse(row.waits_for) : row.waits_for) : undefined);
+        const t: any = {
+          id: row.id,
+          ticketNumber: row.ticket_number == null ? null : Number(row.ticket_number),
+          status: row.status,
+          projectId: row.project_id,
+          assignee: row.assignee,
+          version: row.version,
+          sortOrder: row.sort_order,
+          loopCount: row.loop_count == null ? 0 : row.loop_count,
+          loopPausedAt: row.loop_paused_at == null ? null : Number(row.loop_paused_at),
+          lastActivityAt: row.last_activity_at == null ? null : Number(row.last_activity_at),
+          createdAt: row.created_at == null ? null : Number(row.created_at),
+          statusHistory,
+          workspace_id: row.workspace_id,
+          // overflow scalars — omit when null so consumer code can use
+          // truthy/in-keyof checks the same way it would on a full read.
+          ...(row.section_id != null      ? { sectionId: row.section_id } : {}),
+          ...(row.task_type != null       ? { taskType: row.task_type } : {}),
+          ...(row.roadmap_item_id != null ? { roadmapItemId: row.roadmap_item_id } : {}),
+          ...(row.is_archived != null     ? { isArchived: row.is_archived } : {}),
+          ...(row.claim_started_at != null       ? { claim_started_at: row.claim_started_at } : {}),
+          ...(row.claim_lease_expires_at != null ? { claim_lease_expires_at: row.claim_lease_expires_at } : {}),
+          ...(blockedBy !== undefined ? { blockedBy } : {}),
+          ...(waitsFor !== undefined ? { waitsFor } : {}),
+        };
+        return t;
+      });
+
+      const rawSettings = settingsResult.rows[0]?.data;
+      const settings = rawSettings
+        ? (typeof rawSettings === 'string' ? JSON.parse(rawSettings) : rawSettings)
+        : {};
+
+      return {
+        projects,
+        tasks,
+        settings,
+      };
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * #1529 — fetch a single task with the FULL field set (all typed columns
+   * + `data` JSONB overflow), for callers that picked their dispatch target
+   * from a slim read and now need prompt-construction fields.
+   *
+   * Reuses the same rowToObject() reconstruction as read() so the returned
+   * object is shape-identical to a task element from a full readStore() —
+   * just for one row. No N+1 risk: callers fetch one row per actual
+   * dispatch (typically zero or one per scheduler tick).
+   */
+  async getTaskFull(taskId: string): Promise<any | null> {
+    const pool = await this.getPool();
+    const client = await pool.connect();
+    try {
+      const READ_TASK_COLUMNS = TASK_COLUMNS.filter((c) => c.col !== 'comments');
+      const TASK_SELECT_COLS = [...READ_TASK_COLUMNS.map((c) => c.col), 'data'].join(', ');
+      const r = await client.query(
+        `SELECT ${TASK_SELECT_COLS} FROM org_studio_tasks WHERE id = $1 AND workspace_id = $2`,
+        [taskId, this.workspaceId],
+      );
+      if (r.rows.length === 0) return null;
+      return rowToObject(r.rows[0], READ_TASK_COLUMNS);
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
    * #1125: hydrate component.versions[] for the primary component on each
    * project from the canonical org_studio_roadmap_versions table. Mutates
    * `projects` in place. See read() for rationale.
    *
    * Field shape mirrors scripts/hydrate-component-versions.mjs so the read
    * path and the migration script produce identical version objects.
+   *
+   * Kept around for any one-shot caller that wants a single fetch+process
+   * call (e.g. tests or scripts); the production read() / readSlim() paths
+   * issue the query themselves in parallel with the projects fetch and
+   * call applyComponentVersionHydration() with the rows.
    */
   private async hydrateComponentVersions(client: any, projects: any[]): Promise<void> {
     if (projects.length === 0) return;
@@ -1699,6 +1938,27 @@ export function getStoreProviderAllWorkspaces(): StoreProvider {
     allWorkspacesInstance = createStoreProvider('default-workspace');
   }
   return allWorkspacesInstance;
+}
+
+/**
+ * #1529 — umbrella accessor for the slim read shape. Always returns a
+ * SlimStoreData; if the underlying provider doesn't implement readSlim()
+ * (FileStoreProvider today), falls back to read() so callers can flip the
+ * source of their snapshot without a runtime guard.
+ *
+ * The fallback path is intentionally identical-shape (StoreData and
+ * SlimStoreData are structurally compatible), so a caller migrating to
+ * slim semantics just needs to remember that prompt-construction fields
+ * may be missing on slim tasks — in file mode they happen to be present
+ * because the file provider has no column-projection capability, but
+ * production code paths should not depend on that.
+ */
+export async function readSlimStoreAllWorkspaces(): Promise<SlimStoreData> {
+  const provider = getStoreProviderAllWorkspaces();
+  if (typeof (provider as any).readSlim === 'function') {
+    return (provider as any).readSlim();
+  }
+  return provider.read();
 }
 
 // Re-export for convenience
