@@ -568,7 +568,15 @@ export class PostgresStoreProvider implements StoreProvider {
       // typed field to `[]` and stamp it onto every task, which is wasted
       // bytes and would shadow any stale `data.comments` overflow.
       const READ_TASK_COLUMNS = TASK_COLUMNS.filter((c) => c.col !== 'comments');
-      const TASK_SELECT_COLS = READ_TASK_COLUMNS.map((c) => c.col).join(', ');
+      // #1520 followup — the slim SELECT must still include the `data` JSONB
+      // overflow column. Every task field not promoted to a typed column
+      // (sectionId, taskType, roadmapItemId, column, …) lives there; without
+      // it, rowToObject() merges an empty overflow and every read silently
+      // strips those fields. Symptom: tasks return `sectionId: null` and the
+      // dispatch gate reports topBlocker=no-section-version → "No actionable
+      // work" for the entire org. Caught 2026-05-23 by Mikey while debugging
+      // why #1530/#1531/#1532 wouldn't dispatch on catpilot.
+      const TASK_SELECT_COLS = [...READ_TASK_COLUMNS.map((c) => c.col), 'data'].join(', ');
 
       // #1520 — parallelize the three independent table reads. Was 3
       // serial round-trips (projects → tasks → settings), now one
