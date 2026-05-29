@@ -61,3 +61,23 @@ jobs:
       - run: npm ci
       - name: Vitest
         run: npm test
+
+  # Version-scheme guard (#1561). Non-gating for now: it checks package.json is
+  # valid semver (offline, --no-store). The guard LOGIC is unit-tested in the
+  # gating `test` job (version-guard.test.ts); this job is a fast, visible
+  # package.json sanity check. Store/per-project consistency is checked by
+  # `npm run version-check` against a live store (locally / pre-commit), since
+  # CI has no store to reach. Promote to gating once proj-catpilot's malformed
+  # version (2026.06-platform-hardening) is cleaned by its owner.
+  version-guard:
+    name: version-guard (non-gating)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate package.json version scheme
+        run: node scripts/check-version-schemes.mjs --no-store
