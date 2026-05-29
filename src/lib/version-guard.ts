@@ -23,6 +23,7 @@ export interface VersionViolation {
   value: string; // the offending version string
   expected: 'semver' | 'calver';
   reason: string;
+  hint?: string; // optional actionable nudge (e.g. "looks like an umbrella — mark kind:'umbrella'")
 }
 
 /** A bare two-part "vX.Y" / "X.Y" label (the retired git-prose scheme). */
@@ -55,7 +56,7 @@ export function checkPackageVersion(version: unknown): VersionViolation[] {
 }
 
 /** Minimal shapes — kept loose so this works against the live store JSON. */
-interface StoreVersionObj { version?: unknown; name?: unknown; kind?: unknown; scheme?: unknown; isUmbrella?: unknown }
+interface StoreVersionObj { version?: unknown; name?: unknown; kind?: unknown; scheme?: unknown; isUmbrella?: unknown; state?: unknown; status?: unknown; owner?: unknown; items?: unknown[]; shipped_at?: unknown; shippedAt?: unknown }
 interface StoreSection { id?: string; name?: string; currentVersion?: unknown; approvedVersions?: unknown[]; versions?: StoreVersionObj[] }
 interface StoreProject { id?: string; currentVersion?: unknown; sections?: StoreSection[] }
 interface StoreTask { id?: string; ticketNumber?: number; projectId?: string; version?: unknown }
@@ -76,6 +77,31 @@ function isUmbrellaVersion(v: StoreVersionObj): boolean {
   const kind = typeof v.kind === 'string' ? v.kind.toLowerCase() : '';
   const scheme = typeof v.scheme === 'string' ? v.scheme.toLowerCase() : '';
   return v.isUmbrella === true || kind === 'umbrella' || kind === 'container' || scheme === 'named';
+}
+
+/**
+ * Ana's cardinality signal (#1561): an unmarked, non-parseable version that has
+ * MANY child items spanning MULTIPLE owners, is human-owned, and hasn't shipped
+ * looks like a named umbrella that someone forgot to mark. We use this ONLY to
+ * emit an actionable hint on the violation — NEVER to auto-exempt. Auto-exempting
+ * on cardinality would let a genuinely malformed version pass once it accrues
+ * enough owners (false-clean, the failure mode that bit #1561). Strict gate +
+ * smart nudge: flag it, but tell the human it might want kind:"umbrella".
+ */
+function umbrellaHint(vo: StoreVersionObj): string | undefined {
+  const items = Array.isArray(vo.items) ? vo.items : [];
+  const owners = new Set(
+    items
+      .map((it) => (it && typeof it === 'object' ? (it as { owner?: unknown }).owner : undefined))
+      .filter((o): o is string => typeof o === 'string' && o.length > 0),
+  );
+  const state = typeof vo.state === 'string' ? vo.state : (typeof vo.status === 'string' ? vo.status : undefined);
+  const shippedAt = vo.shipped_at ?? vo.shippedAt;
+  // High cross-owner membership + still current + never shipped = smells like a container.
+  if (items.length >= 10 && owners.size >= 3 && state === 'current' && shippedAt == null) {
+    return `looks like a named umbrella (${items.length} items across ${owners.size} owners, status:current, not shipped) — if intentional, mark it kind:"umbrella" to exempt it from scheme-consistency`;
+  }
+  return undefined;
 }
 
 /**
@@ -112,7 +138,7 @@ export function checkStoreVersions(store: StoreShape): VersionViolation[] {
 
   for (const p of store.projects ?? []) {
     // Gather this project's version strings (project + sections + tasks).
-    const entries: { val: unknown; surface: string }[] = [];
+    const entries: { val: unknown; surface: string; vo?: StoreVersionObj }[] = [];
     entries.push({ val: p.currentVersion, surface: `project ${p.id}.currentVersion` });
     for (const s of p.sections ?? []) {
       entries.push({ val: s.currentVersion, surface: `project ${p.id} / section ${s.id ?? s.name}.currentVersion` });
@@ -120,7 +146,7 @@ export function checkStoreVersions(store: StoreShape): VersionViolation[] {
       // section.versions[] — the canonical roadmap version list. Skip explicitly-marked umbrellas.
       for (const vo of s.versions ?? []) {
         if (isUmbrellaVersion(vo)) continue; // named container — exempt
-        entries.push({ val: vo.version, surface: `project ${p.id} / section ${s.id ?? s.name}.versions[].version` });
+        entries.push({ val: vo.version, surface: `project ${p.id} / section ${s.id ?? s.name}.versions[].version`, vo });
       }
     }
     for (const t of store.tasks ?? []) {
@@ -129,12 +155,21 @@ export function checkStoreVersions(store: StoreShape): VersionViolation[] {
 
     // First pass: split into well-formed (semver/calver) vs junk; flag junk now.
     const wellFormed: { scheme: 'semver' | 'calver'; surface: string; value: string }[] = [];
-    for (const { val, surface } of entries) {
+    for (const { val, surface, vo } of entries) {
       if (val == null || val === '') continue; // unset allowed
       if (typeof val !== 'string') { out.push({ surface, value: String(val), expected: 'calver', reason: 'non-string version' }); continue; }
       if (SENTINEL_RE.test(val)) { out.push({ surface, value: val, expected: 'calver', reason: 'sentinel/junk version (99.99.x)' }); continue; }
       const scheme = detectScheme(val);
-      if (!scheme) { out.push({ surface, value: val, expected: 'calver', reason: 'malformed version (neither valid semver nor calver; if this is an intentional named container, mark it kind:"umbrella")' }); continue; }
+      if (!scheme) {
+        out.push({
+          surface,
+          value: val,
+          expected: 'calver',
+          reason: 'malformed version (neither valid semver nor calver; if this is an intentional named container, mark it kind:"umbrella")',
+          ...(vo ? { hint: umbrellaHint(vo) } : {}),
+        });
+        continue;
+      }
       wellFormed.push({ scheme, surface, value: val });
     }
 

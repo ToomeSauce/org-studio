@@ -184,6 +184,54 @@ describe('version-guard — store (per-project scheme consistency)', () => {
     };
     expect(checkStoreVersions(ok)).toHaveLength(0);
   });
+
+  it('emits an umbrella HINT on an unmarked high-cardinality non-parseable version (but still flags it)', () => {
+    const bad: StoreShape = {
+      projects: [
+        {
+          id: 'proj-catpilot',
+          currentVersion: '2026.05.07',
+          sections: [
+            {
+              id: 's',
+              versions: [
+                { version: '2026.05.07' },
+                {
+                  version: '2026-Q2-sprint',
+                  state: 'current',
+                  // 10 items across 3 owners, never shipped — Ana's cardinality signal
+                  items: [
+                    { owner: 'Basil' }, { owner: 'Basil' }, { owner: 'Henry' }, { owner: 'Henry' },
+                    { owner: 'Mikey' }, { owner: 'Mikey' }, { owner: 'Sam' }, { owner: 'Ana' },
+                    { owner: 'Ana' }, { owner: 'Basil' },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const v = checkStoreVersions(bad);
+    const hit = v.find((x) => x.value === '2026-Q2-sprint');
+    expect(hit).toBeDefined(); // still flagged — never auto-exempt on cardinality
+    expect(hit?.hint).toMatch(/umbrella/i);
+  });
+
+  it('does NOT hint on a low-cardinality malformed version (just a typo, not a container)', () => {
+    const bad: StoreShape = {
+      projects: [
+        {
+          id: 'p',
+          currentVersion: '2026.05.07',
+          sections: [{ id: 's', versions: [{ version: '2026.05.07' }, { version: 'oops-typo', state: 'current', items: [{ owner: 'Basil' }] }] }],
+        },
+      ],
+    };
+    const hit = checkStoreVersions(bad).find((x) => x.value === 'oops-typo');
+    expect(hit).toBeDefined();
+    expect(hit?.hint).toBeUndefined();
+  });
 });
 
 describe('version-guard — combined runner', () => {

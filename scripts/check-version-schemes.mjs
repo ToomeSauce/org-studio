@@ -46,7 +46,7 @@ function classify(value, expected) {
 }
 
 const violations = [];
-const push = (surface, value, expected, reason) => violations.push({ surface, value, expected, reason });
+const push = (surface, value, expected, reason, hint) => violations.push({ surface, value, expected, reason, hint });
 
 // 1) package.json → semver
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
@@ -63,6 +63,20 @@ function isUmbrella(vo) {
   const kind = typeof vo.kind === 'string' ? vo.kind.toLowerCase() : '';
   const scheme = typeof vo.scheme === 'string' ? vo.scheme.toLowerCase() : '';
   return vo.isUmbrella === true || kind === 'umbrella' || kind === 'container' || scheme === 'named';
+}
+
+// Ana's cardinality signal: hint (never auto-exempt) when an unmarked
+// non-parseable version smells like a named umbrella. Mirrors umbrellaHint() in
+// src/lib/version-guard.ts.
+function umbrellaHint(vo) {
+  const items = Array.isArray(vo.items) ? vo.items : [];
+  const owners = new Set(items.map((it) => (it && typeof it === 'object' ? it.owner : undefined)).filter((o) => typeof o === 'string' && o.length > 0));
+  const state = typeof vo.state === 'string' ? vo.state : vo.status;
+  const shippedAt = vo.shipped_at ?? vo.shippedAt;
+  if (items.length >= 10 && owners.size >= 3 && state === 'current' && shippedAt == null) {
+    return `looks like a named umbrella (${items.length} items across ${owners.size} owners, status:current, not shipped) — if intentional, mark it kind:"umbrella"`;
+  }
+  return undefined;
 }
 
 // 2) live store → PER-PROJECT scheme consistency (calver is org-studio's choice,
@@ -85,18 +99,18 @@ if (!skipStore) {
         for (const v of s.approvedVersions ?? []) entries.push({ val: v, surface: `${p.id}/section ${s.id ?? s.name}.approvedVersions[]` });
         for (const vo of s.versions ?? []) {
           if (isUmbrella(vo)) continue;
-          entries.push({ val: vo.version, surface: `${p.id}/section ${s.id ?? s.name}.versions[].version` });
+          entries.push({ val: vo.version, surface: `${p.id}/section ${s.id ?? s.name}.versions[].version`, vo });
         }
       }
       for (const t of store.tasks ?? []) if (t.projectId === p.id) entries.push({ val: t.version, surface: `task ${t.ticketNumber ? '#' + t.ticketNumber : t.id} (${p.id})` });
 
       const wellFormed = [];
-      for (const { val, surface } of entries) {
+      for (const { val, surface, vo } of entries) {
         if (val == null || val === '') continue;
         if (typeof val !== 'string') { push(surface, String(val), 'calver', 'non-string'); continue; }
         if (SENTINEL_RE.test(val)) { push(surface, val, 'calver', 'sentinel/junk (99.99.x)'); continue; }
         const scheme = detectScheme(val);
-        if (!scheme) { push(surface, val, 'calver', 'malformed (neither semver nor calver; mark kind:"umbrella" if intentional container)'); continue; }
+        if (!scheme) { push(surface, val, 'calver', 'malformed (neither semver nor calver; mark kind:"umbrella" if intentional container)', vo ? umbrellaHint(vo) : undefined); continue; }
         wellFormed.push({ scheme, surface, value: val });
       }
       if (!wellFormed.length) continue;
@@ -114,5 +128,8 @@ if (violations.length === 0) {
   process.exit(0);
 }
 console.error(`❌ Version guard: FAIL — ${violations.length} violation(s):`);
-for (const v of violations) console.error(`  ✗ [${v.expected}] ${v.surface}: "${v.value}" — ${v.reason}`);
+for (const v of violations) {
+  console.error(`  ✗ [${v.expected}] ${v.surface}: "${v.value}" — ${v.reason}`);
+  if (v.hint) console.error(`      ↳ hint: ${v.hint}`);
+}
 process.exit(1);
