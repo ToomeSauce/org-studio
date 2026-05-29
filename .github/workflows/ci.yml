@@ -62,16 +62,18 @@ jobs:
       - name: Vitest
         run: npm test
 
-  # Version-scheme guard (#1561). GATING as of 2026-05-29: the whole store now
-  # conforms (proj-catpilot's malformed version was cleaned by its owner). This
-  # job checks package.json is valid semver (offline, --no-store). The guard
-  # LOGIC is also unit-tested in the gating `test` job (version-guard.test.ts).
-  # Per-project store consistency is checked by `npm run version-check` against
-  # a live store (locally / pre-commit), since CI has no store to reach.
+  # Version-scheme guard (#1561). NON-GATING again (2026-05-29): Ana found my
+  # first gating flip was premature — the guard under-scanned (it ignored
+  # section.versions[], the primary roadmap version array). Fixing coverage +
+  # adding named-umbrella support (e.g. catpilot "2026-Q2-sprint", a Basil-owned
+  # quarter-spanning container that is legitimately not a dated release).
+  # Re-promote to gating only after the full catpilot roadmap passes for the
+  # RIGHT reason. The guard LOGIC is unit-tested in the gating `test` job.
   version-guard:
-    name: version-guard (gating)
+    name: version-guard (non-gating)
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

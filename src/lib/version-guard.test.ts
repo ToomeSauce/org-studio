@@ -106,6 +106,84 @@ describe('version-guard — store (per-project scheme consistency)', () => {
     };
     expect(checkStoreVersions(bad).length).toBeGreaterThan(0);
   });
+
+  it('scans section.versions[].version (the canonical roadmap list)', () => {
+    // A semver odd-one-out hiding in versions[] of a calver project must be caught.
+    const bad: StoreShape = {
+      projects: [
+        {
+          id: 'p',
+          currentVersion: '2026.05.07',
+          sections: [
+            { id: 's', versions: [{ version: '2026.05.07' }, { version: '2026.05.13' }, { version: '0.4.0' }] },
+          ],
+        },
+      ],
+    };
+    const v = checkStoreVersions(bad);
+    expect(v.some((x) => x.value === '0.4.0' && /versions\[\]/.test(x.surface))).toBe(true);
+  });
+
+  it('exempts an explicitly-marked named umbrella in versions[]', () => {
+    // Mirrors catpilot: three calvers + a Basil-owned "2026-Q2-sprint" umbrella.
+    const ok: StoreShape = {
+      projects: [
+        {
+          id: 'proj-catpilot',
+          currentVersion: '2026.05.23',
+          sections: [
+            {
+              id: 's',
+              approvedVersions: ['2026.05.23'],
+              versions: [
+                { version: '2026.05.07' },
+                { version: '2026.05.13' },
+                { version: '2026.05.23' },
+                { version: '2026-Q2-sprint', kind: 'umbrella' }, // exempt
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    expect(checkStoreVersions(ok)).toHaveLength(0);
+  });
+
+  it('still flags an UNMARKED non-parseable version in versions[]', () => {
+    const bad: StoreShape = {
+      projects: [
+        {
+          id: 'p',
+          currentVersion: '2026.05.07',
+          sections: [{ id: 's', versions: [{ version: '2026.05.07' }, { version: '2026-Q2-sprint' }] }],
+        },
+      ],
+    };
+    const v = checkStoreVersions(bad);
+    expect(v.some((x) => x.value === '2026-Q2-sprint')).toBe(true);
+  });
+
+  it('accepts isUmbrella:true and scheme:"named" markers too', () => {
+    const ok: StoreShape = {
+      projects: [
+        {
+          id: 'p',
+          currentVersion: '2026.05.07',
+          sections: [
+            {
+              id: 's',
+              versions: [
+                { version: '2026.05.07' },
+                { version: 'Q3-bigbet', isUmbrella: true },
+                { version: 'launch-window', scheme: 'named' },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    expect(checkStoreVersions(ok)).toHaveLength(0);
+  });
 });
 
 describe('version-guard — combined runner', () => {

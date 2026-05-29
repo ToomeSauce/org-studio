@@ -59,8 +59,16 @@ function detectScheme(value) {
   return null;
 }
 
+function isUmbrella(vo) {
+  const kind = typeof vo.kind === 'string' ? vo.kind.toLowerCase() : '';
+  const scheme = typeof vo.scheme === 'string' ? vo.scheme.toLowerCase() : '';
+  return vo.isUmbrella === true || kind === 'umbrella' || kind === 'container' || scheme === 'named';
+}
+
 // 2) live store → PER-PROJECT scheme consistency (calver is org-studio's choice,
 //    NOT a product-wide rule — other projects use semver roadmaps deliberately).
+//    Scans currentVersion, approvedVersions[], section.versions[].version, and
+//    task.version. Explicitly-marked named umbrellas are exempt.
 const skipStore = process.argv.includes('--no-store');
 if (!skipStore) {
   const port = process.env.PORT || 4501;
@@ -75,6 +83,10 @@ if (!skipStore) {
       for (const s of p.sections ?? []) {
         entries.push({ val: s.currentVersion, surface: `${p.id}/section ${s.id ?? s.name}.currentVersion` });
         for (const v of s.approvedVersions ?? []) entries.push({ val: v, surface: `${p.id}/section ${s.id ?? s.name}.approvedVersions[]` });
+        for (const vo of s.versions ?? []) {
+          if (isUmbrella(vo)) continue;
+          entries.push({ val: vo.version, surface: `${p.id}/section ${s.id ?? s.name}.versions[].version` });
+        }
       }
       for (const t of store.tasks ?? []) if (t.projectId === p.id) entries.push({ val: t.version, surface: `task ${t.ticketNumber ? '#' + t.ticketNumber : t.id} (${p.id})` });
 
@@ -84,7 +96,7 @@ if (!skipStore) {
         if (typeof val !== 'string') { push(surface, String(val), 'calver', 'non-string'); continue; }
         if (SENTINEL_RE.test(val)) { push(surface, val, 'calver', 'sentinel/junk (99.99.x)'); continue; }
         const scheme = detectScheme(val);
-        if (!scheme) { push(surface, val, 'calver', 'malformed (neither semver nor calver)'); continue; }
+        if (!scheme) { push(surface, val, 'calver', 'malformed (neither semver nor calver; mark kind:"umbrella" if intentional container)'); continue; }
         wellFormed.push({ scheme, surface, value: val });
       }
       if (!wellFormed.length) continue;

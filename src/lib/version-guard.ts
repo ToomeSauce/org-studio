@@ -55,10 +55,28 @@ export function checkPackageVersion(version: unknown): VersionViolation[] {
 }
 
 /** Minimal shapes — kept loose so this works against the live store JSON. */
-interface StoreSection { id?: string; name?: string; currentVersion?: unknown; approvedVersions?: unknown[] }
+interface StoreVersionObj { version?: unknown; name?: unknown; kind?: unknown; scheme?: unknown; isUmbrella?: unknown }
+interface StoreSection { id?: string; name?: string; currentVersion?: unknown; approvedVersions?: unknown[]; versions?: StoreVersionObj[] }
 interface StoreProject { id?: string; currentVersion?: unknown; sections?: StoreSection[] }
 interface StoreTask { id?: string; ticketNumber?: number; projectId?: string; version?: unknown }
 export interface StoreShape { projects?: StoreProject[]; tasks?: StoreTask[] }
+
+/**
+ * Is this version object an explicitly-marked NAMED UMBRELLA (a container that
+ * spans multiple dated releases, e.g. a quarter-long GTM sprint)? Umbrellas are
+ * exempt from scheme-consistency because they are intentionally not a single
+ * dated/numbered release.
+ *
+ * Exemption is OPT-IN ONLY (kind/scheme/isUmbrella marker). We do NOT guess from
+ * the string, because a non-parseable string is ambiguous: "2026-Q2-sprint"
+ * (legit umbrella) and "2026.06-platform-hardening" (was junk) are
+ * indistinguishable by shape. Strict-by-default; explicit escape hatch only.
+ */
+function isUmbrellaVersion(v: StoreVersionObj): boolean {
+  const kind = typeof v.kind === 'string' ? v.kind.toLowerCase() : '';
+  const scheme = typeof v.scheme === 'string' ? v.scheme.toLowerCase() : '';
+  return v.isUmbrella === true || kind === 'umbrella' || kind === 'container' || scheme === 'named';
+}
 
 /**
  * Classify a single store version by FORMAT only (no expected-scheme — we don't
@@ -78,12 +96,16 @@ function detectScheme(value: string): 'semver' | 'calver' | null {
  * SCOPE (corrected #1561 — see docs/decisions/2026-05-29-two-version-schemes.md):
  * calver is NOT a product-wide rule — it is Org Studio's per-project choice.
  * Other projects (Thrivor, Garage, Podcast API, …) deliberately use semver
- * roadmaps. So this guard enforces PER-PROJECT CONSISTENCY, not a single scheme:
- *   - Each project picks ONE roadmap scheme (semver OR calver) from its data.
- *   - Versions that don't match the project's own scheme are flagged.
- *   - Junk (sentinels, malformed hybrids like "2026.06-platform-hardening") is
- *     always flagged.
- * It never flags a project merely for choosing semver over calver.
+ * roadmaps. So this guard enforces PER-PROJECT CONSISTENCY, not a single scheme.
+ *
+ * SURFACES scanned per project: project.currentVersion, section.currentVersion,
+ * section.approvedVersions[], section.versions[].version (the canonical roadmap
+ * list), and task.version.
+ *
+ * NAMED UMBRELLAS: a section.versions[] entry explicitly marked as an umbrella
+ * (kind/scheme/isUmbrella) is exempt from scheme-consistency — it is a container,
+ * not a dated release. Unmarked non-parseable strings are flagged (warn), and
+ * 99.99.x sentinels are always flagged (error).
  */
 export function checkStoreVersions(store: StoreShape): VersionViolation[] {
   const out: VersionViolation[] = [];
@@ -95,6 +117,11 @@ export function checkStoreVersions(store: StoreShape): VersionViolation[] {
     for (const s of p.sections ?? []) {
       entries.push({ val: s.currentVersion, surface: `project ${p.id} / section ${s.id ?? s.name}.currentVersion` });
       for (const v of s.approvedVersions ?? []) entries.push({ val: v, surface: `project ${p.id} / section ${s.id ?? s.name}.approvedVersions[]` });
+      // section.versions[] — the canonical roadmap version list. Skip explicitly-marked umbrellas.
+      for (const vo of s.versions ?? []) {
+        if (isUmbrellaVersion(vo)) continue; // named container — exempt
+        entries.push({ val: vo.version, surface: `project ${p.id} / section ${s.id ?? s.name}.versions[].version` });
+      }
     }
     for (const t of store.tasks ?? []) {
       if (t.projectId === p.id) entries.push({ val: t.version, surface: `task ${t.ticketNumber ? '#' + t.ticketNumber : t.id} (${p.id})` });
@@ -107,7 +134,7 @@ export function checkStoreVersions(store: StoreShape): VersionViolation[] {
       if (typeof val !== 'string') { out.push({ surface, value: String(val), expected: 'calver', reason: 'non-string version' }); continue; }
       if (SENTINEL_RE.test(val)) { out.push({ surface, value: val, expected: 'calver', reason: 'sentinel/junk version (99.99.x)' }); continue; }
       const scheme = detectScheme(val);
-      if (!scheme) { out.push({ surface, value: val, expected: 'calver', reason: 'malformed version (neither valid semver nor calver)' }); continue; }
+      if (!scheme) { out.push({ surface, value: val, expected: 'calver', reason: 'malformed version (neither valid semver nor calver; if this is an intentional named container, mark it kind:"umbrella")' }); continue; }
       wellFormed.push({ scheme, surface, value: val });
     }
 
