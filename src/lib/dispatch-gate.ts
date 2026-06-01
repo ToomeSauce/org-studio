@@ -23,6 +23,7 @@ import { MAX_OPEN_EXPERIMENTS } from '@/lib/version-metric';
 
 interface TaskLike {
   id: string;
+  ticketNumber?: number;
   projectId?: string;
   sectionId?: string;
   version?: string;
@@ -33,6 +34,10 @@ interface TaskLike {
   loopPausedAt?: number | string | null;
   createdAt?: number;
   sortOrder?: number; // #1250 — user-controlled column order, dispatcher reads this primary, createdAt as tiebreaker
+  // #1102 structured blocker graph. Canonical type is number[] (ticket numbers),
+  // but prod rows have been observed storing task id strings here too, so the
+  // resolver below matches against BOTH ticketNumber and id. #1571.
+  blockedBy?: Array<number | string> | null;
 }
 
 // #1183 — adhoc tickets (taskType bug/chore/spike/followup) are filed without
@@ -342,6 +347,11 @@ export function getEligibleBacklogFifo(
     const a = (t.assignee || '').toLowerCase();
     if (!matchers.has(a)) continue;
     if (!isTaskAnyDispatchEligible(store, t)) continue;
+    // #1571: transitive-blocker gate. A backlog candidate is ineligible if any
+    // ticket in its blockedBy chain is not yet `done` — including the common
+    // case where the blocker itself sits in `blocked` (awaiting human action).
+    // Without this, sub-tickets of a blocked umbrella ticket got dispatched.
+    if (!areBlockersCleared(store, t)) continue;
     eligible.push(t);
   }
   // Stable ASC by sortOrder; createdAt is the deterministic tiebreaker for
@@ -354,6 +364,39 @@ export function getEligibleBacklogFifo(
     return (a.createdAt ?? 0) - (b.createdAt ?? 0);
   });
   return eligible;
+}
+
+/**
+ * #1571 — transitive-blocker eligibility check.
+ *
+ * Returns true iff EVERY ticket in `task.blockedBy` is resolved (status
+ * `done`). A blocker that is itself in `blocked` status is NOT resolved —
+ * it's awaiting human action, so the downstream task must wait too.
+ *
+ * Resolution is defensive about the blockedBy element type. The canonical
+ * type is `number[]` (ticket numbers, matched against `blocker.ticketNumber`),
+ * but prod rows have been seen storing task id strings (matched against
+ * `blocker.id`). We match either form. A dangling reference (no task found
+ * for the id/number) is treated as CLEARED — same stance as the #1102
+ * auto-unblock path, which skips blockers it can't resolve rather than
+ * wedging the downstream ticket forever.
+ *
+ * Empty / missing blockedBy → vacuously cleared (returns true).
+ */
+export function areBlockersCleared(store: StoreLike, task: TaskLike): boolean {
+  const bb = Array.isArray(task.blockedBy) ? task.blockedBy : [];
+  if (bb.length === 0) return true;
+
+  const tasks = store.tasks || [];
+  for (const ref of bb) {
+    if (ref === null || ref === undefined) continue;
+    const blocker = tasks.find(
+      (x) => x.id === ref || (x.ticketNumber !== undefined && x.ticketNumber === ref),
+    );
+    if (!blocker) continue; // dangling ref — treat as cleared
+    if (blocker.status !== 'done') return false;
+  }
+  return true;
 }
 
 /**
