@@ -18,12 +18,19 @@
 import { describe, test, expect } from 'vitest';
 import { getEligibleBacklogFifo, areBlockersCleared } from '@/lib/dispatch-gate';
 
+// StoreLike / ProjectLike / TaskLike are internal (non-exported) to
+// dispatch-gate. Derive the exact param types from the public functions so
+// fixtures typecheck without re-declaring those shapes here.
+type Store = Parameters<typeof getEligibleBacklogFifo>[0];
+type Task = NonNullable<Store['tasks']>[number];
+type Project = NonNullable<Store['projects']>[number];
+
 // Minimal active project; adhoc (bug) tasks only need a started project.
-const PROJECT = { id: 'proj-os', state: 'active' as const };
+const PROJECT = { id: 'proj-os', state: 'active' } as unknown as Project;
 
 type T = Record<string, any>;
 
-function bugTask(over: T): T {
+function bugTask(over: T): Task {
   return {
     id: over.id ?? 'auto',
     taskType: 'bug',
@@ -33,10 +40,10 @@ function bugTask(over: T): T {
     createdAt: 1,
     sortOrder: 1,
     ...over,
-  };
+  } as Task;
 }
 
-function storeWith(tasks: T[]) {
+function storeWith(tasks: Task[]): Store {
   return { projects: [PROJECT], tasks };
 }
 
