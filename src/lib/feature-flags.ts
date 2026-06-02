@@ -6,15 +6,21 @@
 import * as React from 'react';
 
 export const FEATURE_FLAGS = {
-  // Mobile-first threaded UX (v0.15+): tabs, threads, unified inbox
-  MOBILE_FIRST_UX: 'mobile-first-ux',
-  // Push notifications (v0.15+)
-  PUSH_NOTIFICATIONS: 'push-notifications',
-  // Telegram migration tools (v0.16+)
-  TELEGRAM_MIGRATION: 'telegram-migration',
+  // No active experimental flags.
+  //
+  // This registry is intentionally empty. The flag *infrastructure* below
+  // (isFeatureEnabled / toggleFeatureFlag / useFeatureFlag) is kept so the
+  // next real experiment can register a flag here AND wire a consumer in the
+  // same change. Per the vision Boundaries: "No dead toggles — don't ship a
+  // feature flag without a working consumer behind it."
+  //
+  // Removed 2026-06-02 (Cloud Prep cleanup): MOBILE_FIRST_UX (IA deleted),
+  // PUSH_NOTIFICATIONS (no push code ever shipped), TELEGRAM_MIGRATION
+  // (script never authored). All three were registry+Settings-only with zero
+  // functional consumers.
 } as const;
 
-export type FeatureFlag = (typeof FEATURE_FLAGS)[keyof typeof FEATURE_FLAGS];
+export type FeatureFlag = string;
 
 /**
  * Client-side: read from localStorage + env overrides
@@ -56,11 +62,11 @@ export function isFeatureEnabledServer(flag: FeatureFlag): boolean {
 /**
  * Get all feature flags state (client-side)
  */
-export function getAllFeatureFlags(): Record<FeatureFlag, boolean> {
-  return Object.values(FEATURE_FLAGS).reduce((acc, flag) => {
+export function getAllFeatureFlags(): Record<string, boolean> {
+  return (Object.values(FEATURE_FLAGS) as string[]).reduce<Record<string, boolean>>((acc, flag) => {
     acc[flag] = isFeatureEnabled(flag);
     return acc;
-  }, {} as Record<FeatureFlag, boolean>);
+  }, {});
 }
 
 /**
