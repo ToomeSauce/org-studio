@@ -200,6 +200,11 @@ export interface Task {
   // UNLESS blockedBy[] is set (a dependency block — case-a — passes untouched).
   blockedReasonType?: 'irreversible-decision' | 'external-dependency' | 'needs-human-judgment' | 'awaiting-review';
 
+  // #1589 Domain Steward — last time the active-stewardship sweep nudged the
+  // owner about this ticket. Idempotency stamp (no duplicate nudges within
+  // NUDGE_COOLDOWN_MS). Persists via the `data` JSONB overflow (no column).
+  lastStewardNudgeAt?: number | null;
+
   // #1352 — Claim contract (60-min heartbeat lease).
   // When an agent transitions a task INTO in-progress, claim_started_at is
   // stamped and claim_lease_expires_at = claim_started_at + 60min. Every
