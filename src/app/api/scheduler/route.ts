@@ -71,7 +71,8 @@ import {
   buildProposeNextPrompt,
   PROPOSE_COOLDOWN_MS,
   type DoneUnmetVersionLike,
-} from '@/lib/done-but-unmet';const DEFAULT_MODEL = 'foundry-openai-chat/gpt-5.4';
+} from '@/lib/done-but-unmet';
+import { validateMetricSource, pollMetricSource } from '@/lib/metric-source';const DEFAULT_MODEL = 'foundry-openai-chat/gpt-5.4';
 
 // Minimum seconds between event-driven triggers for the same agent (debounce)
 const TRIGGER_COOLDOWN_MS = 60_000; // 1 minute
@@ -1822,6 +1823,82 @@ export async function POST(request: NextRequest) {
         }
         // ---- end Done-but-unmet pass ----------------------------------
 
+        // ---- #1586 Assisted metric capture pass -----------------------
+        // For each version with a configured metricSource (endpoint poll),
+        // fetch the endpoint, extract the number, and write metricCurrent via
+        // the roadmap API. Manual entry is untouched and always wins on the
+        // next manual PATCH — this only populates when a source is configured.
+        // Best-effort; a flaky endpoint never breaks the sweep.
+        let metricsPolled = 0;
+        try {
+          const rvsM = (store.roadmapVersions || []) as any[];
+          const projsM = (store.projects || []) as any[];
+          // Basic SSRF guard: only public http(s) hosts. Blocks localhost,
+          // link-local, and obvious private ranges. Not exhaustive, but stops
+          // the foot-guns; a configured source is owner-supplied, not arbitrary.
+          const isBlockedHost = (host: string): boolean => {
+            const h = host.toLowerCase();
+            if (h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '0.0.0.0') return true;
+            if (/^10\./.test(h) || /^192\.168\./.test(h) || /^169\.254\./.test(h)) return true;
+            if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return true;
+            return false;
+          };
+          const fetchJson = async (url: string) => {
+            const u = new URL(url);
+            if (isBlockedHost(u.hostname)) throw new Error('blocked host (private/loopback)');
+            const ac = new AbortController();
+            const to = setTimeout(() => ac.abort(), 8000);
+            try {
+              const resp = await fetch(url, { signal: ac.signal, headers: { Accept: 'application/json' } });
+              if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+              return await resp.json();
+            } finally {
+              clearTimeout(to);
+            }
+          };
+
+          for (const v of rvsM) {
+            const meta = v.meta && typeof v.meta === 'object' ? v.meta : {};
+            const rawSource = meta.metricSource ?? v.metricSource;
+            if (!rawSource) continue;
+            const valid = validateMetricSource(rawSource);
+            if (!valid.ok) {
+              console.warn(`[metric-capture #1586] ${v.version}: invalid source — ${valid.error}`);
+              continue;
+            }
+            const result = await pollMetricSource(valid.source, fetchJson);
+            if (!result.ok) {
+              console.warn(`[metric-capture #1586] ${v.version}: poll failed — ${result.error}`);
+              continue;
+            }
+            // Only write when the value actually changed (avoid noisy churn).
+            const prev = meta.metricCurrent ?? v.metricCurrent;
+            if (typeof prev === 'number' && prev === result.value) continue;
+            const proj = projsM.find((p: any) => p.id === v.projectId || p.id === v.project_id);
+            const projectId = proj?.id || v.projectId || v.project_id;
+            if (!projectId) continue;
+            try {
+              await fetch(`http://127.0.0.1:${process.env.PORT || 4501}/api/roadmap/${projectId}`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: `Bearer ${process.env.ORG_STUDIO_API_KEY || ''}`,
+                },
+                body: JSON.stringify({ action: 'upsert', version: v.version, metricCurrent: result.value }),
+              });
+              metricsPolled++;
+            } catch (e: any) {
+              console.warn(`[metric-capture #1586] ${v.version}: write failed — ${e?.message || e}`);
+            }
+          }
+          if (metricsPolled > 0) {
+            console.log(`[metric-capture #1586] updated metricCurrent on ${metricsPolled} version(s)`);
+          }
+        } catch (metricErr: any) {
+          console.warn('[metric-capture #1586] pass failed (non-fatal):', metricErr?.message || metricErr);
+        }
+        // ---- end Assisted metric capture pass -------------------------
+
         // #1187: auto-stop pass DELETED. Project state is now
         // user-controlled only — the system never flips active→inactive.
         // Spec: spec-project-model-simplification.md §Auto-stop removal.
@@ -1846,7 +1923,7 @@ export async function POST(request: NextRequest) {
           results: swept.slice(),
         });
 
-        return NextResponse.json({ ok: true, swept, steward: { nudged: stewardNudged, escalated: stewardEscalated }, proposeNext: { nudged: proposeNudged } });
+        return NextResponse.json({ ok: true, swept, steward: { nudged: stewardNudged, escalated: stewardEscalated }, proposeNext: { nudged: proposeNudged }, metricCapture: { polled: metricsPolled } });
       }
 
       case 'escalate-stale-backlog': {

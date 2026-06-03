@@ -120,6 +120,9 @@ interface RoadmapVersion {
   metricTarget?: number;
   metricComparator?: 'gte' | 'lte' | 'eq';
   loopPaused?: boolean;
+  // #1586 — assisted metric capture: per-version source config (endpoint poll).
+  // Presence means metricCurrent is auto-populated; manual entry still works.
+  metricSource?: { kind: string; url: string; jsonPath?: string; scale?: number } | null;
 }
 
 interface Project {
@@ -218,6 +221,7 @@ function HypothesisCard({
   metricComparator = 'gte',
   loopPaused,
   experiments,
+  hasSource,
 }: {
   successCriteria: string;
   metricCurrent?: number;
@@ -225,6 +229,7 @@ function HypothesisCard({
   metricComparator?: MetricCmp;
   loopPaused?: boolean;
   experiments: Array<{ title: string; done: boolean }>;
+  hasSource?: boolean;
 }) {
   const met = metricMet(metricCurrent, metricTarget, metricComparator);
   const prog = metricProgress(metricCurrent, metricTarget, metricComparator);
@@ -271,7 +276,13 @@ function HypothesisCard({
       <div>
         <div className="flex items-baseline justify-between text-xs">
           <span className="text-[var(--text-muted)]">Measured vs target</span>
-          <span className="font-mono text-[var(--text-secondary)]">
+          <span className="font-mono text-[var(--text-secondary)] inline-flex items-center gap-1">
+            {hasSource && (
+              <span
+                title="metricCurrent is auto-populated from a configured source (endpoint poll). Manual override still works."
+                className="not-italic text-[10px] px-1 rounded bg-[var(--bg-tertiary)] text-[var(--text-muted)] border border-[var(--border-color)]"
+              >📡 auto</span>
+            )}
             {hasMeasure ? metricCurrent : '?'} <span className="text-[var(--text-muted)]">{cmpLabel}</span> {hasMeasure ? metricTarget : '?'}
           </span>
         </div>
@@ -1198,6 +1209,7 @@ export function RoadmapWithApprovalHorizon({
                     metricTarget={version.metricTarget}
                     metricComparator={(version.metricComparator as MetricCmp) || 'gte'}
                     loopPaused={version.loopPaused}
+                    hasSource={!!version.metricSource}
                     experiments={(version.items || []).map((item) => ({
                       title: roadmapItemDisplayTitle(item),
                       done: !!item.done,

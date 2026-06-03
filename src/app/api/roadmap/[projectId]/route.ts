@@ -6,6 +6,7 @@ import { checkArchivedProject } from '@/lib/archived-project-compat';
 import { versionSortKey, compareVersions, isValidVersion } from '@/lib/version-utils';
 import { renameVersionInProjectData, rvDerivedId } from '@/lib/roadmap-rename';
 import { syncProjectShadowVersion } from '@/lib/roadmap-sync';
+import { validateMetricSource } from '@/lib/metric-source';
 
 // #1461 — allow-list for version_type (must match the DB CHECK constraint
 // installed by migrations/1461-roadmap-version-invariants.mjs).
@@ -175,6 +176,7 @@ export async function GET(
             ...(meta.metricTarget !== undefined ? { metricTarget: meta.metricTarget } : {}),
             ...(meta.metricComparator !== undefined ? { metricComparator: meta.metricComparator } : {}),
             ...(meta.loopPaused !== undefined ? { loopPaused: meta.loopPaused } : {}),
+            ...(meta.metricSource !== undefined ? { metricSource: meta.metricSource } : {}),
             ...(Array.isArray(meta.systemComments) ? { systemComments: meta.systemComments } : {}),
           };
         });
@@ -254,7 +256,7 @@ export async function POST(
     // present so bad payloads return 400 instead of corrupting `meta` jsonb.
     // We track which keys the caller actually sent so we can do a partial
     // merge (preserving existing meta keys the caller didn't touch).
-    const META_KEYS = ['successCriteria', 'metricCurrent', 'metricTarget', 'metricComparator', 'loopPaused', 'kind', 'isUmbrella'] as const;
+    const META_KEYS = ['successCriteria', 'metricCurrent', 'metricTarget', 'metricComparator', 'loopPaused', 'kind', 'isUmbrella', 'metricSource'] as const;
     const metaProvided: Record<string, boolean> = {};
     const metaInput: Record<string, any> = {};
     for (const k of META_KEYS) {
@@ -296,6 +298,16 @@ export async function POST(
       }
       if (metaProvided.isUmbrella && metaInput.isUmbrella != null && typeof metaInput.isUmbrella !== 'boolean') {
         return NextResponse.json({ error: 'isUmbrella must be a boolean' }, { status: 400 });
+      }
+      // #1586 — assisted metric capture: validate the per-version metric
+      // source config. null clears it (manual-only); an object must pass the
+      // strict validator so a bad source never corrupts meta.
+      if (metaProvided.metricSource && metaInput.metricSource != null) {
+        const v = validateMetricSource(metaInput.metricSource);
+        if (!v.ok) {
+          return NextResponse.json({ error: `metricSource: ${v.error}` }, { status: 400 });
+        }
+        metaInput.metricSource = v.source; // store the normalized form
       }
     }
 
