@@ -65,7 +65,13 @@ import {
   buildHumanSummary,
   NUDGE_COOLDOWN_MS,
   type StewardTaskLike,
-} from '@/lib/domain-steward';const DEFAULT_MODEL = 'foundry-openai-chat/gpt-5.4';
+} from '@/lib/domain-steward';
+import {
+  planProposeSweep,
+  buildProposeNextPrompt,
+  PROPOSE_COOLDOWN_MS,
+  type DoneUnmetVersionLike,
+} from '@/lib/done-but-unmet';const DEFAULT_MODEL = 'foundry-openai-chat/gpt-5.4';
 
 // Minimum seconds between event-driven triggers for the same agent (debounce)
 const TRIGGER_COOLDOWN_MS = 60_000; // 1 minute
@@ -1740,6 +1746,82 @@ export async function POST(request: NextRequest) {
         }
         // ---- end Domain Steward pass ----------------------------------
 
+        // ---- #1585 Done-but-unmet nudge pass --------------------------
+        // When every child ticket of an outcome-bound version is done but
+        // the metric still misses target, nudge the OWNER once to propose
+        // the next experiment (or conclude the hypothesis). On-demand,
+        // summarize-once, idempotent (lastProposeNudgeAt). Never auto-spawns.
+        let proposeNudged = 0;
+        try {
+          const nowP = Date.now();
+          const teammatesP = (store.settings?.teammates || []) as any[];
+          const nameToAgentIdP = (name: string): string | undefined => {
+            const lower = (name || '').toLowerCase();
+            const t = teammatesP.find(
+              (tm) => (tm.name || '').toLowerCase() === lower || (tm.agentId || '').toLowerCase() === lower,
+            );
+            return t?.agentId;
+          };
+          // Resolve each version owner: explicit version.owner, else the
+          // owning component's owner, else the project devOwner.
+          const rvs = (store.roadmapVersions || []) as any[];
+          const projForVersion = (store.projects || []) as any[];
+          const defaultOwner = (p: any): string => {
+            const comps = (p?.components && p.components.length ? p.components : p?.sections) || [];
+            const primary = comps.find((c: any) => c.role !== 'qa' && c.role !== 'support') || comps[0];
+            return (primary?.owner || p?.devOwner || '').toString();
+          };
+          const dunVersions: DoneUnmetVersionLike[] = rvs.map((v: any) => {
+            const meta = v.meta && typeof v.meta === 'object' ? v.meta : {};
+            const proj = projForVersion.find((p: any) => p.id === v.projectId || p.id === v.project_id);
+            return {
+              id: v.id,
+              version: v.version,
+              status: v.status,
+              owner: (v.owner || (proj ? defaultOwner(proj) : '')) || '',
+              successCriteria: meta.successCriteria ?? v.successCriteria,
+              metricCurrent: meta.metricCurrent ?? v.metricCurrent,
+              metricTarget: meta.metricTarget ?? v.metricTarget,
+              metricComparator: meta.metricComparator ?? v.metricComparator,
+              loopPaused: meta.loopPaused ?? v.loopPaused,
+              items: v.items || [],
+              lastProposeNudgeAt: meta.lastProposeNudgeAt ?? v.lastProposeNudgeAt ?? null,
+            };
+          });
+
+          const proposePlan = planProposeSweep(dunVersions, nowP);
+          for (const n of proposePlan.nudges) {
+            const agentId = nameToAgentIdP(n.owner);
+            if (!agentId) {
+              console.warn(`[propose-next #1585] no agentId for owner='${n.owner}' on ${n.version.version} — skip`);
+              continue;
+            }
+            try {
+              await sendToAgent(agentId, buildProposeNextPrompt(n.version), {
+                idempotencyKey: `propose-${n.version.id}-${Math.floor(nowP / PROPOSE_COOLDOWN_MS)}`,
+              });
+              proposeNudged++;
+              // Best-effort idempotency stamp on the rv meta (no migration).
+              // Failure here only risks a duplicate nudge next sweep, which the
+              // idempotencyKey above still de-dupes within the cooldown bucket.
+              try {
+                const provider = getStoreProviderAllWorkspaces() as any;
+                if (typeof provider.updateRoadmapVersionMeta === 'function') {
+                  await provider.updateRoadmapVersionMeta(n.version.id, { lastProposeNudgeAt: nowP });
+                }
+              } catch { /* non-fatal */ }
+            } catch (e: any) {
+              console.warn(`[propose-next #1585] nudge failed for ${n.version.version}: ${e?.message || e}`);
+            }
+          }
+          if (proposeNudged > 0) {
+            console.log(`[propose-next #1585] nudged=${proposeNudged} (skipped=${proposePlan.skipped.length})`);
+          }
+        } catch (proposeErr: any) {
+          console.warn('[propose-next #1585] sweep failed (non-fatal):', proposeErr?.message || proposeErr);
+        }
+        // ---- end Done-but-unmet pass ----------------------------------
+
         // #1187: auto-stop pass DELETED. Project state is now
         // user-controlled only — the system never flips active→inactive.
         // Spec: spec-project-model-simplification.md §Auto-stop removal.
@@ -1764,7 +1846,7 @@ export async function POST(request: NextRequest) {
           results: swept.slice(),
         });
 
-        return NextResponse.json({ ok: true, swept, steward: { nudged: stewardNudged, escalated: stewardEscalated } });
+        return NextResponse.json({ ok: true, swept, steward: { nudged: stewardNudged, escalated: stewardEscalated }, proposeNext: { nudged: proposeNudged } });
       }
 
       case 'escalate-stale-backlog': {
