@@ -27,8 +27,20 @@ export interface EmbeddingProvider {
   readonly id: string;
   /** Vector length this provider emits. Must equal the DB column's dim. */
   readonly dim: number;
+  /**
+   * The pgvector column this provider reads/writes. Defaults to `embedding`
+   * (the 256-dim hashing column). Learned providers with a different dim use
+   * a dedicated column (e.g. `embedding_lg` for 1024) so the two embedding
+   * spaces never collide.
+   */
+  readonly column?: string;
   /** Embed a batch of texts → one unit-normalized vector each. */
   embed(texts: string[]): Promise<number[][]>;
+}
+
+/** The pgvector column a provider uses, defaulting to the original 256-dim one. */
+export function providerColumn(p: EmbeddingProvider): string {
+  return p.column || 'embedding';
 }
 
 /** Lowercase, split on non-alphanumerics, drop empties. Pure + deterministic. */
@@ -117,11 +129,26 @@ export function fromPgVectorLiteral(lit: string): number[] {
 }
 
 /**
- * Resolve the active provider from env. Default = deterministic hashing.
- * When EMBEDDING_PROVIDER=openai (and a key exists), a future
- * OpenAiEmbeddingProvider is returned by the network-backed module; here we
- * only ever return the dependency-free default so the pure module stays pure.
+ * Resolve the active provider from env.
+ *
+ * If Azure embedding env vars are configured (AZURE_EMBEDDING_ENDPOINT/KEY/
+ * DEPLOYMENT), use the learned text-embedding-3-large provider (1024-dim,
+ * `embedding_lg` column). Otherwise fall back to the deterministic,
+ * dependency-free hashing default (256-dim, `embedding` column).
+ *
+ * The azure module is required lazily so this file stays dependency-free and
+ * unit-testable when no learned provider is configured.
  */
 export function defaultProvider(): EmbeddingProvider {
+  if (process.env.AZURE_EMBEDDING_ENDPOINT && process.env.AZURE_EMBEDDING_KEY && process.env.AZURE_EMBEDDING_DEPLOYMENT) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const mod = require('./azure-provider');
+      const p = mod.azureProviderFromEnv?.();
+      if (p) return p;
+    } catch {
+      // fall through to hashing default if the module can't load
+    }
+  }
   return new HashingEmbeddingProvider(EMBEDDING_DIM);
 }

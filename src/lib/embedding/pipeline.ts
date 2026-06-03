@@ -10,7 +10,7 @@
  * the embedding math + extraction stay pure + unit-tested elsewhere.
  */
 import { Pool } from 'pg';
-import { defaultProvider, toPgVectorLiteral, type EmbeddingProvider } from './provider';
+import { defaultProvider, toPgVectorLiteral, providerColumn, type EmbeddingProvider } from './provider';
 import type { CorpusDoc } from './corpus';
 
 let _pool: Pool | null = null;
@@ -62,6 +62,14 @@ export async function indexDocs(
 
   const vectors = await provider.embed(toEmbed.map((d) => d.text));
 
+  // The pgvector column depends on the provider's dim (embedding=256,
+  // embedding_lg=1024). Validated against an allowlist so it can never be
+  // attacker-controlled SQL.
+  const col = providerColumn(provider);
+  if (!/^embedding(_[a-z0-9]+)?$/.test(col)) {
+    throw new Error(`unsafe embedding column: ${col}`);
+  }
+
   // UPSERT each. Kept simple + safe; batch sizes here are small per cycle.
   const client = await pool.connect();
   try {
@@ -71,7 +79,7 @@ export async function indexDocs(
       const vec = toPgVectorLiteral(vectors[i]);
       await client.query(
         `INSERT INTO org_studio_embeddings
-           (id, source_type, ref_id, project_id, task_id, ticket_number, owner, title, text, content_hash, provider_id, embedding, updated_at)
+           (id, source_type, ref_id, project_id, task_id, ticket_number, owner, title, text, content_hash, provider_id, ${col}, updated_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::vector, now())
          ON CONFLICT (id) DO UPDATE SET
            source_type = EXCLUDED.source_type,
@@ -84,7 +92,7 @@ export async function indexDocs(
            text = EXCLUDED.text,
            content_hash = EXCLUDED.content_hash,
            provider_id = EXCLUDED.provider_id,
-           embedding = EXCLUDED.embedding,
+           ${col} = EXCLUDED.${col},
            updated_at = now()`,
         [
           d.id, d.sourceType, d.refId, d.projectId ?? null, d.taskId ?? null,
