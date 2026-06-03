@@ -47,7 +47,13 @@ export function connect(): Promise<void> {
           id: 'handshake',
           method: 'connect',
           params: {
-            minProtocol: 3, maxProtocol: 3,
+            // Gateway bumped its wire protocol to v4 (openclaw 2026.5.28):
+            // it rejects clients whose maxProtocol < 4 with PROTOCOL_MISMATCH,
+            // which silently broke ALL dispatch delivery (every chat.send
+            // dead-lettered "No runtime found for agent X"). Advertise a
+            // tolerant 3..4 range so we negotiate v4 on the new gateway and
+            // still work if rolled back to a v3 gateway.
+            minProtocol: 3, maxProtocol: 4,
             client: { id: 'openclaw-control-ui', version: '0.1.0', platform: 'linux', mode: 'webchat' },
             role: 'operator',
             scopes: ['operator.read', 'operator.write', 'operator.admin'],
