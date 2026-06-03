@@ -1019,6 +1019,12 @@ export class PostgresStoreProvider implements StoreProvider {
         ...(meta.metricTarget !== undefined ? { metricTarget: meta.metricTarget } : {}),
         ...(meta.metricComparator !== undefined ? { metricComparator: meta.metricComparator } : {}),
         ...(meta.loopPaused !== undefined ? { loopPaused: meta.loopPaused } : {}),
+        // #1561 — lift the named-umbrella exemption marker from `meta` jsonb so
+        // the version-scheme guard (src/lib/version-guard.ts isUmbrellaVersion)
+        // can see it on section.versions[]. A non-calver/semver container like
+        // "2026-Q2-sprint" sets kind:"umbrella" to opt out of scheme checks.
+        ...(meta.kind !== undefined ? { kind: meta.kind } : {}),
+        ...(meta.isUmbrella !== undefined ? { isUmbrella: meta.isUmbrella } : {}),
       });
     }
     for (const [, list] of byProject) {

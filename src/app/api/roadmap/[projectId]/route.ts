@@ -254,7 +254,7 @@ export async function POST(
     // present so bad payloads return 400 instead of corrupting `meta` jsonb.
     // We track which keys the caller actually sent so we can do a partial
     // merge (preserving existing meta keys the caller didn't touch).
-    const META_KEYS = ['successCriteria', 'metricCurrent', 'metricTarget', 'metricComparator', 'loopPaused'] as const;
+    const META_KEYS = ['successCriteria', 'metricCurrent', 'metricTarget', 'metricComparator', 'loopPaused', 'kind', 'isUmbrella'] as const;
     const metaProvided: Record<string, boolean> = {};
     const metaInput: Record<string, any> = {};
     for (const k of META_KEYS) {
@@ -289,6 +289,13 @@ export async function POST(
       }
       if (metaProvided.loopPaused && metaInput.loopPaused != null && typeof metaInput.loopPaused !== 'boolean') {
         return NextResponse.json({ error: 'loopPaused must be a boolean' }, { status: 400 });
+      }
+      // #1561 — named-umbrella exemption markers for the version-scheme guard.
+      if (metaProvided.kind && metaInput.kind != null && typeof metaInput.kind !== 'string') {
+        return NextResponse.json({ error: 'kind must be a string (e.g. "umbrella")' }, { status: 400 });
+      }
+      if (metaProvided.isUmbrella && metaInput.isUmbrella != null && typeof metaInput.isUmbrella !== 'boolean') {
+        return NextResponse.json({ error: 'isUmbrella must be a boolean' }, { status: 400 });
       }
     }
 
