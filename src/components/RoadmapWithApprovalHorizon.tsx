@@ -231,6 +231,13 @@ function HypothesisCard({
   const hasMeasure = typeof metricCurrent === 'number' && typeof metricTarget === 'number';
   const cmpLabel = metricComparator === 'lte' ? '≤' : metricComparator === 'eq' ? '=' : '≥';
 
+  // #1585 — done-but-unmet: every experiment shipped, metric still short.
+  // Surface a "propose next experiment" call-to-action (UI half of #1585;
+  // the scheduler sweep nudges the owning agent in parallel). Uses the same
+  // pure predicate the sweep uses so UI + dispatch never disagree.
+  const allExperimentsDone = experiments.length > 0 && experiments.every((e) => e.done);
+  const doneButUnmet = !loopPaused && allExperimentsDone && met === false;
+
   // Did-it-move signal: met → moved/green; measured-but-unmet → not yet/amber;
   // unmeasured → grey "awaiting first measurement".
   const signal = met === true
@@ -294,6 +301,20 @@ function HypothesisCard({
           <p className="text-xs text-[var(--text-muted)]">No experiments linked yet.</p>
         )}
       </div>
+
+      {/* #1585 — done-but-unmet call-to-action. Every experiment shipped but
+       * the number didn't move: prompt the owner to propose the next one. */}
+      {doneButUnmet && (
+        <div className="rounded-md border border-amber-300 dark:border-amber-800/60 bg-amber-50 dark:bg-amber-950/30 px-3 py-2">
+          <div className="text-xs font-medium text-amber-800 dark:text-amber-300">
+            All experiments shipped — metric still short.
+          </div>
+          <div className="text-xs text-amber-700/90 dark:text-amber-400/90 mt-0.5">
+            The hypothesis didn’t move the number yet. Propose the next experiment to keep the loop going,
+            or conclude the hypothesis and adjust the goal.
+          </div>
+        </div>
+      )}
     </div>
   );
 }
