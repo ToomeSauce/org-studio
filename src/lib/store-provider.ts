@@ -18,6 +18,9 @@ export interface StoreData {
   projects: any[];
   tasks: any[];
   settings?: Record<string, any>;
+  // Roadmap versions for the active workspace. Populated by read(); optional
+  // because slim/hot-path reads may omit it. #1585 consumes it in the sweep.
+  roadmapVersions?: any[];
 }
 
 /**
