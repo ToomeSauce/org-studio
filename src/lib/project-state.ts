@@ -99,6 +99,15 @@ export async function promoteProjectToNextVersion(
   opts?: {
     targetVersion?: string;   // explicit version to promote to (Launch button)
     workspaceId?: string;
+    // #1594 — when true (the Launch/approve button, an explicit human act),
+    // treat targetVersion as approved: add it to the primary component's
+    // approvedVersions[] so the horizon gate passes, and allow launching an
+    // ALREADY-current version in place (sweep its planning tickets to
+    // backlog) instead of requiring advance-from-a-prior-version. Auto-
+    // advance (checkAndAutoAdvance, component-approval re-trigger) leaves
+    // this false so the horizon gate stays authoritative for unattended
+    // promotion.
+    explicitLaunch?: boolean;
   },
 ): Promise<PromoteResult> {
   const wsId = opts?.workspaceId || 'default-workspace';
@@ -150,6 +159,12 @@ export async function promoteProjectToNextVersion(
 
   // 3. Find target version
   let targetVersion = opts?.targetVersion;
+  // #1594 — are we launching the ALREADY-current version in place? (i.e. the
+  // target IS the current version, whose linked tickets are still in
+  // planning and were never swept). This happens for the FIRST launch of a
+  // project's current version, or when a version was made current via a
+  // roadmap edit rather than by advancing into it.
+  let launchInPlace = false;
 
   if (!targetVersion) {
     // Auto-mode: find next planned version by sort_order
@@ -173,8 +188,60 @@ export async function promoteProjectToNextVersion(
       [projectId, sortOrderFloor, wsId],
     );
 
-    if (nextRes.rows.length === 0) return noop('no next planned version');
-    targetVersion = nextRes.rows[0].version;
+    if (nextRes.rows.length === 0) {
+      // #1594 — no next planned version. Before giving up, check whether the
+      // CURRENT version itself still has unlaunched planning tickets. If so,
+      // launch it in place instead of stranding it. This is the exact
+      // scenario that bit proj-org-studio 2026.07.01: current, but its 6
+      // tickets sat in planning forever because launch only ever swept the
+      // *next* version's tickets.
+      if (fromVersion) {
+        const strandedRes = await client.query(
+          `SELECT COUNT(*)::int AS n FROM org_studio_tasks
+           WHERE project_id = $1 AND version = $2 AND status = 'planning' AND workspace_id = $3`,
+          [projectId, fromVersion, wsId],
+        );
+        if ((strandedRes.rows[0]?.n || 0) > 0) {
+          targetVersion = fromVersion;
+          launchInPlace = true;
+        }
+      }
+      if (!targetVersion) return noop('no next planned version');
+    } else {
+      targetVersion = nextRes.rows[0].version;
+    }
+  } else if (targetVersion === fromVersion) {
+    // Explicit target IS the current version — launch in place.
+    launchInPlace = true;
+  }
+
+  // #1594 — explicit Launch/approve is itself an approval act. Add the target
+  // to the primary component's approvedVersions[] so the horizon gate below
+  // passes without forcing the user to ALSO tick a separate per-component
+  // approval checkbox (the UX trap that stranded 2026.07.01). Auto-advance
+  // paths (explicitLaunch falsey) skip this — the horizon gate stays
+  // authoritative for unattended promotion.
+  if (opts?.explicitLaunch && targetVersion && primaryComponent) {
+    if (!approvedVersionsList.includes(targetVersion)) {
+      approvedVersionsList.push(targetVersion);
+      const compsKey = Array.isArray(projData.components) && projData.components.length > 0
+        ? 'components'
+        : (Array.isArray(projData.sections) ? 'sections' : 'components');
+      const compsArr: any[] = Array.isArray(projData[compsKey]) ? projData[compsKey] : [];
+      const idx = compsArr.findIndex((c: any) => c?.id === primaryComponent.id);
+      if (idx >= 0) {
+        const existing: string[] = Array.isArray(compsArr[idx].approvedVersions) ? compsArr[idx].approvedVersions : [];
+        if (!existing.includes(targetVersion)) {
+          compsArr[idx] = { ...compsArr[idx], approvedVersions: [...existing, targetVersion] };
+          projData[compsKey] = compsArr;
+          await client.query(
+            `UPDATE org_studio_projects SET data = $1 WHERE id = $2 AND workspace_id = $3`,
+            [JSON.stringify(projData), projectId, wsId],
+          );
+          console.log(`[Promote] ${projectId}: explicit launch self-approved ${targetVersion} (added to ${compsKey}[${idx}].approvedVersions)`);
+        }
+      }
+    }
   }
 
   // 4. Horizon gate — targetVersion must be in approvedVersions[].
@@ -194,7 +261,9 @@ export async function promoteProjectToNextVersion(
   // metric. If criteria are set and metric is unmet, refuse to advance even
   // if all child tickets are done — checkAndAutoAdvance is the primary
   // gate, but a Launch-button promote could otherwise sneak past it.
-  if (fromVersion) {
+  // #1594 — skip for launch-in-place: we're launching `fromVersion` itself,
+  // not advancing PAST it, so its own metric is irrelevant here.
+  if (fromVersion && !launchInPlace) {
     const fromMetaRes = await client.query(
       `SELECT meta FROM org_studio_roadmap_versions WHERE project_id = $1 AND version = $2 AND workspace_id = $3 LIMIT 1`,
       [projectId, fromVersion, wsId],
@@ -224,7 +293,9 @@ export async function promoteProjectToNextVersion(
   // gate is unmet. checkAndAutoAdvance already refuses to ship in that
   // case, but this guards the explicit promote path (Launch button, intent
   // handler) so an outcome-bound `current` version can't be skipped over.
-  if (fromVersion) {
+  // #1594 — skip for launch-in-place (see above): launching the current
+  // version in place is not "promoting past" it.
+  if (fromVersion && !launchInPlace) {
     const fromRes = await client.query(
       `SELECT meta FROM org_studio_roadmap_versions
          WHERE project_id = $1 AND version = $2 AND workspace_id = $3 LIMIT 1`,
@@ -347,6 +418,17 @@ export async function promoteProjectToNextVersion(
   }
 
   // 6. Promote: set version status to 'current'
+  // #1594 — single-current invariant: demote any OTHER version that is
+  // currently 'current' back to 'planned' before flipping the target.
+  // The approve/launch path could otherwise race in a second current
+  // version (exactly what happened when approving 2026.07.01 also left
+  // 2026.08.01 current). One current version per project, always.
+  await client.query(
+    `UPDATE org_studio_roadmap_versions
+     SET status = 'planned'
+     WHERE project_id = $1 AND status = 'current' AND version <> $2 AND workspace_id = $3`,
+    [projectId, targetVersion, wsId],
+  );
   await client.query(
     `UPDATE org_studio_roadmap_versions SET status = 'current' WHERE id = $1 AND workspace_id = $2`,
     [versionRow.id, wsId],
@@ -421,7 +503,7 @@ export async function promoteProjectToNextVersion(
     [JSON.stringify(projData), projectId, wsId],
   );
 
-  console.log(`[Promote] ${projectId}: ${fromVersion || '(none)'} → ${targetVersion} (${movedTasks} tasks moved planning→backlog)`);
+  console.log(`[Promote] ${projectId}: ${fromVersion || '(none)'} → ${targetVersion}${launchInPlace ? ' (launch-in-place)' : ''} (${movedTasks} tasks moved planning→backlog)`);
 
   return { promoted: true, from: fromVersion, to: targetVersion!, movedTasks };
 }
