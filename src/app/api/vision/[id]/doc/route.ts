@@ -6,6 +6,7 @@ import { rpc } from '@/lib/gateway-rpc';
 import { getStoreProvider } from '@/lib/store-provider';
 import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
 import { checkArchivedProject } from '@/lib/archived-project-compat';
+import { fireReindexVisionDoc } from '@/lib/embedding/indexer';
 
 interface VisionDocResponse {
   content: string;
@@ -304,6 +305,10 @@ export async function PUT(
     // The LISTEN/NOTIFY mechanism in Postgres handles this automatically.
     // For file-based storage, a write to the vision doc file doesn't need ORG.md re-sync triggered separately.
     // (If needed in the future, use an explicit endpoint instead of touching store.json.)
+
+    // #1591 — keep org-memory fresh on write: re-embed the vision doc (which
+    // also carries change-history sections). Fire-and-forget, best-effort.
+    fireReindexVisionDoc({ projectId, title: 'Vision', content: newContent });
 
     return NextResponse.json({ ok: true, parsedMeta, roadmapProgress });
   } catch (e: any) {

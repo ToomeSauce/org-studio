@@ -9,6 +9,7 @@ import { resolveTaskComponent, resolveTaskVersion } from '@/lib/notification-con
 import { syncRoadmapItemForTask } from '@/lib/roadmap-sync';
 import { buildStatusTransition } from '@/lib/task-status';
 import { evaluateBlockedGate } from '@/lib/blocked-gate';
+import { fireReindexTask } from '@/lib/embedding/indexer';
 import { checkArchivedProject } from '@/lib/archived-project-compat';
 import { getEffectiveOwner } from '@/lib/component-helpers';
 import { isTelegramCommsEnabled } from '@/lib/telegram-guard';
@@ -1387,6 +1388,13 @@ export async function POST(req: NextRequest) {
             })();
           }
 
+          // #1591 — keep org-memory fresh on write. Re-embed this task
+          // (description / reviewNotes / blocked-reason / comments / noted
+          // status) after any update. Fire-and-forget, fully best-effort:
+          // never blocks or breaks the write. Idempotent via content_hash, so
+          // a no-op edit costs nothing.
+          fireReindexTask(updated as any);
+
         }
 
         // #948: if the for-loop never matched, the task isn't in the store snapshot.
@@ -2223,6 +2231,16 @@ export async function POST(req: NextRequest) {
               detail: comment.content?.slice(0, 100),
             });
           }
+
+          // #1591 — keep org-memory fresh on write: re-embed the parent task
+          // with the new comment merged in, so the comment text lands in the
+          // index immediately. Fire-and-forget, best-effort. Skips system
+          // comments inside docsFromTask. Idempotent via content_hash.
+          try {
+            const existingComments = Array.isArray((task as any).comments) ? (task as any).comments : [];
+            const taskForIndex = { ...(task as any), comments: [...existingComments, comment] };
+            fireReindexTask(taskForIndex);
+          } catch { /* non-fatal */ }
         } // end if (task)
 
         return NextResponse.json({ ok: true, comment: stripAuditMeta(comment), mentions: mentionResult });
