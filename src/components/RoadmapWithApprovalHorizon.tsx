@@ -179,6 +179,125 @@ interface RoadmapWithApprovalHorizonProps {
   teammates?: string[];
 }
 
+// ── #1584 Phase A — Experiment-loop legibility ──────────────────────────
+// Render an outcome-bound version as a hypothesis card: declared goal,
+// target-vs-current with a progress bar, child experiments, and a
+// did-it-move signal. Pure read/render over existing #1263 fields
+// (successCriteria / metricCurrent / metricTarget / metricComparator).
+// No data-model change, no automation. UI-only and fully reversible.
+
+type MetricCmp = 'gte' | 'lte' | 'eq';
+
+/** Did the measured value satisfy the target, given the comparator? */
+function metricMet(current?: number, target?: number, cmp: MetricCmp = 'gte'): boolean | null {
+  if (typeof current !== 'number' || typeof target !== 'number') return null;
+  switch (cmp) {
+    case 'lte': return current <= target;
+    case 'eq': return current === target;
+    default: return current >= target;
+  }
+}
+
+/** 0..1 progress toward target. For lte, closer-to-target-from-above = more. */
+function metricProgress(current?: number, target?: number, cmp: MetricCmp = 'gte'): number | null {
+  if (typeof current !== 'number' || typeof target !== 'number') return null;
+  if (cmp === 'eq') return current === target ? 1 : 0;
+  if (cmp === 'lte') {
+    if (target === 0) return current <= 0 ? 1 : 0;
+    // Below/at target = done; above = fractional shrink toward it.
+    return current <= target ? 1 : Math.max(0, Math.min(1, target / current));
+  }
+  if (target === 0) return current >= 0 ? 1 : 0;
+  return Math.max(0, Math.min(1, current / target));
+}
+
+function HypothesisCard({
+  successCriteria,
+  metricCurrent,
+  metricTarget,
+  metricComparator = 'gte',
+  loopPaused,
+  experiments,
+}: {
+  successCriteria: string;
+  metricCurrent?: number;
+  metricTarget?: number;
+  metricComparator?: MetricCmp;
+  loopPaused?: boolean;
+  experiments: Array<{ title: string; done: boolean }>;
+}) {
+  const met = metricMet(metricCurrent, metricTarget, metricComparator);
+  const prog = metricProgress(metricCurrent, metricTarget, metricComparator);
+  const hasMeasure = typeof metricCurrent === 'number' && typeof metricTarget === 'number';
+  const cmpLabel = metricComparator === 'lte' ? '≤' : metricComparator === 'eq' ? '=' : '≥';
+
+  // Did-it-move signal: met → moved/green; measured-but-unmet → not yet/amber;
+  // unmeasured → grey "awaiting first measurement".
+  const signal = met === true
+    ? { label: 'Target met', cls: 'text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-950/30 border-green-200 dark:border-green-800/50', dot: 'bg-green-500' }
+    : met === false
+      ? { label: 'Not met yet', cls: 'text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800/50', dot: 'bg-amber-500' }
+      : { label: 'Awaiting first measurement', cls: 'text-[var(--text-muted)] bg-[var(--bg-tertiary)] border-[var(--border-color)]', dot: 'bg-[var(--text-muted)]' };
+
+  return (
+    <div
+      className={clsx(
+        'rounded-lg border p-3 space-y-3',
+        'border-[var(--accent-primary)]/30 bg-[var(--accent-primary)]/[0.04]',
+        loopPaused && 'opacity-60',
+      )}
+    >
+      {/* Goal */}
+      <div className="flex items-start gap-2">
+        <span className="text-base leading-none" title="Outcome-bound version">🧪</span>
+        <div className="flex-1 min-w-0">
+          <div className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Hypothesis · goal</div>
+          <div className="text-sm text-[var(--text-primary)]">{successCriteria}</div>
+        </div>
+        <span className={clsx('inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium flex-shrink-0', signal.cls)}>
+          <span className={clsx('w-1.5 h-1.5 rounded-full', signal.dot)} />
+          {signal.label}{loopPaused ? ' · paused' : ''}
+        </span>
+      </div>
+
+      {/* Target vs current + progress bar */}
+      <div>
+        <div className="flex items-baseline justify-between text-xs">
+          <span className="text-[var(--text-muted)]">Measured vs target</span>
+          <span className="font-mono text-[var(--text-secondary)]">
+            {hasMeasure ? metricCurrent : '?'} <span className="text-[var(--text-muted)]">{cmpLabel}</span> {hasMeasure ? metricTarget : '?'}
+          </span>
+        </div>
+        <div className="mt-1 h-1.5 rounded-full bg-[var(--bg-tertiary)] overflow-hidden">
+          <div
+            className={clsx('h-full rounded-full transition-all', met === true ? 'bg-green-500' : met === false ? 'bg-amber-500' : 'bg-[var(--text-muted)]')}
+            style={{ width: `${Math.round((prog ?? 0) * 100)}%` }}
+          />
+        </div>
+      </div>
+
+      {/* Child experiments */}
+      <div>
+        <div className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] mb-1">
+          Experiments ({experiments.filter(e => e.done).length}/{experiments.length})
+        </div>
+        {experiments.length > 0 ? (
+          <div className="space-y-0.5">
+            {experiments.map((e, i) => (
+              <div key={i} className="flex items-start gap-2 text-xs">
+                <span className="flex-shrink-0">{e.done ? '✅' : '⬜'}</span>
+                <span className={clsx('flex-1', e.done ? 'text-[var(--text-muted)] line-through' : 'text-[var(--text-secondary)]')}>{e.title}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs text-[var(--text-muted)]">No experiments linked yet.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function RoadmapWithApprovalHorizon({
   projectId,
   project,
@@ -1048,6 +1167,22 @@ export function RoadmapWithApprovalHorizon({
               renderEditForm()
             ) : (
               <>
+                {/* #1584 Phase A — hypothesis card for outcome-bound versions.
+                 * Renders only when successCriteria is set; experiments are
+                 * this version's items. Pure render over #1263 fields. */}
+                {(version.successCriteria || '').trim() && (
+                  <HypothesisCard
+                    successCriteria={version.successCriteria as string}
+                    metricCurrent={version.metricCurrent}
+                    metricTarget={version.metricTarget}
+                    metricComparator={(version.metricComparator as MetricCmp) || 'gte'}
+                    loopPaused={version.loopPaused}
+                    experiments={(version.items || []).map((item) => ({
+                      title: roadmapItemDisplayTitle(item),
+                      done: !!item.done,
+                    }))}
+                  />
+                )}
                 {/* Items View */}
                 {(version.items || []).length > 0 ? (
                   <div className="space-y-1 text-sm">
