@@ -47,8 +47,8 @@ Open-source core. Runtime-agnostic. Solo developer to enterprise. BYOA (bring yo
 ### Vaporware in the old doc (claimed, never built)
 - **Web push notifications** — no service worker, no `pushManager`, zero push code. A `PUSH_NOTIFICATIONS` flag exists with no consumer. Either schedule for real or cut the claim. *(This revision cuts it from "shipped.")*
 
-### Dead feature flags (toggles with no consumer)
-- `MOBILE_FIRST_UX` (IA deleted), `PUSH_NOTIFICATIONS` (no push code), `TELEGRAM_MIGRATION` (script never authored). All three render in Settings but do nothing. **Action: remove or wire — tracked separately.**
+### Dead feature flags (toggles with no consumer) — RESOLVED 2026-06-02
+- `MOBILE_FIRST_UX` (IA deleted), `PUSH_NOTIFICATIONS` (no push code), `TELEGRAM_MIGRATION` (script never authored) all rendered in Settings but did nothing. **Removed** in the Cloud Prep dead-flag cleanup (commit cdc7c26) — the generic flag infra was kept for future experiments. The Telegram migration claim behind that flag was formally dropped (see Cloud Prep below).
 
 ## Conventions
 - **Ownership is the primitive.** Tasks, roadmaps, vision sections, and metrics all hang off an accountable owner + domain. Any feature that doesn't sharpen ownership/autonomy/accountability is suspect.
@@ -63,7 +63,7 @@ Open-source core. Runtime-agnostic. Solo developer to enterprise. BYOA (bring yo
 ## Forward Arc
 *Milestones are named; calver targets are the roadmap anchor (not `v0.x` labels — that numbering is retired per #1560). "Cloud Launch" remains the qualitative v1.0-equivalent gate: bet-your-business ready.*
 
-- **Cloud Prep (current, ~2026.05–06).** Multi-tenant ✅, per-workspace auth ✅, per-agent tokens ✅. Remaining: onboarding flow polish, pre-launch security audit, Telegram migration script (or formally drop it). Close out the dead-flag cleanup + version-scheme reconciliation (#1560) here.
+- **Cloud Prep (current, ~2026.05–06).** Multi-tenant ✅, per-workspace auth ✅, per-agent tokens ✅. Remaining: onboarding flow polish, pre-launch security audit. Dead-flag cleanup + version-scheme reconciliation (#1560) closed out here. **Telegram migration script formally dropped (2026-06-02):** no script was ever authored and there is nothing to migrate — agents use Org Studio + Telegram-as-notifications directly (the old comms relay was already demoted to an optional health-alerts bridge, #734). The claim is retired rather than built.
 - **Autonomous Domain Evolution (Pillar 2 made real).** Promote outcome-bound versions from "shipped primitive" to a *product story*: manual→assisted metric capture, the experiment-loop UX, the "all tickets done but metric unmet → propose next experiment" nudge surfaced in the UI, loop safety caps visible. This is the moat — the thing competitors don't have.
 - **Teammate Library (Pillar 3 made real).** Persona archetypes catalog with default skills + runtime. One-click staff-a-domain. Showcases runtime-agnosticism as a visible feature. Foundation for vertical templates.
 - **Cloud Launch + Billing (the commercial-readiness gate).** Multi-tenant cloud opens publicly. Free tier (BYOA, 1 workspace). Paid tiers delivered as **vertical org templates** (SMB: accounting/legal/marketing/support · startup: MVP/design/GTM/CS · enterprise: TBD) — curated persona + roadmap bundles on top of the free core, not just seat counts. Legal + ops (LLC, ToS, privacy, GDPR, SLA).
