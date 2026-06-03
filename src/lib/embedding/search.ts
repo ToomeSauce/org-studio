@@ -11,7 +11,7 @@
  * agent can VERIFY rather than trust a bare snippet.
  */
 import { Pool } from 'pg';
-import { defaultProvider, toPgVectorLiteral, type EmbeddingProvider } from './provider';
+import { defaultProvider, toPgVectorLiteral, providerColumn, type EmbeddingProvider } from './provider';
 import type { CorpusSourceType } from './corpus';
 
 let _pool: Pool | null = null;
@@ -106,12 +106,19 @@ export async function searchMemory(
   params.push(lim);
   const limIdx = p;
 
+  // Provider-specific pgvector column (embedding=256, embedding_lg=1024),
+  // allowlist-validated so it can never be injected.
+  const col = providerColumn(provider);
+  if (!/^embedding(_[a-z0-9]+)?$/.test(col)) {
+    throw new Error(`unsafe embedding column: ${col}`);
+  }
+
   const sql =
     `SELECT id, source_type, project_id, task_id, ticket_number, owner, title, text,
-            1 - (embedding <=> $1::vector) AS score
+            1 - (${col} <=> $1::vector) AS score
        FROM org_studio_embeddings
-      WHERE ${where.join(' AND ')}
-      ORDER BY embedding <=> $1::vector
+      WHERE ${where.join(' AND ')} AND ${col} IS NOT NULL
+      ORDER BY ${col} <=> $1::vector
       LIMIT $${limIdx}`;
 
   const res = await pool.query(sql, params);
