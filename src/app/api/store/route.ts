@@ -8,6 +8,7 @@ import { routeCommentNotifications } from '@/lib/notification-router';
 import { resolveTaskComponent, resolveTaskVersion } from '@/lib/notification-context';
 import { syncRoadmapItemForTask } from '@/lib/roadmap-sync';
 import { buildStatusTransition } from '@/lib/task-status';
+import { evaluateBlockedGate } from '@/lib/blocked-gate';
 import { checkArchivedProject } from '@/lib/archived-project-compat';
 import { getEffectiveOwner } from '@/lib/component-helpers';
 import { isTelegramCommsEnabled } from '@/lib/telegram-guard';
@@ -1186,19 +1187,45 @@ export async function POST(req: NextRequest) {
             }
           }
 
-          // #1138 follow-up: transitioning TO blocked requires a non-empty
-          // blockedReason — either set in this update or already present on
-          // the task. Lets agents flip status without clobbering an existing
-          // reason, but blocks the silent-dead-weight failure mode.
+          // #1138 follow-up + #1588 Blocked Gate. The board distinguishes a
+          // *legitimate* block from an *abdication* (a fork/PR/sanity-check the
+          // OWNER was told to handle themselves). All decision logic lives in
+          // the pure helper src/lib/blocked-gate.ts (unit-tested in
+          // src/__tests__/blocked-gate.test.ts); the route just applies the
+          // decision and owns the bounce side-effect (system comment).
+          //   - reject : 400, missing reason/type
+          //   - bounce : 409, abdication ('awaiting-review') — post mantra, refuse
+          //   - allow  : legitimate block (incl. blockedBy[] dependency, #1102)
           if (updates.status === 'blocked' && t.status !== 'blocked') {
-            const incomingReason = typeof updates.blockedReason === 'string' ? updates.blockedReason.trim() : '';
-            const existingReason = typeof t.blockedReason === 'string' ? t.blockedReason.trim() : '';
-            if (!incomingReason && !existingReason) {
-              return NextResponse.json(
-                { error: "Moving a task to status='blocked' requires a non-empty blockedReason. Describe what's blocking it and what would unblock." },
-                { status: 400 }
-              );
+            const decision = evaluateBlockedGate({ task: t, updates });
+            if (decision.kind === 'reject') {
+              return NextResponse.json({ error: decision.error }, { status: decision.status });
             }
+            if (decision.kind === 'bounce') {
+              const bounceComment = {
+                id: Math.random().toString(36).slice(2, 10) + Date.now().toString(36),
+                createdAt: Date.now(),
+                author: 'System',
+                content: decision.mantra,
+                type: 'system' as const,
+              };
+              (async () => {
+                try {
+                  const provider = getStoreProvider(workspace.id) as any;
+                  if (typeof provider.addComment === 'function') {
+                    await provider.addComment({ kind: 'task', taskId: t.id }, bounceComment);
+                  } else {
+                    if (!t.comments) t.comments = [];
+                    t.comments.push(bounceComment);
+                  }
+                } catch (err: any) {
+                  console.error(`[blocked-gate #1588] bounce addComment failed for ${t.id}: ${err?.message || err}`);
+                }
+              })();
+              console.log(`[blocked-gate #1588] bounced awaiting-review block on #${t.ticketNumber || t.id} back to owner ${decision.owner || '(unassigned)'}`);
+              return NextResponse.json({ bounced: true, error: decision.error }, { status: decision.status });
+            }
+            // decision.kind === 'allow' — fall through to normal status handling.
           }
 
           // Guard: only the assignee can move a task to done
