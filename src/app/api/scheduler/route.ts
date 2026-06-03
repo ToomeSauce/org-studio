@@ -72,7 +72,9 @@ import {
   PROPOSE_COOLDOWN_MS,
   type DoneUnmetVersionLike,
 } from '@/lib/done-but-unmet';
-import { validateMetricSource, pollMetricSource } from '@/lib/metric-source';const DEFAULT_MODEL = 'foundry-openai-chat/gpt-5.4';
+import { validateMetricSource, pollMetricSource } from '@/lib/metric-source';
+import { searchMemory } from '@/lib/embedding/search';
+import { enrichStewardNudge, enrichProposePrompt, type MemoryHit } from '@/lib/embedding/precedent';const DEFAULT_MODEL = 'foundry-openai-chat/gpt-5.4';
 
 // Minimum seconds between event-driven triggers for the same agent (debounce)
 const TRIGGER_COOLDOWN_MS = 60_000; // 1 minute
@@ -1656,6 +1658,25 @@ export async function POST(request: NextRequest) {
         // *reversible* reason and nudge the OWNER to own them; batch genuine
         // *irreversible* gates into ONE human summary. Idempotent via
         // lastStewardNudgeAt. Best-effort — never blocks the sweep response.
+
+        // #1593 — shared precedent search fn (read-only org-memory lookup)
+        // used to enrich Steward nudges + experiment proposals below. Backed
+        // by searchMemory (#1592); returns [] on any failure so enrichment is
+        // always best-effort and the sweep never breaks on a search miss.
+        const memorySearchForPrecedent = async (
+          query: string,
+          filters: { projectId?: string; owner?: string; sourceTypes?: string[] },
+          limit: number,
+        ): Promise<MemoryHit[]> => {
+          try {
+            if (!process.env.DATABASE_URL) return [];
+            const r = await searchMemory(query, filters as any, limit);
+            return (r.results || []) as MemoryHit[];
+          } catch {
+            return [];
+          }
+        };
+
         let stewardNudged = 0;
         let stewardEscalated = 0;
         try {
@@ -1703,8 +1724,15 @@ export async function POST(request: NextRequest) {
               continue;
             }
             const msg = buildOwnerNudge(nudge.reason, nudge.ticket);
+            // #1593 — precedent-aware enrichment (read-only). Appends prior
+            // org-memory context (e.g. is this owner repeatedly abdicating the
+            // same class of call?) so the nudge teaches instead of repeating.
+            // Best-effort: search failure returns the base nudge unchanged.
+            const enrichedMsg = await enrichStewardNudge(
+              msg, nudge.reason, nudge.ticket, memorySearchForPrecedent,
+            );
             try {
-              await sendToAgent(agentId, msg, {
+              await sendToAgent(agentId, enrichedMsg, {
                 idempotencyKey: `steward-${nudge.ticket.id}-${nudge.reason}-${Math.floor(nowS / NUDGE_COOLDOWN_MS)}`,
               });
               // Stamp idempotency so we don't re-nudge within the cooldown.
@@ -1798,7 +1826,15 @@ export async function POST(request: NextRequest) {
               continue;
             }
             try {
-              await sendToAgent(agentId, buildProposeNextPrompt(n.version), {
+              // #1593 — precedent-aware: recall prior experiments toward this
+              // goal (what was tried, what moved the metric) before asking the
+              // owner to propose the next one. Read-only, best-effort.
+              const proposeMsg = await enrichProposePrompt(
+                buildProposeNextPrompt(n.version),
+                { version: n.version.version, successCriteria: n.version.successCriteria ?? undefined, id: n.version.id, projectId: (n.version as any).projectId },
+                memorySearchForPrecedent,
+              );
+              await sendToAgent(agentId, proposeMsg, {
                 idempotencyKey: `propose-${n.version.id}-${Math.floor(nowP / PROPOSE_COOLDOWN_MS)}`,
               });
               proposeNudged++;
