@@ -2516,6 +2516,10 @@ export async function POST(req: NextRequest) {
           const result = await promoteProjectToNextVersion(promoteProjectId, pgClient, {
             targetVersion,
             workspaceId: workspace.id,
+            // #1594 — the Start/Launch button is an explicit human approval act:
+            // self-approve the target + allow launching an already-current
+            // version in place.
+            explicitLaunch: true,
           });
           if (!result.promoted) {
             return NextResponse.json({ ok: false, reason: result.reason });
