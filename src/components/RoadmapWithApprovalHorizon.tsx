@@ -5,6 +5,7 @@ import { ChevronRight, Plus, Pencil, Trash2, X, Check } from 'lucide-react';
 import { clsx } from 'clsx';
 import { compareVersions } from '@/lib/version-utils';
 import { roadmapItemDisplayTitle, roadmapItemEditableTitle } from '@/lib/roadmap-item-display';
+import { summarizeLoopSafety, type LoopSafetySummary } from '@/lib/loop-safety';
 
 /**
  * RoadmapWithApprovalHorizon
@@ -222,6 +223,7 @@ function HypothesisCard({
   loopPaused,
   experiments,
   hasSource,
+  safety,
 }: {
   successCriteria: string;
   metricCurrent?: number;
@@ -230,6 +232,7 @@ function HypothesisCard({
   loopPaused?: boolean;
   experiments: Array<{ title: string; done: boolean }>;
   hasSource?: boolean;
+  safety?: LoopSafetySummary;
 }) {
   const met = metricMet(metricCurrent, metricTarget, metricComparator);
   const prog = metricProgress(metricCurrent, metricTarget, metricComparator);
@@ -312,6 +315,58 @@ function HypothesisCard({
           <p className="text-xs text-[var(--text-muted)]">No experiments linked yet.</p>
         )}
       </div>
+
+      {/* #1587 — visible loop safety caps. Surfaces the EXISTING autonomy
+       * machinery at a glance (no new caps, no second leash): kill-switch,
+       * open-experiments vs cap, daily-create vs cap, approval horizon. */}
+      {safety && (
+        <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+          <span
+            title="Human kill-switch. When paused, the experiment loop won't auto-advance or auto-create."
+            className={
+              'px-1.5 py-0.5 rounded border ' +
+              (safety.loopPaused
+                ? 'bg-amber-50 dark:bg-amber-950/30 border-amber-300 dark:border-amber-800/60 text-amber-700 dark:text-amber-300'
+                : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)]')
+            }
+          >
+            {safety.loopPaused ? '⏸ loop paused' : '▶ loop active'}
+          </span>
+          <span
+            title="Open experiments (in-progress) vs the per-version cap (MAX_OPEN_EXPERIMENTS). Dispatch is gated at the cap."
+            className={
+              'px-1.5 py-0.5 rounded border font-mono ' +
+              (safety.openAtCap
+                ? 'bg-red-50 dark:bg-red-950/30 border-red-300 dark:border-red-800/60 text-red-700 dark:text-red-300'
+                : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)]')
+            }
+          >
+            open {safety.openExperiments}/{safety.openCap}
+          </span>
+          <span
+            title="Experiment (spike) tickets created today vs the per-version daily cap (MAX_AUTO_TASKS_PER_VERSION_PER_DAY). New auto-creates are refused at the cap."
+            className={
+              'px-1.5 py-0.5 rounded border font-mono ' +
+              (safety.dailyAtCap
+                ? 'bg-red-50 dark:bg-red-950/30 border-red-300 dark:border-red-800/60 text-red-700 dark:text-red-300'
+                : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)]')
+            }
+          >
+            today {safety.createdToday}/{safety.dailyCap}
+          </span>
+          <span
+            title="Approval horizon — the single leash (component.approvedVersions[]). This version dispatches only when it's within the horizon."
+            className={
+              'px-1.5 py-0.5 rounded border ' +
+              (safety.withinHorizon
+                ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-300 dark:border-emerald-800/60 text-emerald-700 dark:text-emerald-300'
+                : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-muted)]')
+            }
+          >
+            {safety.withinHorizon ? '✓ within horizon' : 'outside horizon'}
+          </span>
+        </div>
+      )}
 
       {/* #1585 — done-but-unmet call-to-action. Every experiment shipped but
        * the number didn't move: prompt the owner to propose the next one. */}
@@ -1210,6 +1265,13 @@ export function RoadmapWithApprovalHorizon({
                     metricComparator={(version.metricComparator as MetricCmp) || 'gte'}
                     loopPaused={version.loopPaused}
                     hasSource={!!version.metricSource}
+                    safety={summarizeLoopSafety({
+                      tasks: allTasks || [],
+                      scope: { projectId, sectionId: componentId, version: version.version },
+                      loopPaused: version.loopPaused,
+                      approvedVersions: approvedVersionsList,
+                      now: Date.now(),
+                    })}
                     experiments={(version.items || []).map((item) => ({
                       title: roadmapItemDisplayTitle(item),
                       done: !!item.done,
