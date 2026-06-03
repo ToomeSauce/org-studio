@@ -188,6 +188,17 @@ export interface Task {
   loopPausedAt?: number;    // Timestamp when loop was paused due to stall detection
   loopPauseReason?: string; // Why the loop was paused
   blockedReason?: string;   // Why the task is blocked (required when status='blocked' — see #1138 follow-up)
+  // #1588 — Blocked Gate. Structured classification of WHY a task is blocked,
+  // so the system can distinguish a legitimate block from an abdication.
+  //   irreversible-decision : genuinely needs a human (DDL drop, billing, irreversible)
+  //   external-dependency   : waiting on a third party / deploy / external event
+  //   needs-human-judgment  : a real judgment call only the human owner should make
+  //   awaiting-review       : ABDICATION type — a PR/work the OWNER was told to do
+  //                           themselves. The gate auto-bounces these back to the
+  //                           owner instead of accepting the block.
+  // Required (in addition to blockedReason) when transitioning to 'blocked'
+  // UNLESS blockedBy[] is set (a dependency block — case-a — passes untouched).
+  blockedReasonType?: 'irreversible-decision' | 'external-dependency' | 'needs-human-judgment' | 'awaiting-review';
 
   // #1352 — Claim contract (60-min heartbeat lease).
   // When an agent transitions a task INTO in-progress, claim_started_at is
