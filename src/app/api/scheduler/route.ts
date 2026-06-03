@@ -59,7 +59,13 @@ import {
 // no ping, no disable, no auto-bounce) on tasks held by an authority
 // (human/QA) STOP. See src/lib/stop-window.ts for the full detection spec.
 import { isTaskHeldByHumanStop } from '@/lib/stop-window';
-const DEFAULT_MODEL = 'foundry-openai-chat/gpt-5.4';
+import {
+  planStewardSweep,
+  buildOwnerNudge,
+  buildHumanSummary,
+  NUDGE_COOLDOWN_MS,
+  type StewardTaskLike,
+} from '@/lib/domain-steward';const DEFAULT_MODEL = 'foundry-openai-chat/gpt-5.4';
 
 // Minimum seconds between event-driven triggers for the same agent (debounce)
 const TRIGGER_COOLDOWN_MS = 60_000; // 1 minute
@@ -1637,6 +1643,103 @@ export async function POST(request: NextRequest) {
           // No actionable work found for this agent
         }
 
+        // ---- #1589 Domain Steward pass --------------------------------
+        // A SYSTEM behavior (not a teammate): after the per-loop dispatch
+        // checks above, sweep the whole store for tickets stuck on a
+        // *reversible* reason and nudge the OWNER to own them; batch genuine
+        // *irreversible* gates into ONE human summary. Idempotent via
+        // lastStewardNudgeAt. Best-effort — never blocks the sweep response.
+        let stewardNudged = 0;
+        let stewardEscalated = 0;
+        try {
+          const nowS = Date.now();
+          // Map assignee NAME (free text, e.g. "Mikey") -> agentId for dispatch.
+          const teammates = (store.settings?.teammates || []) as any[];
+          const nameToAgentId = (name: string): string | undefined => {
+            const lower = (name || '').toLowerCase();
+            const t = teammates.find(
+              (tm) => (tm.name || '').toLowerCase() === lower || (tm.agentId || '').toLowerCase() === lower,
+            );
+            return t?.agentId;
+          };
+
+          // Build steward fixtures from the live rows. statusChangedAt comes
+          // from the last statusHistory entry (same source the stuck-task
+          // check uses); lastActivityAt is the comment/update clock.
+          const stewardTasks: StewardTaskLike[] = store.tasks.map((t: any) => {
+            const lastHist = t.statusHistory?.length
+              ? t.statusHistory[t.statusHistory.length - 1]?.timestamp
+              : t.createdAt || 0;
+            return {
+              id: t.id,
+              ticketNumber: t.ticketNumber,
+              title: t.title,
+              status: t.status,
+              assignee: t.assignee,
+              blockedReasonType: t.blockedReasonType,
+              blockedReason: t.blockedReason,
+              blockedBy: t.blockedBy,
+              statusChangedAt: lastHist,
+              lastActivityAt: t.lastActivityAt,
+              lastStewardNudgeAt: t.lastStewardNudgeAt ?? null,
+            };
+          });
+
+          const plan = planStewardSweep(stewardTasks, nowS);
+          const provider = getStoreProviderAllWorkspaces() as any;
+
+          // (a) Owner nudges — push the owner to own, via sendToAgent.
+          for (const nudge of plan.nudges) {
+            const agentId = nameToAgentId(nudge.owner);
+            if (!agentId) {
+              console.warn(`[steward #1589] no agentId for owner='${nudge.owner}' on ${nudge.ticket.id} — skip nudge`);
+              continue;
+            }
+            const msg = buildOwnerNudge(nudge.reason, nudge.ticket);
+            try {
+              await sendToAgent(agentId, msg, {
+                idempotencyKey: `steward-${nudge.ticket.id}-${nudge.reason}-${Math.floor(nowS / NUDGE_COOLDOWN_MS)}`,
+              });
+              // Stamp idempotency so we don't re-nudge within the cooldown.
+              await provider.updateTask(nudge.ticket.id, { lastStewardNudgeAt: nowS });
+              stewardNudged++;
+            } catch (e: any) {
+              console.warn(`[steward #1589] nudge failed for ${nudge.ticket.id}: ${e?.message || e}`);
+            }
+          }
+
+          // (b) Human summary — ONE message for all irreversible gates.
+          // Delivered via direct Telegram sendMessage to NOTIFY_CHAT_ID, the
+          // same human-delivery path the store-route notifier uses. (rpc
+          // 'chat.send' routes to an agent session, not a human chat.)
+          const summary = buildHumanSummary(plan.humanEscalations);
+          const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+          const TG_CHAT = process.env.TELEGRAM_CHAT_ID || NOTIFY_CHAT_ID;
+          if (summary && TG_TOKEN && TG_CHAT) {
+            try {
+              await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chat_id: TG_CHAT, text: summary, parse_mode: 'Markdown' }),
+              });
+              stewardEscalated = plan.humanEscalations.length;
+            } catch (e: any) {
+              console.warn(`[steward #1589] human summary send failed: ${e?.message || e}`);
+            }
+          } else if (summary) {
+            // No human channel configured — log so the gate is still visible.
+            console.info(`[steward #1589] ${plan.humanEscalations.length} irreversible gate(s); no Telegram human channel set`);
+            stewardEscalated = plan.humanEscalations.length;
+          }
+
+          if (stewardNudged > 0 || stewardEscalated > 0) {
+            console.log(`[steward #1589] nudged=${stewardNudged} escalated=${stewardEscalated} (skipped=${plan.skipped.length})`);
+          }
+        } catch (stewardErr: any) {
+          console.warn('[steward #1589] sweep failed (non-fatal):', stewardErr?.message || stewardErr);
+        }
+        // ---- end Domain Steward pass ----------------------------------
+
         // #1187: auto-stop pass DELETED. Project state is now
         // user-controlled only — the system never flips active→inactive.
         // Spec: spec-project-model-simplification.md §Auto-stop removal.
@@ -1661,7 +1764,7 @@ export async function POST(request: NextRequest) {
           results: swept.slice(),
         });
 
-        return NextResponse.json({ ok: true, swept });
+        return NextResponse.json({ ok: true, swept, steward: { nudged: stewardNudged, escalated: stewardEscalated } });
       }
 
       case 'escalate-stale-backlog': {
