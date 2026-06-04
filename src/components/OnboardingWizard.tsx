@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { ArrowRight, ArrowLeft, Plus, Sparkles, Check, Users, FolderKanban, Rocket, Wifi, Loader } from 'lucide-react';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -42,6 +43,7 @@ async function apiPost(action: string, payload: Record<string, any>) {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
+  const router = useRouter();
   const [step, setStep] = useState(0);
   const [direction, setDirection] = useState<'forward' | 'back'>('forward');
   const [animating, setAnimating] = useState(false);
@@ -142,7 +144,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
     setTeammates(prev => prev.filter((_, i) => i !== index));
   };
 
-  const finish = async () => {
+  const finish = async (destination: 'project' | 'dashboard' = 'project') => {
     setFinishing(true);
     try {
       await apiPost('updateSettings', {
@@ -170,7 +172,17 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
         });
       }
 
+      // #1604 — Hand the user straight into their first action instead of
+      // dropping them on an empty dashboard. The primary CTA routes into the
+      // project-create flow (the home page also shows a first-run CTA as a
+      // fallback). "Skip" still lands on the dashboard, which now renders the
+      // first-run empty state rather than the misleading "all clear" stubs.
       onComplete();
+      if (destination === 'project') {
+        router.push('/projects?new=true');
+      } else {
+        router.push('/');
+      }
     } catch (err) {
       console.error('Onboarding save failed:', err);
       setFinishing(false);
@@ -543,7 +555,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
       </div>
 
       <div className="bg-[var(--info-subtle)] border border-[var(--info-subtle)] rounded-[var(--radius-lg)] p-5 mb-8 text-left space-y-3">
-        <p className="text-[var(--text-sm)] font-semibold text-[var(--text-primary)]">Next steps:</p>
+        <p className="text-[var(--text-sm)] font-semibold text-[var(--text-primary)]">What happens after you create your first project:</p>
         <div className="space-y-2 text-[var(--text-xs)] text-[var(--text-secondary)]">
           <p>1. <strong>Create your first project</strong> with a vision doc (North Star, boundaries, aspirations)</p>
           <p>2. <strong>Set domain ownership</strong> on the Team page — assign projects to agents and humans</p>
@@ -553,7 +565,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
       </div>
 
       <button
-        onClick={finish}
+        onClick={() => finish('project')}
         disabled={finishing}
         className="inline-flex items-center gap-2 px-8 py-3.5 rounded-[var(--radius-md)] text-[var(--text-base)] font-semibold transition-all bg-[var(--accent-primary)] text-white hover:bg-[var(--accent-hover)] shadow-[var(--shadow-glow)] disabled:opacity-60"
       >
@@ -564,10 +576,21 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
           </>
         ) : (
           <>
-            Go to Dashboard <ArrowRight size={16} />
+            Create your first project <ArrowRight size={16} />
           </>
         )}
       </button>
+
+      {!finishing && (
+        <div className="mt-4">
+          <button
+            onClick={() => finish('dashboard')}
+            className="text-[var(--text-sm)] text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors"
+          >
+            Skip for now — go to dashboard
+          </button>
+        </div>
+      )}
     </div>
   );
 
