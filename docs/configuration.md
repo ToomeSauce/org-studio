@@ -20,6 +20,8 @@ PORT=3000
 
 PostgreSQL connection string. If set, Org Studio uses Postgres as source of truth. If not set, data is stored in `data/store.json`.
 
+**Semantic memory note:** `DATABASE_URL` is the gate for semantic memory. Without Postgres, semantic memory is safely disabled (Tier 1). With Postgres + pgvector, Org Studio can use either the built-in hashing provider (Tier 2) or a learned embedding provider (Tier 3).
+
 ```bash
 # PostgreSQL mode
 DATABASE_URL=postgresql://user:password@localhost:5432/org_studio
@@ -64,6 +66,27 @@ ORG_STUDIO_API_KEY=sk_org_1234567890abcdef
 Use when deploying Org Studio on a VPS or any remote server. Protect this value — don't commit to git.
 
 ## Remote Integration
+
+### `AZURE_EMBEDDING_ENDPOINT`
+### `AZURE_EMBEDDING_KEY`
+### `AZURE_EMBEDDING_DEPLOYMENT`
+
+**Default:** Unset
+
+Optional Azure/OpenAI-compatible embedding configuration for **Tier 3** semantic memory.
+
+```bash
+AZURE_EMBEDDING_ENDPOINT=https://your-resource.services.ai.azure.com
+AZURE_EMBEDDING_KEY=secret
+AZURE_EMBEDDING_DEPLOYMENT=text-embedding-3-large
+# optional
+AZURE_EMBEDDING_DIM=1024
+AZURE_EMBEDDING_API_VERSION=2024-10-21
+```
+
+When all three required vars are present, Org Studio switches from the built-in hashing embedder to the learned provider automatically.
+
+**If these vars are omitted but `DATABASE_URL` is set:** semantic memory still works using the deterministic hashing provider — no API key needed.
 
 ### `GATEWAY_URL`
 

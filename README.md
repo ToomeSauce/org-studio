@@ -59,6 +59,16 @@ The service runs in production mode (`dev = false` in `server.mjs`), so a plain 
 
 Works without a database (file-backed). Optional PostgreSQL for production.
 
+## Semantic Memory Tiers
+
+Org Studio's semantic memory is **not all-or-nothing**:
+
+- **Tier 1 — Off:** no Postgres → semantic memory safely disabled
+- **Tier 2 — Hashing:** Postgres + pgvector, no embedding key → built-in deterministic local provider
+- **Tier 3 — Learned:** Postgres + pgvector + `AZURE_EMBEDDING_*` → Azure/OpenAI-compatible learned provider
+
+That means self-hosters can get semantic search and precedent lookup without paying for embeddings first, then upgrade quality later with a config-only swap.
+
 ## Learn More
 
 - **[Getting Started](docs/getting-started.md)** — Install to first sprint in 10 minutes

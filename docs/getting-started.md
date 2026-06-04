@@ -16,6 +16,30 @@ Open **http://localhost:4501** in your browser.
 
 On first load, you'll see a setup wizard and example demo data. The demo shows a thriving agent org with 5 teammates (1 human, 4 agents) working on 3 projects.
 
+## Semantic Memory Tiers
+
+Org Studio's semantic memory is intentionally built to degrade gracefully. You do **not** need a paid embedding API to use it.
+
+### Tier 1 — Off / safe fallback
+- **Setup:** no `DATABASE_URL` (file-backed mode)
+- **Behavior:** semantic memory is inert; normal writes and task flow still work
+- **What you'll see:** `/api/memory/search` returns a 503 explaining it requires Postgres
+- **Why it exists:** zero setup tax for local/single-user installs
+
+### Tier 2 — Hashing / local semantic-ish retrieval
+- **Setup:** `DATABASE_URL` + pgvector enabled, but **no** `AZURE_EMBEDDING_*` env vars
+- **Behavior:** Org Studio uses the built-in deterministic `HashingEmbeddingProvider`
+- **What you get:** semantic indexing/search with no external API key, no cost, and no extra service
+- **Tradeoff:** good lexical/near-lexical retrieval, weaker on abstract conceptual matches
+
+### Tier 3 — Learned embeddings
+- **Setup:** `DATABASE_URL` + pgvector + `AZURE_EMBEDDING_ENDPOINT`, `AZURE_EMBEDDING_KEY`, `AZURE_EMBEDDING_DEPLOYMENT`
+- **Behavior:** Org Studio automatically swaps to the Azure/OpenAI-compatible learned embedding provider
+- **What you get:** much better conceptual retrieval quality, using the same search/indexing pipeline
+- **Tradeoff:** requires an embedding deployment and API credentials
+
+The important bit: **Tier 2 and Tier 3 use the same product surface.** The provider swap is config-only.
+
 ## Step 1: Set Up Your Org
 
 The **Setup Wizard** guides you through:

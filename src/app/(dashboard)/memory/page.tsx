@@ -6,6 +6,8 @@ import Link from 'next/link';
 import { clsx } from 'clsx';
 import { useState, useEffect } from 'react';
 
+const MEMORY_TIER_HINT = `Semantic memory tiers: Tier 1 = no Postgres (disabled), Tier 2 = Postgres + pgvector without embedding key (built-in hashing provider), Tier 3 = Postgres + AZURE_EMBEDDING_* (learned provider).`;
+
 interface MemoryFile { name: string; date: string; size: number; }
 interface SearchResult { file: string; line: number; text: string; }
 
@@ -55,6 +57,13 @@ export default function MemoryPage() {
       </Link>
       <PageHeader title="Memory" description="Daily journal entries and long-term memory" />
 
+      <div className="rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-secondary)] px-4 py-3">
+        <p className="text-[var(--text-sm)] text-[var(--text-secondary)] leading-relaxed">
+          <span className="font-semibold text-[var(--text-primary)]">Semantic memory tiers.</span>{' '}
+          Tier 1: no Postgres = disabled. Tier 2: Postgres + pgvector without an embedding key = built-in hashing provider. Tier 3: Postgres + <code className="px-1 py-0.5 rounded bg-[var(--bg-hover)] text-[var(--text-primary)]">AZURE_EMBEDDING_*</code> = learned embeddings.
+        </p>
+      </div>
+
       {/* Search */}
       <div className="flex gap-3">
         <div className="relative flex-1 max-w-md">
@@ -64,6 +73,7 @@ export default function MemoryPage() {
             onChange={e => setSearchQuery(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleSearch()}
             placeholder="Search memories..."
+            title={MEMORY_TIER_HINT}
             className="w-full pl-10 pr-4 py-2.5 text-[var(--text-base)] bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-md)] text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none focus:border-[var(--accent-primary)] transition-colors"
           />
         </div>

@@ -4,6 +4,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { normalizeLimit, buildLink } from '@/lib/embedding/search';
+import { defaultProvider } from '@/lib/embedding/provider';
 
 describe('#1592 normalizeLimit', () => {
   it('defaults when missing/invalid', () => {
@@ -18,6 +19,15 @@ describe('#1592 normalizeLimit', () => {
   });
   it('clamps to max 50', () => {
     expect(normalizeLimit(9999)).toBe(50);
+  });
+});
+
+describe('#1597 defaultProvider tier selection', () => {
+  it('falls back to hashing when Azure env vars are absent', () => {
+    delete process.env.AZURE_EMBEDDING_ENDPOINT;
+    delete process.env.AZURE_EMBEDDING_KEY;
+    delete process.env.AZURE_EMBEDDING_DEPLOYMENT;
+    expect(defaultProvider().id).toMatch(/^hashing-v1-d/);
   });
 });
 

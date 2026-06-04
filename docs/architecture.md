@@ -181,6 +181,16 @@ Real-time agent status (`activity-status.json`):
 }
 ```
 
+### Semantic Memory Tiers
+
+Org Studio's semantic retrieval stack is deliberately tiered so self-hosters can adopt it incrementally:
+
+1. **Tier 1 — Off:** no `DATABASE_URL` → normal app behavior, but semantic memory/indexing is disabled
+2. **Tier 2 — Hashing:** `DATABASE_URL` + pgvector, no embedding key → built-in deterministic `HashingEmbeddingProvider`
+3. **Tier 3 — Learned:** `DATABASE_URL` + pgvector + `AZURE_EMBEDDING_*` → Azure/OpenAI-compatible learned embeddings
+
+This is a provider swap behind one interface (`EmbeddingProvider`). Indexing, search, and precedent enrichment all stay the same.
+
 ### Postgres Tables (Schema)
 
 If `DATABASE_URL` is set, Org Studio auto-creates these tables:
