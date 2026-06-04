@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, ArrowLeft, Plus, Sparkles, Check, Users, FolderKanban, Rocket, Wifi, Loader } from 'lucide-react';
 import { deriveRuntimeStepView, deriveTeamStepView } from '@/lib/onboarding-step-view';
+import { deriveOnboardingLegibility } from '@/lib/onboarding-legibility';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -24,7 +25,8 @@ interface OnboardingWizardProps {
 
 const EMOJI_OPTIONS = ['👤', '🤖', '⚡', '🔬', '🧠', '🎯', '🛠️', '🌟', '🐝', '🦊'];
 
-const STEP_LABELS = ['Welcome', 'Organization', 'Runtime', 'Team', 'Done'];
+// Step labels live in src/lib/onboarding-legibility.ts (ONBOARDING_STEP_LABELS)
+// and are surfaced via deriveOnboardingLegibility().steps[].label.
 
 const DEFAULT_MISSION_PLACEHOLDER = 'e.g. Build products that make people\'s lives easier';
 const DEFAULT_ORG_PLACEHOLDER = 'e.g. Acme Labs';
@@ -194,28 +196,74 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
     }
   };
 
-  const StepIndicator = () => (
-    <div className="flex items-center justify-center gap-3 mb-12">
-      {STEP_LABELS.map((label, i) => (
-        <div key={i} className="flex items-center gap-3">
-          <button
-            onClick={() => i < step ? goTo(i) : undefined}
-            className={`flex items-center gap-2 transition-all duration-300 ${i < step ? 'cursor-pointer' : 'cursor-default'}`}
-          >
-            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-[13px] font-semibold transition-all duration-300 ${i === step ? 'bg-[var(--accent-primary)] text-white shadow-[0_0_20px_var(--accent-glow)]' : i < step ? 'bg-[var(--success)] text-white' : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)]'}`}>
-              {i < step ? <Check size={14} /> : i + 1}
-            </div>
-            <span className={`text-[13px] font-medium hidden sm:inline transition-colors duration-300 ${i === step ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}`}>
-              {label}
-            </span>
-          </button>
-          {i < STEP_LABELS.length - 1 && (
-            <div className={`w-8 h-px transition-colors duration-300 ${i < step ? 'bg-[var(--success)]' : 'bg-[var(--border-default)]'}`} />
-          )}
-        </div>
-      ))}
+  const StepIndicator = () => {
+    // #1609 — render per-step legibility from a tested pure helper so the
+    // indicator distinguishes genuinely-complete from skipped-but-passed
+    // (cursor position alone used to mark everything passed as ✓ = "done").
+    const leg = deriveOnboardingLegibility({
+      step,
+      orgName,
+      mission,
+      detectedAgentCount: detectedAgents.length,
+      manualTeammateCount: teammates.length,
+    });
+    return (
+    <div className="mb-12">
+      <div className="flex items-center justify-center gap-3">
+        {leg.steps.map((st) => {
+          const isComplete = st.status === 'complete';
+          const isSkipped = st.status === 'skipped';
+          const isCurrent = st.status === 'current';
+          // Completed and skipped steps are both *passed* → navigable back to.
+          const navigable = st.index < step;
+          const circleClass = isCurrent
+            ? 'bg-[var(--accent-primary)] text-white shadow-[0_0_20px_var(--accent-glow)]'
+            : isComplete
+              ? 'bg-[var(--success)] text-white'
+              : isSkipped
+                ? 'bg-[var(--bg-tertiary)] text-[var(--text-muted)] border border-dashed border-[var(--border-strong)]'
+                : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)]';
+          return (
+          <div key={st.index} className="flex items-center gap-3">
+            <button
+              onClick={() => (navigable ? goTo(st.index) : undefined)}
+              title={st.note || st.label}
+              className={`flex items-center gap-2 transition-all duration-300 ${navigable ? 'cursor-pointer' : 'cursor-default'}`}
+            >
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-[13px] font-semibold transition-all duration-300 ${circleClass}`}>
+                {isComplete ? <Check size={14} /> : isSkipped ? '–' : st.index + 1}
+              </div>
+              <span className="hidden sm:flex flex-col leading-tight">
+                <span className={`text-[13px] font-medium transition-colors duration-300 ${isCurrent ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}`}>
+                  {st.label}
+                </span>
+                {/* done-when #3 — surface optional/skipped state inline so it's legible */}
+                {st.optional && (isSkipped || (!isComplete && !isCurrent)) && (
+                  <span className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
+                    {isSkipped ? 'skipped' : 'optional'}
+                  </span>
+                )}
+              </span>
+            </button>
+            {st.index < leg.steps.length - 1 && (
+              <div className={`w-8 h-px transition-colors duration-300 ${st.index < step ? 'bg-[var(--success)]' : 'bg-[var(--border-default)]'}`} />
+            )}
+          </div>
+          );
+        })}
+      </div>
+
+      {/* done-when #1/#2 — resume/next-step summary: tells a returning user what
+          remains and that optional steps can be added later. Hidden on Welcome
+          (step 0) where the CTA already carries the intent. */}
+      {step > 0 && (
+        <p className="text-center text-[var(--text-xs)] text-[var(--text-tertiary)] mt-4 max-w-md mx-auto leading-relaxed">
+          {leg.nextStepHint}
+        </p>
+      )}
     </div>
-  );
+    );
+  };
 
   const renderStep0 = () => (
     <div className="max-w-lg mx-auto text-center">
