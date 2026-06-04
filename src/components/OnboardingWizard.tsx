@@ -58,6 +58,9 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   const [runtimes, setRuntimes] = useState<any[]>([]);
   const [gatewayLoading, setGatewayLoading] = useState(false);
   const [gatewayConnected, setGatewayConnected] = useState(false);
+  // #1606 GAP-5 — true once a detection poll has completed at least once, so the
+  // UI can distinguish "haven't looked yet" from "looked, found no runtime".
+  const [hasPolledRuntimes, setHasPolledRuntimes] = useState(false);
 
   // Step 3: Team
   const [teammates, setTeammates] = useState<NewTeammate[]>([]);
@@ -107,6 +110,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
       setGatewayConnected(false);
     } finally {
       setGatewayLoading(false);
+      setHasPolledRuntimes(true);
     }
   };
 
@@ -382,9 +386,24 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
               </p>
             </div>
           ) : !gatewayLoading ? (
-            <div className="bg-[var(--info-subtle)] border border-[var(--info-subtle)] rounded-[var(--radius-md)] p-3">
-              <p className="text-[var(--text-sm)] text-[var(--text-primary)] font-medium">Click "Detect Runtimes" to find agent services</p>
-            </div>
+            // #1606 GAP-5 — distinguish "haven't detected yet" from "detected, found nothing".
+            // Before detection runs (runtimes empty + never polled) we prompt to detect; after a
+            // poll that returns zero connected runtimes we explain why and that skipping is fine,
+            // instead of leaving a dead-end empty block as the only feedback.
+            hasPolledRuntimes ? (
+              <div className="bg-[var(--info-subtle)] border border-[var(--info-subtle)] rounded-[var(--radius-md)] p-3 space-y-1">
+                <p className="text-[var(--text-sm)] text-[var(--text-primary)] font-medium">No runtime detected — that&apos;s fine.</p>
+                <p className="text-[var(--text-xs)] text-[var(--text-secondary)] leading-relaxed">
+                  You can run Org Studio standalone and connect an agent runtime later in Settings, or set
+                  {' '}<code className="font-mono text-[var(--text-primary)]">GATEWAY_URL</code> in <code className="font-mono text-[var(--text-primary)]">.env.local</code>.
+                  Click Continue to skip this step.
+                </p>
+              </div>
+            ) : (
+              <div className="bg-[var(--info-subtle)] border border-[var(--info-subtle)] rounded-[var(--radius-md)] p-3">
+                <p className="text-[var(--text-sm)] text-[var(--text-primary)] font-medium">Click "Detect Runtimes" to find agent services</p>
+              </div>
+            )
           ) : null}
         </div>
 
@@ -399,8 +418,11 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                   {r.id}: {r.connected ? '✓ Connected' : '✗ Not found'}
                 </div>
               ))
+            ) : hasPolledRuntimes ? (
+              // #1606 GAP-5 — detected, nothing connected. Skipping is expected; don't dead-end.
+              <div>No runtime connected — that&apos;s fine, you can connect one later in Settings. Continue to skip.</div>
             ) : (
-              <div>No runtime data — click "Detect Runtimes" above</div>
+              <div>No runtime data yet — click "Detect Runtimes" above</div>
             )}
           </div>
         </div>
@@ -419,11 +441,39 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
         </h1>
         <p className="text-[var(--text-md)] text-[var(--text-tertiary)] leading-relaxed">
           {detectedAgents.length > 0
-            ? `We found ${detectedAgents.length} agent${detectedAgents.length !== 1 ? 's' : ''}. Add any humans here.`
+            ? `We found ${detectedAgents.length} agent${detectedAgents.length !== 1 ? 's' : ''} — they're already on your roster. Add any humans here.`
             : 'Add the people on your team. You can add agents later.'
           }
         </p>
       </div>
+
+      {/* #1606 GAP-6 — show detected agents as read-only "already added" chips so it's
+          unambiguous they're on the roster. The Team step is humans-only; agents are
+          auto-imported from the runtime (no include/exclude controls here, per product intent). */}
+      {detectedAgents.length > 0 && (
+        <div className="mb-5 bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-lg)] p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Check size={15} className="text-[var(--success)] shrink-0" />
+            <p className="text-[var(--text-xs)] font-medium text-[var(--text-tertiary)] uppercase tracking-wider">
+              Agents already added ({detectedAgents.length})
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {detectedAgents.map((agent) => (
+              <span
+                key={agent.id}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--bg-primary)] text-[var(--text-xs)] text-[var(--text-secondary)] border border-[var(--border-subtle)]"
+              >
+                <span>{agent.identity?.emoji || agent.emoji || '🤖'}</span>
+                {agent.identity?.name || agent.name || agent.id}
+              </span>
+            ))}
+          </div>
+          <p className="text-[var(--text-xs)] text-[var(--text-muted)] mt-3">
+            Auto-imported from your runtime. This step is for adding humans — add them below.
+          </p>
+        </div>
+      )}
 
       <div className="bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-lg)] p-5 space-y-4">
         <div className="grid grid-cols-2 gap-4">
