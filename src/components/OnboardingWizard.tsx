@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, ArrowLeft, Plus, Sparkles, Check, Users, FolderKanban, Rocket, Wifi, Loader } from 'lucide-react';
+import { deriveRuntimeStepView, deriveTeamStepView } from '@/lib/onboarding-step-view';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -304,7 +305,16 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
     </div>
   );
 
-  const renderStep2 = () => (
+  const renderStep2 = () => {
+    // #1608 — derive the runtime step's copy/state from a pure helper so the
+    // no-runtime / detected / not-yet-polled transitions are testable and the
+    // "what is a runtime" explanation (done-when #1) lives in one place.
+    const rv = deriveRuntimeStepView({
+      hasPolledRuntimes,
+      connectedRuntimeCount: runtimes.filter((r: any) => r.connected).length,
+      detectedAgentCount: detectedAgents.length,
+    });
+    return (
     <div className="max-w-xl mx-auto">
       <div className="text-center mb-10">
         <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-[var(--info-subtle)] mb-6">
@@ -314,7 +324,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
           Connect Your Agent Runtime
         </h1>
         <p className="text-[var(--text-md)] text-[var(--text-tertiary)] leading-relaxed">
-          Org Studio can auto-detect agents from OpenClaw and Hermes Agent. Skip this if you're running standalone.
+          {rv.whatIsRuntime}
         </p>
       </div>
 
@@ -392,7 +402,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
             // instead of leaving a dead-end empty block as the only feedback.
             hasPolledRuntimes ? (
               <div className="bg-[var(--info-subtle)] border border-[var(--info-subtle)] rounded-[var(--radius-md)] p-3 space-y-1">
-                <p className="text-[var(--text-sm)] text-[var(--text-primary)] font-medium">No runtime detected — that&apos;s fine.</p>
+                <p className="text-[var(--text-sm)] text-[var(--text-primary)] font-medium">{rv.statusHeadline}</p>
                 <p className="text-[var(--text-xs)] text-[var(--text-secondary)] leading-relaxed">
                   You can run Org Studio standalone and connect an agent runtime later in Settings, or set
                   {' '}<code className="font-mono text-[var(--text-primary)]">GATEWAY_URL</code> in <code className="font-mono text-[var(--text-primary)]">.env.local</code>.
@@ -401,7 +411,8 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
               </div>
             ) : (
               <div className="bg-[var(--info-subtle)] border border-[var(--info-subtle)] rounded-[var(--radius-md)] p-3">
-                <p className="text-[var(--text-sm)] text-[var(--text-primary)] font-medium">Click "Detect Runtimes" to find agent services</p>
+                <p className="text-[var(--text-sm)] text-[var(--text-primary)] font-medium">{rv.statusHeadline}</p>
+                <p className="text-[var(--text-xs)] text-[var(--text-secondary)] leading-relaxed mt-1">{rv.statusDetail}</p>
               </div>
             )
           ) : null}
@@ -428,34 +439,40 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
         </div>
       </div>
     </div>
-  );
+    );
+  };
 
-  const renderStep3 = () => (
+  const renderStep3 = () => {
+    // #1608 — derive team-step copy from a pure helper so the agents-only /
+    // manual-only / mixed / empty compositions are testable and the
+    // detected-vs-manual distinction (done-when #2) is unambiguous in one place.
+    const tv = deriveTeamStepView({
+      detectedAgentCount: detectedAgents.length,
+      manualTeammateCount: teammates.length,
+    });
+    return (
     <div className="max-w-xl mx-auto">
       <div className="text-center mb-10">
         <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-[var(--accent-2-subtle)] mb-6">
           <Users size={28} className="text-[var(--accent-2)]" />
         </div>
         <h1 className="text-[var(--text-3xl)] font-bold text-[var(--text-primary)] mb-3 tracking-tight">
-          {detectedAgents.length > 0 ? 'Add Team Members' : 'Build Your Team'}
+          {tv.heading}
         </h1>
         <p className="text-[var(--text-md)] text-[var(--text-tertiary)] leading-relaxed">
-          {detectedAgents.length > 0
-            ? `We found ${detectedAgents.length} agent${detectedAgents.length !== 1 ? 's' : ''} — they're already on your roster. Add any humans here.`
-            : 'Add the people on your team. You can add agents later.'
-          }
+          {tv.subcopy}
         </p>
       </div>
 
-      {/* #1606 GAP-6 — show detected agents as read-only "already added" chips so it's
+      {/* #1606 GAP-6 / #1608 — show detected agents as read-only "already added" chips so it's
           unambiguous they're on the roster. The Team step is humans-only; agents are
           auto-imported from the runtime (no include/exclude controls here, per product intent). */}
-      {detectedAgents.length > 0 && (
+      {tv.showDetectedAgents && (
         <div className="mb-5 bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-lg)] p-4">
           <div className="flex items-center gap-2 mb-3">
             <Check size={15} className="text-[var(--success)] shrink-0" />
             <p className="text-[var(--text-xs)] font-medium text-[var(--text-tertiary)] uppercase tracking-wider">
-              Agents already added ({detectedAgents.length})
+              {tv.detectedAgentsLabel}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -470,7 +487,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
             ))}
           </div>
           <p className="text-[var(--text-xs)] text-[var(--text-muted)] mt-3">
-            Auto-imported from your runtime. This step is for adding humans — add them below.
+            {tv.detectedAgentsNote}
           </p>
         </div>
       )}
@@ -526,7 +543,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
       {teammates.length > 0 && (
         <div className="mt-5 space-y-2">
           <p className="text-[var(--text-xs)] font-medium text-[var(--text-tertiary)] uppercase tracking-wider mb-2">
-            Added ({teammates.length})
+            Humans you&apos;ve added ({teammates.length})
           </p>
           {teammates.map((tm, i) => (
             <div key={i} className="flex items-center gap-3 bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-md)] px-4 py-3">
@@ -549,7 +566,8 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
         </div>
       )}
     </div>
-  );
+    );
+  };
 
   const renderStep4 = () => (
     <div className="max-w-lg mx-auto text-center">
