@@ -96,6 +96,17 @@ export function middleware(request: NextRequest): NextResponse {
   }
 
   // Page-route auth (existing behavior).
+  //
+  // #1619 (audit F-3): this is a SHELL gate only — it decides redirect-to-login
+  // for page routes; it does NOT grant data access. Every /api/* route
+  // authenticates independently via getSession/authenticateRequest, and
+  // GET /api/auth/login now validates the token against the session store.
+  // We cannot call getSession here because middleware runs on the Edge runtime
+  // (no `pg`/Node DB access). Full cookie validation in middleware would
+  // require the experimental Node middleware runtime; tracked as a deliberate
+  // deviation in #1619. What we CAN do cheaply is reject malformed cookies:
+  // real session tokens are randomBytes(32).hex == exactly 64 hex chars, so a
+  // short/garbage `session_token` no longer satisfies even the shell gate.
   const apiKey = process.env.ORG_STUDIO_API_KEY;
   if (!apiKey) {
     return NextResponse.next();
@@ -110,7 +121,8 @@ export function middleware(request: NextRequest): NextResponse {
   }
 
   const cookieHeader = request.headers.get('cookie') || '';
-  const sessionToken = cookieHeader.match(/session_token=([a-f0-9]+)/)?.[1];
+  // Require a full-length (64 hex) token, not just any hex run (#1619).
+  const sessionToken = cookieHeader.match(/session_token=([a-f0-9]{64})(?:;|$)/)?.[1];
   const authHeader = request.headers.get('authorization') || '';
   const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
 

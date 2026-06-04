@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { randomBytes } from 'crypto';
+import { randomBytes, timingSafeEqual } from 'crypto';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 
@@ -71,10 +71,29 @@ export function hashPassword(password: string): string {
 }
 
 /**
+ * Constant-time string comparison (#1619 / audit F-7).
+ *
+ * `a === b` for secrets/hashes leaks length+prefix via early-exit timing.
+ * `crypto.timingSafeEqual` requires equal-length buffers, so we first compare
+ * lengths (a non-secret property here — hashes are fixed-width, and bearer
+ * keys of differing length are trivially not-equal) and only then do the
+ * constant-time byte compare. Returns false on any length mismatch.
+ */
+export function timingSafeEqualStr(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, 'utf8');
+  const bufB = Buffer.from(b, 'utf8');
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+}
+
+/**
  * Verify a password against a hash
  */
 export function verifyPassword(password: string, hash: string): boolean {
-  return hashPassword(password) === hash;
+  // Constant-time compare of the two SHA-256 hex digests (#1619, F-7).
+  // NOTE: the hash itself is still unsalted SHA-256 — migrating the KDF is
+  // tracked separately under the sign-off-gated ticket #1626 (audit F-1).
+  return timingSafeEqualStr(hashPassword(password), hash || '');
 }
 
 /**
@@ -322,7 +341,7 @@ export async function authenticateRequest(req: NextRequest): Promise<NextRespons
   const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
 
   if (apiKey || bearer) {
-    if (bearer && apiKey && bearer === apiKey) {
+    if (bearer && apiKey && timingSafeEqualStr(bearer, apiKey)) {
       return null; // Authenticated via global API key
     }
 
@@ -377,7 +396,7 @@ export async function authenticateRequestWithContext(
   const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
 
   if (apiKey || bearer) {
-    if (bearer && apiKey && bearer === apiKey) {
+    if (bearer && apiKey && timingSafeEqualStr(bearer, apiKey)) {
       // Global API key has no human owner — userId is null. Callers that need
       // a workspace-membership fallback should use `?? 'basil'` themselves.
       // See #1217 Bug B for why hardcoding 'basil' here was wrong.

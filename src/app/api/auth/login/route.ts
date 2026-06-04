@@ -25,7 +25,7 @@
 // keeps the server stateless and the wire format simple. The selector UI
 // just hangs onto the password in memory between the two calls.
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyPassword, createSession, getSessionTokenFromCookie } from '@/lib/auth';
+import { verifyPassword, createSession, getSession, getSessionTokenFromCookie } from '@/lib/auth';
 import { getStoreProviderAllWorkspaces } from '@/lib/store-provider'; // login: pre-workspace bootstrap
 import {
   WORKSPACE_COOKIE_KEY,
@@ -193,7 +193,13 @@ export async function POST(req: NextRequest) {
 
 /**
  * GET /api/auth/login
- * Check if currently logged in
+ * Check if currently logged in.
+ *
+ * #1619 (audit F-3): previously this returned `authenticated: true` whenever a
+ * `session_token` cookie was merely PRESENT, without validating it. Any
+ * forged/stale hex cookie passed. Now we validate the token against the
+ * session store via getSession (expiry-checked, deletes expired) and report
+ * the real state.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -204,8 +210,8 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ authenticated: false });
     }
 
-    // If session is valid, we're authenticated
-    return NextResponse.json({ authenticated: true });
+    const session = await getSession(sessionToken);
+    return NextResponse.json({ authenticated: !!session });
   } catch (e: any) {
     console.error('[Auth] Check error:', e);
     return NextResponse.json({ authenticated: false });
