@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { randomBytes, timingSafeEqual } from 'crypto';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
+import { withPgClient } from '@/lib/pg-pool';
 
 /**
  * Simple session-based authentication for Org Studio.
@@ -110,10 +111,7 @@ export async function getSession(sessionToken: string): Promise<{ userId: string
   // Try Postgres first (if DATABASE_URL is set)
   if (process.env.DATABASE_URL) {
     try {
-      const pg = await import('pg');
-      const client = new pg.Client(process.env.DATABASE_URL);
-      await client.connect();
-      try {
+      return await withPgClient(async (client) => {
         // #1387 A.3: sessions are keyed by token (unique). Read workspace_id
         // from the row itself instead of hardcoding the lookup filter — a
         // user logged into workspace A shouldn't fail authentication just
@@ -125,10 +123,10 @@ export async function getSession(sessionToken: string): Promise<{ userId: string
         if (result.rows.length === 0) return null;
 
         const session = result.rows[0];
-        const expiresAt = typeof session.expires_at === 'string' 
-          ? parseInt(session.expires_at, 10) 
+        const expiresAt = typeof session.expires_at === 'string'
+          ? parseInt(session.expires_at, 10)
           : session.expires_at;
-        
+
         if (expiresAt < Date.now()) {
           // Session expired — delete it (token is unique PK; no workspace filter needed)
           await client.query('DELETE FROM org_studio_sessions WHERE token = $1', [sessionToken]);
@@ -136,9 +134,7 @@ export async function getSession(sessionToken: string): Promise<{ userId: string
         }
 
         return { userId: session.user_id, workspaceId: session.workspace_id || undefined };
-      } finally {
-        await client.end();
-      }
+      }, { max: 5 });
     } catch (pgErr: any) {
       console.error('[getSession] Postgres error:', pgErr.message);
       // Fall through to file-based
@@ -171,10 +167,7 @@ export async function createSession(
   // Try Postgres first
   if (process.env.DATABASE_URL) {
     try {
-      const pg = await import('pg');
-      const client = new pg.Client(process.env.DATABASE_URL);
-      await client.connect();
-      try {
+      await withPgClient(async (client) => {
         // #1387 A.3: workspace_id resolved by caller. Login flow (A.4 sub-slice)
         // will pass the selected workspace once the selector ships; today every
         // session lands in 'default-workspace'.
@@ -182,10 +175,8 @@ export async function createSession(
           'INSERT INTO org_studio_sessions (token, user_id, expires_at, workspace_id) VALUES ($1, $2, $3, $4)',
           [token, userId, expiresAt, workspaceId]
         );
-        return token;
-      } finally {
-        await client.end();
-      }
+      }, { max: 5 });
+      return token;
     } catch (pgErr: any) {
       console.error('[createSession] Postgres error:', pgErr.message);
       // Fall through to file-based
@@ -206,16 +197,11 @@ export async function destroySession(sessionToken: string): Promise<void> {
   // Try Postgres first
   if (process.env.DATABASE_URL) {
     try {
-      const pg = await import('pg');
-      const client = new pg.Client(process.env.DATABASE_URL);
-      await client.connect();
-      try {
+      await withPgClient(async (client) => {
         // #1387 A.3: sessions are keyed by token (unique PK). No workspace filter needed.
         await client.query('DELETE FROM org_studio_sessions WHERE token = $1', [sessionToken]);
-        return;
-      } finally {
-        await client.end();
-      }
+      }, { max: 5 });
+      return;
     } catch (pgErr: any) {
       console.error('[destroySession] Postgres error:', pgErr.message);
       // Fall through to file-based

@@ -26,8 +26,7 @@ interface PgState {
 const pgState: PgState = { rows: [], queryLog: [] };
 
 vi.mock('pg', () => {
-  return {
-    Pool: class {
+  const Pool = class {
       constructor(_: any) {}
       async connect() {
         return {
@@ -88,7 +87,10 @@ vi.mock('pg', () => {
         };
       }
       async end() {}
-    },
+    };
+  return {
+    Pool,
+    default: { Pool },
   };
 });
 
