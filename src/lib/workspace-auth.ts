@@ -17,6 +17,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import type { AuthContext } from '@/lib/auth';
+import { withPgClient } from '@/lib/pg-pool';
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -81,10 +82,7 @@ async function loadWorkspaceData(): Promise<{
   const dbUrl = process.env.DATABASE_URL;
   if (dbUrl) {
     try {
-      const pg = await import('pg');
-      const client = new pg.Client(dbUrl);
-      await client.connect();
-      try {
+      return await withPgClient(async (client) => {
         const wsResult = await client.query(
           'SELECT id, name, owner, created_at FROM org_studio_workspaces ORDER BY id',
         );
@@ -105,9 +103,7 @@ async function loadWorkspaceData(): Promise<{
         }));
         _cacheTs = Date.now();
         return { workspaces: _workspacesCache!, memberships: _membershipCache! };
-      } finally {
-        await client.end();
-      }
+      }, { max: 5 });
     } catch (e: any) {
       console.warn('[workspace-auth] Postgres load failed, falling back to settings:', e.message);
     }

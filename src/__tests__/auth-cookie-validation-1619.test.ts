@@ -9,9 +9,10 @@
  *        (timingSafeEqualStr).
  *   F-8: POST /api/auth/logout expires the workspace cookie too.
  *
- * Strategy: mock `pg` with an injectable in-memory fake so getSession runs its
- * real SELECT/expiry/DELETE logic without a live Postgres. DATABASE_URL is set
- * so the Postgres branch is taken.
+ * Strategy: mock `pg` with a `Pool` whose `connect()` yields an in-memory
+ * fake client (#1620 routed getSession through a shared pg.Pool), so getSession
+ * runs its real SELECT/expiry/DELETE logic without a live Postgres.
+ * DATABASE_URL is set so the Postgres branch is taken.
  */
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
@@ -22,37 +23,50 @@ const db = vi.hoisted(() => ({
   deleted: [] as string[],
 }));
 
+// #1620: code now connects via a shared pg.Pool (src/lib/pg-pool.ts), so we
+// mock `pg.Pool` (not Client). pool.connect() returns a client with
+// query()+release(); query() drives the in-memory `db` above.
 vi.mock('pg', () => {
-  class FakeClient {
-    constructor(_conn?: string) {}
-    async connect() {}
-    async end() {}
-    async query(sql: string, params: any[] = []) {
-      const s = sql.replace(/\s+/g, ' ').trim();
-      if (s.startsWith('SELECT') && /FROM org_studio_sessions/i.test(s)) {
-        const token = params[0];
-        const row = db.sessions.find((r) => r.token === token);
-        return { rows: row ? [row] : [] };
-      }
-      if (s.startsWith('DELETE') && /FROM org_studio_sessions/i.test(s)) {
-        const token = params[0];
-        db.deleted.push(token);
-        db.sessions = db.sessions.filter((r) => r.token !== token);
-        return { rows: [] };
-      }
-      return { rows: [] };
+  const Pool = class {
+    constructor(_opts?: any) {}
+    async connect() {
+      return {
+        query: async (sql: string, params: any[] = []) => {
+          const s = sql.replace(/\s+/g, ' ').trim();
+          if (s.startsWith('SELECT') && /FROM org_studio_sessions/i.test(s)) {
+            const token = params[0];
+            const row = db.sessions.find((r) => r.token === token);
+            return { rows: row ? [row] : [] };
+          }
+          if (s.startsWith('DELETE') && /FROM org_studio_sessions/i.test(s)) {
+            const token = params[0];
+            db.deleted.push(token);
+            db.sessions = db.sessions.filter((r) => r.token !== token);
+            return { rows: [] };
+          }
+          return { rows: [] };
+        },
+        release() {},
+      };
     }
-  }
-  return { default: { Client: FakeClient }, Client: FakeClient };
+    async end() {}
+  };
+  return { default: { Pool }, Pool };
 });
+
+
 
 const VALID = 'a'.repeat(64); // 64 hex chars — shape of randomBytes(32).hex
 const OTHER = 'b'.repeat(64);
 
-beforeEach(() => {
+beforeEach(async () => {
   db.sessions = [];
   db.deleted = [];
   process.env.DATABASE_URL = 'postgres://fake';
+  // Reset the module-level pg pool singleton (#1620) so each test re-creates
+  // it against the mock instead of reusing a pool from a prior test file.
+  const pool = await import('@/lib/pg-pool');
+  pool.__resetPgPoolForTests?.();
 });
 
 afterEach(() => {

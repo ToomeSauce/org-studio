@@ -14,6 +14,7 @@
  */
 
 import { createHash, randomBytes } from 'crypto';
+import { withPgClient } from '@/lib/pg-pool';
 
 export type ApiTokenScope = 'read' | 'write';
 
@@ -62,18 +63,7 @@ async function withClient<T>(fn: (client: any) => Promise<T>): Promise<T> {
   if (!process.env.DATABASE_URL) {
     throw new Error('api-tokens requires DATABASE_URL (file-mode is offline/dev-only, #1265)');
   }
-  const { Pool } = await import('pg');
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-  try {
-    const client = await pool.connect();
-    try {
-      return await fn(client);
-    } finally {
-      client.release();
-    }
-  } finally {
-    await pool.end();
-  }
+  return withPgClient(fn, { max: 5 });
 }
 
 function rowToRecord(row: any): ApiTokenRecord {
