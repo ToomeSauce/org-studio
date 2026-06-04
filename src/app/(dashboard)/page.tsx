@@ -7,7 +7,7 @@ import { getProjectStatusLabel } from '@/lib/vision-status';
 import { SuggestedFeedbackSection } from '@/components/SuggestedFeedbackSection';
 import { clsx } from 'clsx';
 import { useMemo, useState, useEffect, useCallback } from 'react';
-import { ArrowRight, AlertCircle, FolderPlus, Compass, Users as UsersIcon } from 'lucide-react';
+import { ArrowRight, AlertCircle, FolderPlus, Compass, Users as UsersIcon, RefreshCw, X } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 
@@ -86,6 +86,52 @@ function FirstRunSection({ orgName }: { orgName?: string }) {
   );
 }
 
+// #1606 GAP-4 — Recovery affordance for partially-abandoned onboarding. The wizard
+// only full-screen auto-shows on a truly empty workspace; once the user has added
+// any data, `storeIsEmpty` is false and the old trigger never re-fired — stranding
+// anyone who quit mid-flow (or clicked Settings → Reset Onboarding, which set
+// onboardingComplete=false but was defeated by the same condition). This banner
+// renders while onboardingComplete===false AND the workspace is non-empty, giving a
+// discoverable in-UI 'Resume setup' path with no magic ?onboarding=true param.
+// Dismissible per-session (sessionStorage) so it's recoverable, not a nag.
+function FirstRunResumeBanner({ onResume, onDismiss }: { onResume: () => void; onDismiss: () => void }) {
+  return (
+    <div className="flex items-start gap-4 border border-[var(--accent-primary)] bg-[var(--accent-muted)] rounded-[var(--radius-lg)] p-4 sm:p-5">
+      <div className="inline-flex items-center justify-center w-9 h-9 rounded-[var(--radius-md)] bg-[var(--bg-primary)] shrink-0">
+        <RefreshCw size={17} className="text-[var(--accent-primary)]" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-[var(--text-sm)] font-semibold text-[var(--text-primary)]">Finish setting up your workspace</p>
+        <p className="text-[var(--text-xs)] text-[var(--text-secondary)] mt-0.5 leading-relaxed">
+          You started the setup wizard but didn&apos;t finish. Pick up where you left off — set your
+          organization, connect a runtime, and add your team.
+        </p>
+        <div className="flex items-center gap-3 mt-3">
+          <button
+            onClick={onResume}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-[var(--radius-md)] text-[var(--text-sm)] font-medium transition-all bg-[var(--accent-primary)] text-white hover:bg-[var(--accent-hover)]"
+          >
+            <RefreshCw size={14} /> Resume setup
+          </button>
+          <button
+            onClick={onDismiss}
+            className="text-[var(--text-sm)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors"
+          >
+            Dismiss
+          </button>
+        </div>
+      </div>
+      <button
+        onClick={onDismiss}
+        className="text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors shrink-0"
+        title="Dismiss"
+        aria-label="Dismiss setup reminder"
+      >
+        <X size={16} />
+      </button>
+    </div>
+  );
+}
 
 // ─── SECTION: Activity Feed ───────────────────────────────────────────────────
 function ActivityFeedSection({ selectedAgent, tasks, projects }: { selectedAgent?: string; tasks?: any[]; projects?: any[] }) {
@@ -522,6 +568,9 @@ export default function HomePage() {
     (!missionStatement || missionStatement === DEFAULT_MISSION);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [storeLoaded, setStoreLoaded] = useState(false);
+  // #1606 GAP-4 — per-session dismissal of the resume-setup banner (recoverable,
+  // not a nag; returns next session until onboarding actually completes).
+  const [bannerDismissed, setBannerDismissed] = useState(false);
   // #1495 Bug 3 — selectedAgent state removed with TeamActivitySection. The
   // only setter was the team-card click handler. ActivityFeedSection now
   // shows the unfiltered feed (selectedAgent prop is optional).
@@ -530,12 +579,24 @@ export default function HomePage() {
     if (storeData && !storeLoaded) setStoreLoaded(true);
   }, [storeData, storeLoaded]);
 
+  // #1606 GAP-4 — hydrate banner dismissal from sessionStorage on mount.
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem('os-resume-banner-dismissed') === '1') {
+        setBannerDismissed(true);
+      }
+    } catch { /* sessionStorage unavailable — banner just stays visible */ }
+  }, []);
+
   useEffect(() => {
     // Allow ?onboarding=true to force the wizard (for demos/screenshots)
     const params = new URLSearchParams(window.location.search);
     if (params.get('onboarding') === 'true') {
       setShowOnboarding(true);
     } else if (storeLoaded && !onboardingComplete && storeIsEmpty) {
+      // #1606 GAP-4 — full-screen auto-takeover ONLY for a truly empty workspace
+      // (genuine first run). Once any data exists, we no longer hijack the screen;
+      // the dismissible resume banner below handles recovery instead.
       setShowOnboarding(true);
     }
   }, [storeLoaded, onboardingComplete, storeIsEmpty]);
@@ -544,9 +605,26 @@ export default function HomePage() {
     setShowOnboarding(false);
   }, []);
 
+  // #1606 GAP-4 — re-open the wizard from the resume banner (no ?onboarding=true needed).
+  const handleResumeOnboarding = useCallback(() => {
+    setShowOnboarding(true);
+  }, []);
+
+  const handleDismissBanner = useCallback(() => {
+    setBannerDismissed(true);
+    try { sessionStorage.setItem('os-resume-banner-dismissed', '1'); } catch { /* no-op */ }
+  }, []);
+
   if (showOnboarding) {
     return <OnboardingWizard onComplete={handleOnboardingComplete} />;
   }
+
+  // #1606 GAP-4 — show the resume banner when setup was started but never finished
+  // (onboardingComplete still false) AND the workspace already has data (so the
+  // full-screen wizard no longer auto-fires). Reuses the same condition that used
+  // to silently strand the user. Hidden once onboarding completes or per-session.
+  const showResumeBanner =
+    storeLoaded && !onboardingComplete && !storeIsEmpty && !bannerDismissed;
 
   // #1604 — First-run / empty workspace: once onboarding is dismissed but no
   // projects exist yet, show a single clear "create your first project" surface
@@ -557,6 +635,9 @@ export default function HomePage() {
   if (storeLoaded && !hasProjects) {
     return (
       <div className="space-y-8">
+        {showResumeBanner && (
+          <FirstRunResumeBanner onResume={handleResumeOnboarding} onDismiss={handleDismissBanner} />
+        )}
         <FirstRunSection orgName={storeData?.settings?.orgName} />
       </div>
     );
@@ -564,6 +645,10 @@ export default function HomePage() {
 
   return (
     <div className="space-y-8">
+      {/* #1606 GAP-4 — resume-setup banner (workspace has projects but onboarding unfinished) */}
+      {showResumeBanner && (
+        <FirstRunResumeBanner onResume={handleResumeOnboarding} onDismiss={handleDismissBanner} />
+      )}
       {/* Section 1: Blockers */}
       <AttentionSection tasks={tasks} projects={projects} />
 

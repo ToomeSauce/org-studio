@@ -20,6 +20,9 @@ function ResetOnboardingSection() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'updateSettings', settings: { onboardingComplete: false } }),
       });
+      // #1606 GAP-4 — clear the per-session banner dismissal so the 'Resume setup'
+      // affordance reappears on the home page after an explicit reset.
+      try { sessionStorage.removeItem('os-resume-banner-dismissed'); } catch { /* no-op */ }
       setResetDone(true);
     } finally {
       setResetting(false);
@@ -30,7 +33,7 @@ function ResetOnboardingSection() {
     <section className="bg-[var(--card)] border border-[var(--border-default)] rounded-[var(--radius-lg)] p-5 space-y-3 shadow-[var(--shadow-sm),inset_0_1px_0_var(--card-highlight)]">
       <h2 className="text-[var(--text-sm)] font-semibold text-[var(--text-primary)]">Onboarding Wizard</h2>
       <p className="text-[var(--text-xs)] text-[var(--text-tertiary)]">
-        The onboarding wizard helps new users set up their team, projects, and values on first launch. Reset it here to re-run the setup flow.
+        The onboarding wizard helps new users set up their team, projects, and values on first launch. Reset it here to re-run the setup flow — on an empty workspace it reopens automatically; otherwise a &ldquo;Resume setup&rdquo; prompt appears on your dashboard.
       </p>
       <button
         onClick={resetOnboarding}
@@ -38,7 +41,7 @@ function ResetOnboardingSection() {
         className="flex items-center gap-1.5 px-3 py-1.5 min-h-[44px] rounded-[var(--radius-md)] text-[var(--text-xs)] font-medium border transition-all disabled:opacity-50 disabled:cursor-not-allowed bg-[var(--bg-tertiary)] border-[var(--border-default)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]"
       >
         <RotateCcw size={13} />
-        {resetDone ? 'Reset — reload to see wizard' : resetting ? 'Resetting...' : 'Reset Onboarding'}
+        {resetDone ? 'Reset — see your dashboard' : resetting ? 'Resetting...' : 'Reset Onboarding'}
       </button>
     </section>
   );
