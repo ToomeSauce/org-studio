@@ -815,7 +815,16 @@ async function checkGateway(): Promise<boolean> {
     
     const res = await fetch('http://127.0.0.1:4501/api/gateway', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        // /api/gateway now enforces auth (write scope) after the 2026.5.28
+        // security tightening. Without this internal Bearer the call 401s,
+        // res.ok is false, and EVERY scheduler enable/sync wrongly reports
+        // NO_GATEWAY — which silently stopped per-agent dispatch crons from
+        // ever being (re)created. Use the same internal key the route uses
+        // for its other server-to-server calls.
+        Authorization: `Bearer ${process.env.ORG_STUDIO_API_KEY || ''}`,
+      },
       body: JSON.stringify({ method: 'status' }),
       signal: controller.signal as any,
     });
@@ -1248,8 +1257,11 @@ export async function POST(request: NextRequest) {
         let freshStore = await readStore();
 
         for (const loop of loops) {
-          if (loop.enabled && loop.cronJobId && !cronIds.has(loop.cronJobId)) {
-            // Enabled loop but cron job missing — recreate
+          if (loop.enabled && (!loop.cronJobId || !cronIds.has(loop.cronJobId))) {
+            // Enabled loop whose cron is missing OR was never created
+            // (cronJobId null). The null case used to be skipped, which
+            // meant a freshly-seeded or wiped loop never got a dispatch
+            // cron and silently never ran. Recreate in both cases.
             const agentName = getAgentName(freshStore, loop.agentId);
             const agentRole = getAgentRole(freshStore, loop.agentId);
             const globalPreamble = freshStore.settings?.loopPreamble || '';
