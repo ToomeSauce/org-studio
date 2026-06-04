@@ -5,6 +5,7 @@ import { Teammate, buildAgentMap } from '@/lib/teammates';
 import { isAwaitingHumanResponse } from '@/lib/blocker-filters';
 import { getProjectStatusLabel } from '@/lib/vision-status';
 import { SuggestedFeedbackSection } from '@/components/SuggestedFeedbackSection';
+import { evaluateOnboardingRecovery } from '@/lib/onboarding-recovery';
 import { clsx } from 'clsx';
 import { useMemo, useState, useEffect, useCallback } from 'react';
 import { ArrowRight, AlertCircle, FolderPlus, Compass, Users as UsersIcon, RefreshCw, X } from 'lucide-react';
@@ -589,17 +590,23 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    // Allow ?onboarding=true to force the wizard (for demos/screenshots)
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('onboarding') === 'true') {
-      setShowOnboarding(true);
-    } else if (storeLoaded && !onboardingComplete && storeIsEmpty) {
-      // #1606 GAP-4 — full-screen auto-takeover ONLY for a truly empty workspace
-      // (genuine first run). Once any data exists, we no longer hijack the screen;
-      // the dismissible resume banner below handles recovery instead.
+    // #1607 — single source of truth for the recovery surface. The ?onboarding=true
+    // escape hatch and the empty-workspace first-run takeover both resolve through
+    // evaluateOnboardingRecovery so the wizard-vs-banner-vs-nothing decision can't
+    // drift between the effect and the render below.
+    const forceWizard =
+      new URLSearchParams(window.location.search).get('onboarding') === 'true';
+    const decision = evaluateOnboardingRecovery({
+      storeLoaded,
+      onboardingComplete,
+      storeIsEmpty,
+      bannerDismissed,
+      forceWizard,
+    });
+    if (decision.showWizard) {
       setShowOnboarding(true);
     }
-  }, [storeLoaded, onboardingComplete, storeIsEmpty]);
+  }, [storeLoaded, onboardingComplete, storeIsEmpty, bannerDismissed]);
 
   const handleOnboardingComplete = useCallback(() => {
     setShowOnboarding(false);
@@ -619,12 +626,17 @@ export default function HomePage() {
     return <OnboardingWizard onComplete={handleOnboardingComplete} />;
   }
 
-  // #1606 GAP-4 — show the resume banner when setup was started but never finished
-  // (onboardingComplete still false) AND the workspace already has data (so the
-  // full-screen wizard no longer auto-fires). Reuses the same condition that used
-  // to silently strand the user. Hidden once onboarding completes or per-session.
-  const showResumeBanner =
-    storeLoaded && !onboardingComplete && !storeIsEmpty && !bannerDismissed;
+  // #1606 GAP-4 / #1607 — show the resume banner when setup was started but never
+  // finished (onboardingComplete still false) AND the workspace already has data
+  // (so the full-screen wizard no longer auto-fires). Decision is centralized in
+  // evaluateOnboardingRecovery so banner/wizard stay mutually exclusive and the
+  // first-run / partial / reset-restart flows are unit-tested (onboarding-recovery).
+  const showResumeBanner = evaluateOnboardingRecovery({
+    storeLoaded,
+    onboardingComplete,
+    storeIsEmpty,
+    bannerDismissed,
+  }).showResumeBanner;
 
   // #1604 — First-run / empty workspace: once onboarding is dismissed but no
   // projects exist yet, show a single clear "create your first project" surface
