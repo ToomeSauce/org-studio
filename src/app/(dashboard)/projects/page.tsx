@@ -439,8 +439,21 @@ function ProjectsContent() {
 
         {/* No Projects Message */}
         {blockedProjects.length === 0 && activeProjects.length === 0 && inactiveProjects.length === 0 && archivedProjects.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-12">
-            <p className="text-[var(--text-muted)] text-lg">No projects yet</p>
+          <div className="flex flex-col items-center justify-center text-center py-16 px-6">
+            <div className="inline-flex items-center justify-center w-12 h-12 rounded-[var(--radius-md)] bg-[var(--accent-primary)]/10 mb-4">
+              <Plus size={24} className="text-[var(--accent-primary)]" />
+            </div>
+            <p className="text-[var(--text-primary)] text-lg font-semibold mb-1">No projects yet</p>
+            <p className="text-[var(--text-muted)] text-sm max-w-md mb-5">
+              A project is where your team works — give it a vision and your agents
+              propose a roadmap and ship against it. Create your first one to get started.
+            </p>
+            <button
+              onClick={() => setShowNewProjectModal(true)}
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold bg-[var(--accent-primary)] text-white hover:bg-[var(--accent-hover)] transition-colors"
+            >
+              <Plus size={16} /> New Project
+            </button>
           </div>
         )}
 

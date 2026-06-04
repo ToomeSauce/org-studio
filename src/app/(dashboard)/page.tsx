@@ -7,8 +7,9 @@ import { getProjectStatusLabel } from '@/lib/vision-status';
 import { SuggestedFeedbackSection } from '@/components/SuggestedFeedbackSection';
 import { clsx } from 'clsx';
 import { useMemo, useState, useEffect, useCallback } from 'react';
-import { ArrowRight, AlertCircle } from 'lucide-react';
+import { ArrowRight, AlertCircle, FolderPlus, Compass, Users as UsersIcon } from 'lucide-react';
 import dynamic from 'next/dynamic';
+import Link from 'next/link';
 
 const OnboardingWizard = dynamic(
   () => import('@/components/OnboardingWizard').then(mod => mod.OnboardingWizard),
@@ -24,6 +25,66 @@ const OnboardingWizard = dynamic(
 // ActivityFeedSection still renders (Section 3 below) — it now shows the
 // unfiltered feed since there's no longer a click-to-filter surface on this
 // page.
+
+
+// ─── SECTION: First-Run / Empty Workspace ─────────────────────────────────────
+// #1604 — When a workspace has zero projects (typically right after onboarding),
+// the home page used to fall back to the "All clear" / "No recent activity"
+// stubs, which read as "nothing to do" at the exact moment the user needs a
+// next action. This section gives an unmistakable primary CTA to create the
+// first project + explains, in product terms, what happens next. Fully
+// reversible: rendered only while projects.length === 0 and replaced by the
+// normal sections as soon as a project exists.
+function FirstRunSection({ orgName }: { orgName?: string }) {
+  return (
+    <div className="border border-[var(--border-default)] rounded-[var(--radius-lg)] bg-[var(--bg-secondary)] p-8 sm:p-10">
+      <div className="max-w-2xl">
+        <div className="inline-flex items-center justify-center w-12 h-12 rounded-[var(--radius-md)] bg-[var(--accent-muted)] mb-5">
+          <FolderPlus size={24} className="text-[var(--accent-primary)]" />
+        </div>
+        <h2 className="text-[var(--text-2xl)] font-bold text-[var(--text-primary)] mb-2 tracking-tight">
+          {orgName ? `${orgName} is set up — now create your first project` : 'Create your first project'}
+        </h2>
+        <p className="text-[var(--text-md)] text-[var(--text-secondary)] leading-relaxed mb-6">
+          A project is where your team does its work. Give it a vision — a North Star,
+          boundaries, and the outcomes that matter — and your agents will propose a
+          roadmap, then ship against it autonomously while you review and approve.
+        </p>
+
+        <Link
+          href="/projects?new=true"
+          className="inline-flex items-center gap-2 px-6 py-3 rounded-[var(--radius-md)] text-[var(--text-base)] font-semibold transition-all bg-[var(--accent-primary)] text-white hover:bg-[var(--accent-hover)] shadow-[var(--shadow-glow)]"
+        >
+          <FolderPlus size={17} /> Create your first project
+        </Link>
+
+        <div className="mt-8 pt-6 border-t border-[var(--border-default)] grid gap-4 sm:grid-cols-3">
+          <div className="flex gap-3">
+            <Compass size={18} className="text-[var(--accent-primary)] shrink-0 mt-0.5" />
+            <div>
+              <p className="text-[var(--text-sm)] font-semibold text-[var(--text-primary)]">1. Set a vision</p>
+              <p className="text-[var(--text-xs)] text-[var(--text-tertiary)] mt-0.5">North Star, boundaries, and target outcomes.</p>
+            </div>
+          </div>
+          <div className="flex gap-3">
+            <UsersIcon size={18} className="text-[var(--accent-2)] shrink-0 mt-0.5" />
+            <div>
+              <p className="text-[var(--text-sm)] font-semibold text-[var(--text-primary)]">2. Assign ownership</p>
+              <p className="text-[var(--text-xs)] text-[var(--text-tertiary)] mt-0.5">Pick who owns the vision and the build on the <Link href="/team" className="text-[var(--accent-primary)] hover:underline">Team page</Link>.</p>
+            </div>
+          </div>
+          <div className="flex gap-3">
+            <ArrowRight size={18} className="text-[var(--success)] shrink-0 mt-0.5" />
+            <div>
+              <p className="text-[var(--text-sm)] font-semibold text-[var(--text-primary)]">3. Approve &amp; ship</p>
+              <p className="text-[var(--text-xs)] text-[var(--text-tertiary)] mt-0.5">Agents propose a roadmap; you review, approve, iterate.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 
 // ─── SECTION: Activity Feed ───────────────────────────────────────────────────
@@ -485,6 +546,20 @@ export default function HomePage() {
 
   if (showOnboarding) {
     return <OnboardingWizard onComplete={handleOnboardingComplete} />;
+  }
+
+  // #1604 — First-run / empty workspace: once onboarding is dismissed but no
+  // projects exist yet, show a single clear "create your first project" surface
+  // instead of the "All clear"/"No recent activity" stubs, which mislead on an
+  // empty workspace. Reverts to the normal dashboard automatically once the
+  // first project is created.
+  const hasProjects = projects.length > 0;
+  if (storeLoaded && !hasProjects) {
+    return (
+      <div className="space-y-8">
+        <FirstRunSection orgName={storeData?.settings?.orgName} />
+      </div>
+    );
   }
 
   return (
