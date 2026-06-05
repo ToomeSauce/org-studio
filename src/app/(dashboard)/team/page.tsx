@@ -355,6 +355,12 @@ export default function TeamPage() {
   const syncAgents = useCallback(async () => {
     setSyncing(true);
     try {
+      // #1623: scaffolding is an authenticated MUTATION (POST), no longer a
+      // hidden side-effect of the GET. POST persists any newly-discovered
+      // agents into teammates/loops; the GET below is then a pure read.
+      try {
+        await fetch('/api/runtimes', { method: 'POST' });
+      } catch { /* best-effort; the read below still renders current agents */ }
       const resp = await fetch('/api/runtimes');
       const data = await resp.json();
       if (data.runtimes) {

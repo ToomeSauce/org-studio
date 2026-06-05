@@ -1,15 +1,27 @@
-// no-auth: public ping (#1386 audit)
 /**
  * POST /api/ping — Send a message to any agent, routed through the runtime registry.
- * 
+ *
  * Works for OpenClaw agents (via WebSocket RPC) and Hermes agents (via HTTP API).
  * Used by the Ping panel in the top nav.
+ *
+ * #1623 / #1610 F-P1: this endpoint is NOT public in cloud mode. We reuse the
+ * same conditional read-style gate as the other launch-hardening fixes: when
+ * DATABASE_URL is configured (hosted/cloud), require real auth; localhost/file
+ * mode without auth configured stays open for OSS/dev ergonomics.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { sendToAgent } from '@/lib/runtimes/registry';
 import { rpc } from '@/lib/gateway-rpc';
+import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
+import { isCloudMode } from '@/lib/read-gate';
 
 export async function POST(request: NextRequest) {
+  if (isCloudMode()) {
+    const auth = await authenticateRequestWithContext(request);
+    if (auth.error) return auth.error;
+    const denied = requireWriteScope(auth.context);
+    if (denied) return denied;
+  }
   try {
     const { agentId, message, sessionKey } = await request.json();
     if (!agentId || !message) {
