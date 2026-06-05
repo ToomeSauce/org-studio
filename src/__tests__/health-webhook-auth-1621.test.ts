@@ -55,7 +55,7 @@ describe('#1621 health webhook auth', () => {
     const json = await res.json();
 
     expect(res.status).toBe(401);
-    expect(json.error).toBe('Unauthorized webhook request');
+    expect(json.error).toBe('Unauthorized: invalid or missing webhook signature');
   });
 
   test('accepts valid HMAC signature header', async () => {
@@ -95,6 +95,6 @@ describe('#1621 health webhook auth', () => {
     const json = await res.json();
 
     expect(res.status).toBe(401);
-    expect(json.error).toBe('Unauthorized webhook request');
+    expect(json.error).toBe('Unauthorized: invalid or missing webhook signature');
   });
 });

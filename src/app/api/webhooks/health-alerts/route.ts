@@ -1,12 +1,17 @@
-// webhook-auth: requires HMAC/shared-secret headers, not Bearer auth (#1621)
+// webhook-auth: requires HMAC/shared-secret headers when a secret is configured,
+// else open (OSS/dev parity). NOT Bearer. Verifier shared with server.mjs. (#1621, F-P2)
 /**
  * /api/webhooks/health-alerts — Health alert webhook (v0.16)
  *
- * Auth:
- * - Configure TELEGRAM_HEALTH_ALERTS_WEBHOOK_SECRET (or HEALTH_ALERTS_WEBHOOK_SECRET).
- * - Send either:
- *   1) x-health-signature: sha256=<hex hmac of raw body>
- *   2) x-health-secret: <shared secret>
+ * Auth (#1621 / audit F-P2):
+ * - Configure TELEGRAM_HEALTH_ALERTS_WEBHOOK_SECRET (alias: HEALTH_ALERTS_WEBHOOK_SECRET).
+ * - When set, a sender must send either:
+ *   1) X-Signature: sha256=<hex hmac-sha256 of raw body>   (x-health-signature also accepted)
+ *   2) X-Webhook-Secret: <shared secret>                   (x-health-secret also accepted)
+ *   Unsigned/incorrectly-signed → 401. When unset, the endpoint stays open (dev/OSS parity).
+ * - Verification lives in lib/webhook-auth.mjs and is SHARED with the live
+ *   server.mjs handler (which intercepts this path before Next routing), so both
+ *   enforce identically. This route is the defense-in-depth fallback.
  *
  * Accepts health alert payloads and optionally forwards to:
  * 1. External webhook (TELEGRAM_HEALTH_ALERTS_WEBHOOK_URL)
@@ -16,91 +21,39 @@
  *
  * POST body: { agentId, metric, value, threshold, status }
  */
-import { createHmac, timingSafeEqual } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
+// Canonical webhook verifier shared with server.mjs (one source, no twin drift).
+import { verifyWebhookSignature, resolveWebhookSecret } from '../../../../../lib/webhook-auth.mjs';
 
 const HEALTH_BOT_TOKEN = process.env.TELEGRAM_HEALTH_BOT_TOKEN || '';
 const HEALTH_CHAT_ID = process.env.TELEGRAM_HEALTH_CHAT_ID || '';
 const HEALTH_WEBHOOK_URL = process.env.TELEGRAM_HEALTH_ALERTS_WEBHOOK_URL || '';
-const HEALTH_WEBHOOK_AUTH_SECRET =
-  process.env.TELEGRAM_HEALTH_ALERTS_WEBHOOK_SECRET ||
-  process.env.HEALTH_ALERTS_WEBHOOK_SECRET ||
-  '';
 const PUBLIC_URL = process.env.ORG_STUDIO_PUBLIC_URL || 'http://localhost:4501';
-
-const SIGNATURE_HEADERS = ['x-health-signature', 'x-health-alerts-signature'];
-const SHARED_SECRET_HEADERS = ['x-health-secret', 'x-health-alerts-secret'];
 
 // Rate limiter: max 1 alert per 10 minutes per metric+agent key
 const RATE_LIMIT_MS = 10 * 60 * 1000;
 const lastFired = new Map<string, number>();
 
-type ActivityFeedEntry = {
-  type: 'health-alert';
-  emoji: string;
-  agent: string;
-  message: string;
-};
-
-type ActivityFeedApi = {
-  add?: (entry: ActivityFeedEntry) => void;
-};
-
-function errorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
-}
-
-function readFirstHeader(req: NextRequest, headerNames: string[]): string {
-  for (const headerName of headerNames) {
-    const value = req.headers.get(headerName);
-    if (value?.trim()) return value.trim();
-  }
-  return '';
-}
-
-function safeCompare(value: string, expected: string): boolean {
-  const valueBytes = Buffer.from(value);
-  const expectedBytes = Buffer.from(expected);
-  if (valueBytes.length !== expectedBytes.length) return false;
-  return timingSafeEqual(valueBytes, expectedBytes);
-}
-
-function isAuthorizedWebhookRequest(req: NextRequest, rawBody: string): boolean {
-  const sharedSecret = readFirstHeader(req, SHARED_SECRET_HEADERS);
-  if (sharedSecret && safeCompare(sharedSecret, HEALTH_WEBHOOK_AUTH_SECRET)) {
-    return true;
-  }
-
-  const signatureRaw = readFirstHeader(req, SIGNATURE_HEADERS);
-  if (!signatureRaw) return false;
-
-  const providedSignature = signatureRaw.replace(/^sha256=/i, '').trim().toLowerCase();
-  const expectedSignature = createHmac('sha256', HEALTH_WEBHOOK_AUTH_SECRET)
-    .update(rawBody)
-    .digest('hex');
-
-  return safeCompare(providedSignature, expectedSignature);
-}
-
 export async function POST(req: NextRequest) {
   try {
-    if (!HEALTH_WEBHOOK_AUTH_SECRET) {
-      console.error(
-        '[HealthWebhook] Missing TELEGRAM_HEALTH_ALERTS_WEBHOOK_SECRET/HEALTH_ALERTS_WEBHOOK_SECRET'
-      );
-      return NextResponse.json(
-        { error: 'Webhook authentication is not configured' },
-        { status: 503 }
-      );
-    }
-
+    // Read the RAW body first — HMAC must be computed over exact bytes.
     const rawBody = await req.text();
-    if (!isAuthorizedWebhookRequest(req, rawBody)) {
-      return NextResponse.json({ error: 'Unauthorized webhook request' }, { status: 401 });
+    // #1621 (F-P2): verify shared-secret/HMAC signature before processing.
+    // Open only when no secret is configured (OSS/dev parity); when configured,
+    // unsigned/incorrectly-signed POSTs are rejected 401.
+    const sig = verifyWebhookSignature(
+      rawBody,
+      (name: string) => req.headers.get(name),
+      resolveWebhookSecret(),
+    );
+    if (!sig.ok) {
+      return NextResponse.json(
+        { error: 'Unauthorized: invalid or missing webhook signature' },
+        { status: 401 },
+      );
     }
 
-    const body = JSON.parse(rawBody);
+    const body = rawBody ? JSON.parse(rawBody) : {};
     const { agentId, metric, value, threshold, status } = body;
 
     if (!agentId || !metric) {
@@ -142,8 +95,8 @@ export async function POST(req: NextRequest) {
         if (!resp.ok) {
           console.error(`[HealthWebhook] Forward failed (${resp.status})`);
         }
-      } catch (err: unknown) {
-        console.error('[HealthWebhook] Forward error:', errorMessage(err));
+      } catch (err: any) {
+        console.error('[HealthWebhook] Forward error:', err.message);
       }
     }
 
@@ -168,14 +121,13 @@ export async function POST(req: NextRequest) {
           const errBody = await resp.text();
           console.error('[HealthWebhook] Telegram send failed:', errBody);
         }
-      } catch (err: unknown) {
-        console.error('[HealthWebhook] Telegram error:', errorMessage(err));
+      } catch (err: any) {
+        console.error('[HealthWebhook] Telegram error:', err.message);
       }
     }
 
     // 3. Add to activity feed
-    const feedApi = (globalThis as { __orgStudioActivityFeed?: ActivityFeedApi })
-      .__orgStudioActivityFeed;
+    const feedApi = (globalThis as any).__orgStudioActivityFeed;
     if (feedApi?.add) {
       feedApi.add({
         type: 'health-alert',
@@ -190,20 +142,22 @@ export async function POST(req: NextRequest) {
       telegramSent,
       webhookForwarded,
     });
-  } catch (err: unknown) {
-    console.error('[HealthWebhook] Error:', errorMessage(err));
+  } catch (err: any) {
+    console.error('[HealthWebhook] Error:', err.message);
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
   }
 }
 
 export async function GET() {
+  const secretConfigured = !!resolveWebhookSecret();
   return NextResponse.json({
     endpoint: '/api/webhooks/health-alerts',
     method: 'POST',
     body: '{ agentId, metric, value, threshold, status }',
-    authRequired: true,
-    authMode: 'x-health-signature (HMAC-SHA256) or x-health-secret (shared secret)',
-    authConfigured: !!HEALTH_WEBHOOK_AUTH_SECRET,
+    auth: secretConfigured
+      ? 'required: X-Signature: sha256=<hmac-sha256(body, secret)>  OR  X-Webhook-Secret: <secret>'
+      : 'open (no webhook secret configured)',
+    authConfigured: secretConfigured,
     telegramHealthEnabled: !!(HEALTH_BOT_TOKEN && HEALTH_CHAT_ID),
     webhookUrlConfigured: !!HEALTH_WEBHOOK_URL,
   });
