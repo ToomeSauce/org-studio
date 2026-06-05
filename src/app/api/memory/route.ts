@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
+import { sensitiveReadGate } from '@/lib/read-gate';
 
 // Memory directory — configure via MEMORY_DIR env var, or falls back to ~/.openclaw/workspace
 const WORKSPACE = process.env.MEMORY_DIR || (process.env.HOME ? path.join(process.env.HOME, '.openclaw/workspace') : '/tmp');
@@ -8,6 +9,11 @@ const MEMORY_DIR = WORKSPACE.endsWith('/memory') ? WORKSPACE : path.join(WORKSPA
 const MEMORY_MD = path.join(path.dirname(MEMORY_DIR), 'MEMORY.md');
 
 export async function GET(request: NextRequest) {
+  // #1624 F-P4: memory content is credential-adjacent — gate unconditionally
+  // (ignores ALLOW_ANONYMOUS_READS) whenever a datastore is configured.
+  const denied = await sensitiveReadGate(request);
+  if (denied) return denied;
+
   const { searchParams } = new URL(request.url);
   const action = searchParams.get('action') || 'list';
   const file = searchParams.get('file');

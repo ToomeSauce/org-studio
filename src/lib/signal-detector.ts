@@ -7,6 +7,7 @@
 
 import { Task, Project } from './store';
 import crypto from 'crypto';
+import { internalAuthHeaders } from './read-gate';
 
 const STATUS_ORDER: Record<string, number> = {
   backlog: 0,
@@ -470,7 +471,7 @@ function detectHighVolumeDay(tasks: Task[], agentName: string): DetectedSignal |
 async function detectThroughputLeader(agentName: string): Promise<DetectedSignal | null> {
   try {
     const response = await fetch('http://localhost:4501/api/metrics/team', {
-      headers: { 'X-Internal-Request': 'true' },
+      headers: internalAuthHeaders(), // #1624: authenticate internal call to gated metrics
     });
     if (!response.ok) return null;
     const data = await response.json();

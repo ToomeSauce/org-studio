@@ -1,4 +1,5 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import { cloudReadGate, internalAuthHeaders } from '@/lib/read-gate';
 
 interface TeamMetric {
   agentId: string;
@@ -28,8 +29,10 @@ interface DailyMetric {
  * GET /api/metrics/agent-comparison
  * Returns team metrics with sparklines for each agent.
  */
-export async function GET() {
-  const headers = { 'X-Internal-Request': 'true' };
+export async function GET(req: NextRequest) {
+  const denied = await cloudReadGate(req); // #1624 F-P5
+  if (denied) return denied;
+  const headers = internalAuthHeaders();
 
   // 1. Fetch team aggregates
   let teamMetrics: TeamMetric[] = [];

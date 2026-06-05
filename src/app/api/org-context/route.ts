@@ -11,6 +11,7 @@
  * This is the generic REST API that any agent framework can poll.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { cloudReadGate, internalAuthHeaders } from '@/lib/read-gate';
 import { generateOrgMd, computeOrgMdMeta, AgentPerformance, TeamPerformance } from '@/lib/org-generator';
 import { generatePrinciples } from '@/lib/principles-generator';
 import { getStoreProvider } from '@/lib/store-provider';
@@ -25,7 +26,7 @@ async function readStore(workspaceId: string) {
   }
 }
 
-const INTERNAL_HEADERS = { 'X-Internal-Request': 'true' };
+const INTERNAL_HEADERS = internalAuthHeaders();
 const BASE_URL = 'http://localhost:4501';
 
 async function fetchMetrics(agentId?: string): Promise<{
@@ -99,6 +100,8 @@ async function fetchMetrics(agentId?: string): Promise<{
 }
 
 export async function GET(request: NextRequest) {
+  const denied = await cloudReadGate(request); // #1624 F-P5
+  if (denied) return denied;
   const workspaceId = await resolveWorkspaceIdForRequest(request);
   const store = await readStore(workspaceId);
   if (!store) {

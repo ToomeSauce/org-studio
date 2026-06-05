@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
+import { cloudReadGate } from '@/lib/read-gate';
 import { generateWeeklyDigest, formatDigestMarkdown } from '@/lib/weekly-digest';
 import { isTelegramCommsEnabled } from '@/lib/telegram-guard';
 
@@ -7,7 +8,9 @@ import { isTelegramCommsEnabled } from '@/lib/telegram-guard';
  * GET /api/metrics/weekly-digest
  * Returns { digest: WeeklyDigest, markdown: string }
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const denied = await cloudReadGate(req); // #1624 F-P5
+  if (denied) return denied;
   try {
     const digest = await generateWeeklyDigest();
     const markdown = formatDigestMarkdown(digest);

@@ -22,14 +22,17 @@
  * Read-only. No auth (matches /api/health/roadmap).
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { cloudReadGate } from '@/lib/read-gate';
 import { inspectRoadmapDrift } from '@/lib/roadmap-sync';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ projectId: string }> },
 ) {
+  const denied = await cloudReadGate(req); // #1624 F-P5
+  if (denied) return denied;
   const { projectId } = await params;
 
   if (!process.env.DATABASE_URL) {
