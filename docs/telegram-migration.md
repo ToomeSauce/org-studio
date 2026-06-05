@@ -42,6 +42,7 @@ Set `ENABLE_TELEGRAM_COMMS=true` in your `.env` and restart the server. This is 
 | `TELEGRAM_HEALTH_BOT_TOKEN` | — | Dedicated bot token for health alerts |
 | `TELEGRAM_HEALTH_CHAT_ID` | — | Chat ID for health alerts |
 | `TELEGRAM_HEALTH_ALERTS_WEBHOOK_URL` | — | External webhook URL to forward health alerts (e.g., Slack, PagerDuty) |
+| `HEALTH_ALERTS_WEBHOOK_SECRET` | — | Shared secret used to authenticate **inbound** POSTs to `/api/webhooks/health-alerts`. When unset the endpoint is open (OSS/dev); when set, requests must carry a valid signature (see Authentication below). **Set this in any internet-exposed deployment.** |
 
 ## Health Alerts Webhook
 
@@ -49,6 +50,26 @@ Set `ENABLE_TELEGRAM_COMMS=true` in your `.env` and restart the server. This is 
 
 ```
 POST /api/webhooks/health-alerts
+```
+
+### Authentication
+
+Inbound POSTs are authenticated with a shared secret when `HEALTH_ALERTS_WEBHOOK_SECRET` is configured (required for any internet-exposed deployment). Senders must include **one** of:
+
+- `X-Signature: sha256=<hex>` — where `<hex>` is the lowercase hex HMAC-SHA256 of the **exact raw request body**, keyed by the secret (GitHub-webhook style). Preferred.
+- `X-Webhook-Secret: <secret>` — the shared secret presented directly (constant-time compared). Simpler for senders that can't HMAC.
+
+Unsigned or incorrectly-signed requests receive `401`. When `HEALTH_ALERTS_WEBHOOK_SECRET` is **not** set, the endpoint stays open (local/OSS parity).
+
+Example (HMAC, bash):
+
+```bash
+BODY='{"agentId":"mikey","metric":"error_rate","value":15.2,"threshold":10.0,"status":"warning"}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$HEALTH_ALERTS_WEBHOOK_SECRET" | sed 's/^.* //')
+curl -sS -X POST "$ORG_STUDIO_PUBLIC_URL/api/webhooks/health-alerts" \
+  -H 'Content-Type: application/json' \
+  -H "X-Signature: sha256=$SIG" \
+  --data "$BODY"
 ```
 
 ### Request Body

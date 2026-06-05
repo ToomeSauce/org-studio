@@ -1,6 +1,17 @@
-// no-auth: external webhook, verified via signature not Bearer (#1386 audit)
+// webhook-auth: requires HMAC/shared-secret headers when a secret is configured,
+// else open (OSS/dev parity). NOT Bearer. Verifier shared with server.mjs. (#1621, F-P2)
 /**
- * /api/webhooks/health-alerts — Health alert webhook (v0.15)
+ * /api/webhooks/health-alerts — Health alert webhook (v0.16)
+ *
+ * Auth (#1621 / audit F-P2):
+ * - Configure TELEGRAM_HEALTH_ALERTS_WEBHOOK_SECRET (alias: HEALTH_ALERTS_WEBHOOK_SECRET).
+ * - When set, a sender must send either:
+ *   1) X-Signature: sha256=<hex hmac-sha256 of raw body>   (x-health-signature also accepted)
+ *   2) X-Webhook-Secret: <shared secret>                   (x-health-secret also accepted)
+ *   Unsigned/incorrectly-signed → 401. When unset, the endpoint stays open (dev/OSS parity).
+ * - Verification lives in lib/webhook-auth.mjs and is SHARED with the live
+ *   server.mjs handler (which intercepts this path before Next routing), so both
+ *   enforce identically. This route is the defense-in-depth fallback.
  *
  * Accepts health alert payloads and optionally forwards to:
  * 1. External webhook (TELEGRAM_HEALTH_ALERTS_WEBHOOK_URL)
@@ -11,6 +22,8 @@
  * POST body: { agentId, metric, value, threshold, status }
  */
 import { NextRequest, NextResponse } from 'next/server';
+// Canonical webhook verifier shared with server.mjs (one source, no twin drift).
+import { verifyWebhookSignature, resolveWebhookSecret } from '../../../../../lib/webhook-auth.mjs';
 
 const HEALTH_BOT_TOKEN = process.env.TELEGRAM_HEALTH_BOT_TOKEN || '';
 const HEALTH_CHAT_ID = process.env.TELEGRAM_HEALTH_CHAT_ID || '';
@@ -23,7 +36,24 @@ const lastFired = new Map<string, number>();
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
+    // Read the RAW body first — HMAC must be computed over exact bytes.
+    const rawBody = await req.text();
+    // #1621 (F-P2): verify shared-secret/HMAC signature before processing.
+    // Open only when no secret is configured (OSS/dev parity); when configured,
+    // unsigned/incorrectly-signed POSTs are rejected 401.
+    const sig = verifyWebhookSignature(
+      rawBody,
+      (name: string) => req.headers.get(name),
+      resolveWebhookSecret(),
+    );
+    if (!sig.ok) {
+      return NextResponse.json(
+        { error: 'Unauthorized: invalid or missing webhook signature' },
+        { status: 401 },
+      );
+    }
+
+    const body = rawBody ? JSON.parse(rawBody) : {};
     const { agentId, metric, value, threshold, status } = body;
 
     if (!agentId || !metric) {
@@ -119,10 +149,15 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET() {
+  const secretConfigured = !!resolveWebhookSecret();
   return NextResponse.json({
     endpoint: '/api/webhooks/health-alerts',
     method: 'POST',
     body: '{ agentId, metric, value, threshold, status }',
+    auth: secretConfigured
+      ? 'required: X-Signature: sha256=<hmac-sha256(body, secret)>  OR  X-Webhook-Secret: <secret>'
+      : 'open (no webhook secret configured)',
+    authConfigured: secretConfigured,
     telegramHealthEnabled: !!(HEALTH_BOT_TOKEN && HEALTH_CHAT_ID),
     webhookUrlConfigured: !!HEALTH_WEBHOOK_URL,
   });

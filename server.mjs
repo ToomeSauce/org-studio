@@ -28,6 +28,7 @@ import { ensureHeartbeatSchema, startLoopWatchdog, logIncident } from './lib/hea
 import { ensureOutboxSchema, startOutboxWorker } from './lib/outbox.mjs';
 import { ensureSkillInstallsSchema, runDriftCheck } from './lib/skill-installs.mjs';
 import { initHealthAlerts, sendHealthAlert, isHealthAlertsEnabled } from './lib/health-alerts.mjs';
+import { verifyWebhookSignature, resolveWebhookSecret } from './lib/webhook-auth.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const port = parseInt(process.env.PORT || '4501');
@@ -161,6 +162,19 @@ const server = createServer((req, res) => {
     req.on('data', chunk => body += chunk);
     req.on('end', async () => {
       try {
+        // #1621 (F-P2): verify shared-secret/HMAC signature before processing.
+        // Open only when HEALTH_ALERTS_WEBHOOK_SECRET is unset (OSS/dev parity);
+        // when configured, unsigned/incorrectly-signed POSTs are rejected 401.
+        const sig = verifyWebhookSignature(
+          body,
+          (name) => req.headers[name.toLowerCase()],
+          resolveWebhookSecret(),
+        );
+        if (!sig.ok) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized: invalid or missing webhook signature' }));
+          return;
+        }
         const data = JSON.parse(body);
         const { agentId, metric, value, threshold, status } = data;
         if (!agentId || !metric) {
