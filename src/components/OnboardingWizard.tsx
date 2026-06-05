@@ -97,6 +97,12 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   const pollRuntimes = async () => {
     setGatewayLoading(true);
     try {
+      // #1623: first-run agent bootstrap. Scaffolding is now an authenticated
+      // POST mutation (persists newly-discovered agents into teammates/loops),
+      // not a side-effect of the GET. Best-effort, then read the list.
+      try {
+        await fetch('/api/runtimes', { method: 'POST' });
+      } catch { /* best-effort; the read below still renders detected agents */ }
       const response = await fetch('/api/runtimes');
       const data = await response.json();
       if (data.runtimes) {

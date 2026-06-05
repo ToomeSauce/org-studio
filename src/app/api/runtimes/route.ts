@@ -1,19 +1,25 @@
 /**
- * GET /api/runtimes — Discover all configured runtimes with health + agents
- * 
+ * GET /api/runtimes — Discover all configured runtimes with health + agents (READ-ONLY)
+ * POST /api/runtimes — Discover + scaffold new agents into teammates/loops (AUTHENTICATED)
+ *
  * Returns only runtimes that are actually configured (based on env vars
  * and local detection). A fresh install with no runtimes returns an empty array.
- * 
- * Also auto-scaffolds newly discovered agents into the teammate store
- * so they appear on all pages (Home, Team, etc.) in both file and Postgres mode.
+ *
+ * Historically the GET also auto-scaffolded newly discovered agents into the
+ * teammate/loop store and auto-cleared loopDisabledAt on re-discovery. #1623
+ * removes those mutations from the GET path entirely (F-P3): state-changing GETs
+ * are wrong regardless of auth and were CSRF-able when unauthenticated. The
+ * scaffolding now lives in scaffoldDiscoveredAgents() and runs only from the
+ * authenticated POST below (gated by the same cloud read-gate as /api/ping).
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getRuntimeRegistry } from '@/lib/runtimes/registry';
 import { getStoreProvider } from '@/lib/store-provider';
 import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
 import { auditRuntimeMetadata, logMismatches } from '@/lib/runtimes/audit';
-
-const DEFAULT_AGENT_COLORS = ['cyan', 'emerald', 'purple', 'blue', 'pink', 'orange'];
+import { scaffoldDiscoveredAgents } from '@/lib/runtimes/scaffold';
+import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
+import { isCloudMode } from '@/lib/read-gate';
 
 export async function GET(request: NextRequest) {
   try {
@@ -26,99 +32,9 @@ export async function GET(request: NextRequest) {
     // Get health status for each runtime
     const health = await registry.healthAll();
 
-    // Auto-scaffold: persist any newly discovered agents into the store
-    try {
-      const store = await getStoreProvider(workspaceId).read();
-      const teammates = store?.settings?.teammates || [];
-      const existingAgentIds = new Set(
-        teammates.filter((t: any) => t.agentId).map((t: any) => t.agentId)
-      );
-
-      const newAgents = allAgents.filter(a => !existingAgentIds.has(a.id));
-      if (newAgents.length > 0) {
-        let colorIdx = teammates.filter((t: any) => !t.isHuman).length;
-        const updatedTeammates = [...teammates];
-        const loops = store?.settings?.loops || [];
-        const updatedLoops = [...loops];
-        let loopsCreated = 0;
-
-        for (const agent of newAgents) {
-          const color = DEFAULT_AGENT_COLORS[colorIdx % DEFAULT_AGENT_COLORS.length];
-          colorIdx++;
-          updatedTeammates.push({
-            id: agent.id,
-            agentId: agent.id,
-            name: agent.name || agent.id,
-            emoji: agent.emoji || '🤖',
-            title: 'Agent',
-            domain: '',
-            description: '',
-            color,
-            isHuman: false,
-          });
-
-          // Auto-create scheduler loop (mirrors addTeammate logic)
-          if (!updatedLoops.some((l: any) => l.agentId === agent.id)) {
-            const maxOffset = updatedLoops.reduce((max: number, l: any) => Math.max(max, l.startOffsetMinutes || 0), 0);
-            updatedLoops.push({
-              id: 'loop-' + Math.random().toString(36).slice(2, 10),
-              steps: [
-                { id: 'step-org', type: 'read-org', enabled: true, description: 'Read ORG.md — refresh mission, values, domain boundaries' },
-                { id: 'step-sync', type: 'sync-tasks', enabled: true, description: 'Sync tasks — check Context Board for assigned work' },
-                { id: 'step-work', type: 'work-next', enabled: true, description: 'Work next — progress highest priority in-progress task, or pull from backlog' },
-                { id: 'step-report', type: 'report', enabled: true, description: 'Report — update task status, move completed to Done, set activity status' },
-              ],
-              agentId: agent.id,
-              enabled: true,
-              cronJobId: null,
-              intervalMinutes: 30,
-              startOffsetMinutes: maxOffset + 5,
-            });
-            loopsCreated++;
-          }
-        }
-
-        await getStoreProvider(workspaceId).updateSettings({ teammates: updatedTeammates, loops: updatedLoops });
-        console.log(`[Runtimes] Auto-scaffolded ${newAgents.length} new agent(s): ${newAgents.map(a => a.id).join(', ')}${loopsCreated ? ` (${loopsCreated} loop(s) created)` : ''}`);
-      }
-
-      // #1352 slice 4 — Auto-clear loopDisabledAt on agent re-discovery.
-      // The escalation ladder's Level-3 punishment is meant to be reversible:
-      // the doneWhen text says 'Level-3 loop-disable reversible by human OR
-      // agent on next start (flag, not kill)'. When a previously-disabled
-      // agent re-appears in registry.discoverAll() (e.g. after a process
-      // restart or reconnect), interpret that as 'agent is back, give it
-      // another chance'. Clear loopDisabledAt + loopDisableReason and reset
-      // staleClaimCount to 0 so the ladder starts fresh.
-      //
-      // Subtle: we re-fetch teammates from the store rather than reusing the
-      // updatedTeammates closure variable, because the auto-scaffold block
-      // above just persisted it. Using the closure would re-apply the wipe
-      // even after another writer touched teammates between calls. One extra
-      // read is cheap.
-      try {
-        const discoveredIds = new Set(allAgents.map(a => a.id.toLowerCase()));
-        const freshStore = await getStoreProvider(workspaceId).read();
-        const freshTeammates = freshStore?.settings?.teammates || [];
-        let clearedCount = 0;
-        const cleared = freshTeammates.map((tm: any) => {
-          if (!tm.loopDisabledAt) return tm;
-          if (!discoveredIds.has((tm.agentId || '').toLowerCase())) return tm;
-          clearedCount++;
-          const { loopDisabledAt, loopDisableReason, staleClaimCount, staleClaimCountedAt, ...rest } = tm;
-          return rest;
-        });
-        if (clearedCount > 0) {
-          await getStoreProvider(workspaceId).updateSettings({ teammates: cleared });
-          console.log(`[Runtimes #1352] Auto-cleared loopDisabledAt on ${clearedCount} re-discovered agent(s)`);
-        }
-      } catch (clearErr) {
-        console.warn('[Runtimes #1352] Auto-clear loopDisabledAt failed:', (clearErr as any)?.message);
-      }
-    } catch (scaffoldErr) {
-      // Best-effort — don't fail the response if scaffolding fails
-      console.warn('[Runtimes] Auto-scaffold failed:', (scaffoldErr as any)?.message);
-    }
+    // #1623 / #1610 F-P3: intentionally NO store writes on GET.
+    // Discovery is now read-only; teammate/loop bootstrap and loop re-enable
+    // must happen through explicit authenticated mutations elsewhere.
 
     // Build response dynamically from whatever runtimes are registered
     const runtimes = Object.entries(health).map(([id, status]) => ({
@@ -153,6 +69,35 @@ export async function GET(request: NextRequest) {
     }
 
     return NextResponse.json({ runtimes, runtime_metadata_mismatches });
+  } catch (e: any) {
+    const msg = typeof e === 'string' ? e : e?.message || 'Unknown error';
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
+}
+
+/**
+ * POST /api/runtimes — discover runtimes AND scaffold newly-found agents into
+ * the teammate/loop store (the side-effects formerly hidden in GET, #1623/F-P3).
+ *
+ * Auth: same conditional cloud gate as POST /api/ping. When DATABASE_URL is
+ * configured (hosted/cloud) a real authenticated session/key with write scope
+ * is required; localhost/file mode without auth configured stays open for
+ * OSS/dev ergonomics. The UI agent panels call this (best-effort) so new-agent
+ * bootstrap still happens — now through an intentional, authenticated mutation.
+ */
+export async function POST(request: NextRequest) {
+  if (isCloudMode()) {
+    const auth = await authenticateRequestWithContext(request);
+    if (auth.error) return auth.error;
+    const denied = requireWriteScope(auth.context);
+    if (denied) return denied;
+  }
+  try {
+    const workspaceId = await resolveWorkspaceIdForRequest(request);
+    const registry = await getRuntimeRegistry();
+    const allAgents = await registry.discoverAll();
+    const scaffold = await scaffoldDiscoveredAgents(workspaceId, allAgents);
+    return NextResponse.json({ ok: true, scaffold });
   } catch (e: any) {
     const msg = typeof e === 'string' ? e : e?.message || 'Unknown error';
     return NextResponse.json({ error: msg }, { status: 500 });
