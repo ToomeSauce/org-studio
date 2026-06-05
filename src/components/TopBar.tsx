@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { RefreshCw, MessageCircle, Sun, Moon, Menu, User, Settings, LogOut, ChevronDown, CloudOff } from 'lucide-react';
+import { RefreshCw, MessageCircle, Sun, SunMedium, Moon, Menu, User, Settings, LogOut, ChevronDown, CloudOff } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useGateway } from '@/lib/hooks';
 import { useWSConnected, useHttpAvailable } from '@/lib/ws';
@@ -23,6 +23,15 @@ export function TopBar() {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const { theme, toggle: toggleTheme } = useTheme();
+  const themeLabels: Record<typeof theme, string> = {
+    solarized: 'Solarized Light',
+    light: 'Light',
+    dark: 'Dark',
+  };
+  const themeOrder = ['solarized', 'light', 'dark'] as const;
+  const themeLabel = themeLabels[theme];
+  const nextTheme = themeOrder[(themeOrder.indexOf(theme) + 1) % themeOrder.length];
+  const nextThemeLabel = themeLabels[nextTheme];
   const { mobileOpen, setMobileOpen } = useMobileMenu();
   const offlineQueueCount = useOfflineQueueCount();
   const userMenuRef = useRef<HTMLDivElement>(null);
@@ -101,10 +110,11 @@ export function TopBar() {
           </button>
           <button
             onClick={toggleTheme}
-            aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+            aria-label={`Theme: ${themeLabel}. Click to switch to ${nextThemeLabel}.`}
+            title={`Theme: ${themeLabel} (click for ${nextThemeLabel})`}
             className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-[var(--radius-md)] hover:bg-[var(--bg-hover)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]"
           >
-            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+            {theme === 'dark' ? <Moon size={16} /> : theme === 'light' ? <Sun size={16} /> : <SunMedium size={16} />}
           </button>
           <button
             onClick={handleRefresh}
