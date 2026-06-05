@@ -37,14 +37,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html
       lang="en"
-      className={`dark ${GeistSans.variable} ${GeistMono.variable} ${fraunces.variable} ${jetbrainsMono.variable}`}
+      className={`solarized ${GeistSans.variable} ${GeistMono.variable} ${fraunces.variable} ${jetbrainsMono.variable}`}
       suppressHydrationWarning
     >
       <body className="font-[var(--font-body)] antialiased">
         <ThemeProvider>
           <MobileMenuProvider>
             {children}
-            <ToastContainer position="bottom-right" theme="dark" autoClose={3000} />
+            <ToastContainer position="bottom-right" theme="colored" autoClose={3000} />
           </MobileMenuProvider>
         </ThemeProvider>
       </body>

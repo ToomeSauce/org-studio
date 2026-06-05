@@ -136,6 +136,73 @@ html.light {
   --force-graph-bg-dots: rgba(0, 0, 0, 0.04);
 }
 
+/* ───────────────────────────────────────────────────────────────────────
+   Solarized Light (Ethan Schoonover) — default theme.
+   Palette: https://ethanschoonover.com/solarized/
+   base3  #fdf6e3  base2 #eee8d5  base1 #93a1a1  base0 #839496
+   base00 #657b83  base01 #586e75  base02 #073642  base03 #002b36
+   yellow #b58900  orange #cb4b16  red #dc322f  magenta #d33682
+   violet #6c71c4  blue #268bd2  cyan #2aa198  green #859900
+   Blue is the canonical UI accent. Greyscale ramp runs base3 (lightest bg)
+   → base00/base01 (body/emphasis text). Comments/muted use base1.
+   ─────────────────────────────────────────────────────────────────────── */
+html.solarized {
+  --bg-primary: #fdf6e3;    /* base3  — main canvas */
+  --bg-secondary: #eee8d5;  /* base2  — panels, sidebar, cards */
+  --bg-tertiary: #e7e0cb;   /* base2 deepened — wells, inset rows */
+  --bg-hover: #e3dcc6;
+  --bg-active: #dad2b8;
+  --bg-elevated: #fdf6e3;
+
+  --border-default: #d8d0b8; /* warm rule, between base2 and base1 */
+  --border-subtle: #e4ddc8;
+  --border-strong: #93a1a1;  /* base1 */
+  --border-hover: #839496;   /* base0 */
+
+  --text-primary: #586e75;   /* base01 — emphasized body */
+  --text-secondary: #657b83; /* base00 — standard body */
+  --text-tertiary: #839496;  /* base0 */
+  --text-muted: #93a1a1;     /* base1 — comments/muted */
+
+  --accent-primary: #268bd2; /* blue — canonical Solarized UI accent */
+  --accent: #268bd2;
+  --accent-hover: #1a6fa8;
+  --accent-muted: rgba(38, 139, 210, 0.12);
+  --accent-glow: rgba(38, 139, 210, 0.20);
+  --accent-contrast: #fdf6e3;
+
+  --accent-2: #2aa198;       /* cyan */
+  --accent-2-subtle: rgba(42, 161, 152, 0.14);
+
+  --success: #859900;        /* green */
+  --success-subtle: rgba(133, 153, 0, 0.14);
+  --warning: #b58900;        /* yellow */
+  --warning-subtle: rgba(181, 137, 0, 0.14);
+  --error: #dc322f;          /* red */
+  --error-subtle: rgba(220, 50, 47, 0.12);
+  --info: #268bd2;           /* blue */
+  --info-subtle: rgba(38, 139, 210, 0.12);
+
+  --card: #eee8d5;
+  --card-highlight: rgba(0, 0, 0, 0.02);
+
+  --edge-default: rgba(88, 110, 117, 0.14);
+  --edge-mission: rgba(38, 139, 210, 0.24);
+  --edge-hover: rgba(88, 110, 117, 0.34);
+  --orbit-inner: rgba(181, 137, 0, 0.28);
+  --orbit-outer: rgba(88, 110, 117, 0.16);
+
+  --shadow-sm: 0 1px 3px rgba(88, 110, 117, 0.10);
+  --shadow-md: 0 4px 14px rgba(88, 110, 117, 0.12), 0 0 0 1px rgba(88, 110, 117, 0.05);
+  --shadow-lg: 0 12px 32px rgba(88, 110, 117, 0.16), 0 0 0 1px rgba(88, 110, 117, 0.05);
+  --shadow-glow: 0 0 30px var(--accent-glow);
+
+  /* Force graph label shadows — light parchment bg wants a light halo. */
+  --force-graph-text-shadow: 0 1px 3px rgba(253, 246, 227, 0.85);
+  --force-graph-text-shadow-strong: 0 1px 4px rgba(253, 246, 227, 0.95), 0 0 2px rgba(88, 110, 117, 0.18);
+  --force-graph-bg-dots: rgba(88, 110, 117, 0.06);
+}
+
 * {
   box-sizing: border-box;
 }
