@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
+import { sensitiveReadGate } from '@/lib/read-gate';
 
 // Doc sources — configure via DOC_SOURCES env var (JSON array) or use defaults
 const DOC_SOURCES: { dir: string; category: string; prefix: string; pattern?: RegExp; maxDepth?: number }[] = (() => {
@@ -62,6 +63,11 @@ function scanDir(baseDir: string, dir: string, category: string, prefix: string,
 }
 
 export async function GET(request: NextRequest) {
+  // #1624 F-P4: doc content is credential-adjacent — gate unconditionally
+  // (ignores ALLOW_ANONYMOUS_READS) whenever a datastore is configured.
+  const denied = await sensitiveReadGate(request);
+  if (denied) return denied;
+
   const { searchParams } = new URL(request.url);
   const action = searchParams.get('action') || 'list';
   const filePath = searchParams.get('path');

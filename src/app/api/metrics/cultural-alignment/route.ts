@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { cloudReadGate } from '@/lib/read-gate';
 import { getStoreProvider } from '@/lib/store-provider';
 import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
 
@@ -52,6 +53,8 @@ const DEFAULT_PACT_VALUES: PactValueConfig[] = [
 ];
 
 export async function GET(request: NextRequest) {
+  const denied = await cloudReadGate(request); // #1624 F-P5
+  if (denied) return denied;
   try {
     // --- Load PACT values from store ---
     const workspaceId = await resolveWorkspaceIdForRequest(request);

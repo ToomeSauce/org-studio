@@ -7,6 +7,7 @@
 const BASE_URL = 'http://localhost:4501';
 
 import { compareVersions } from './version-utils';
+import { internalAuthHeaders } from './read-gate';
 
 export interface WeeklyDigest {
   weekLabel: string;        // e.g. "Apr 7 – Apr 13, 2026"
@@ -49,7 +50,7 @@ function getWeekLabel(): string {
 
 async function fetchJSON<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, {
-    headers: { 'X-Internal-Request': 'true' },
+    headers: internalAuthHeaders(), // #1624: authenticate internal call to gated metrics
     // next.js cache bypass in server context
     cache: 'no-store',
   });

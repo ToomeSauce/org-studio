@@ -1,10 +1,13 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import { cloudReadGate } from '@/lib/read-gate';
 
 /**
  * GET /api/activity-feed
  * Returns the last 50 events from the activity feed
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const denied = await cloudReadGate(req); // #1624 F-P5
+  if (denied) return denied;
   try {
     // Get feed from global storage (set by server.mjs)
     const feedApi = (globalThis as any).__orgStudioActivityFeed;

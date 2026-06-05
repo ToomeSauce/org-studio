@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { cloudReadGate } from '@/lib/read-gate';
 import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 import { getStoreProvider } from '@/lib/store-provider';
 import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
@@ -8,6 +9,8 @@ import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
  * Query params: from, to, limit, sectionId
  */
 export async function GET(request: NextRequest, { params }: { params: Promise<{ agentId: string }> }) {
+  const denied = await cloudReadGate(request); // #1624 F-P5
+  if (denied) return denied;
   const { agentId } = await params;
   const workspaceId = await resolveWorkspaceIdForRequest(request);
   const provider = getStoreProvider(workspaceId);

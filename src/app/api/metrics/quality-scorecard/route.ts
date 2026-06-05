@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { cloudReadGate } from '@/lib/read-gate';
 import { getStoreProvider } from '@/lib/store-provider';
 import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
 
@@ -29,6 +30,8 @@ function getDoneTimestamp(statusHistory: { status: string; timestamp: number }[]
 }
 
 export async function GET(request: NextRequest) {
+  const denied = await cloudReadGate(request); // #1624 F-P5
+  if (denied) return denied;
   try {
     const workspaceId = await resolveWorkspaceIdForRequest(request);
     const provider = getStoreProvider(workspaceId);

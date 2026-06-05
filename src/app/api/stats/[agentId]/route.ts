@@ -1,6 +1,7 @@
 'use server';
 
 import { NextRequest, NextResponse } from 'next/server';
+import { cloudReadGate } from '@/lib/read-gate';
 import { getStoreProvider } from '@/lib/store-provider';
 import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
 import { join } from 'path';
@@ -76,6 +77,8 @@ export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ agentId: string }> }
 ) {
+  const denied = await cloudReadGate(req); // #1624 F-P5
+  if (denied) return denied;
   const { agentId } = await params;
   const now = Date.now();
   const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;

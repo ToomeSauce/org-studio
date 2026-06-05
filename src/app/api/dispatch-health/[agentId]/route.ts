@@ -13,6 +13,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { cloudReadGate } from '@/lib/read-gate';
 import { getDispatchHealth } from '@/lib/dispatch-attempts';
 
 export const dynamic = 'force-dynamic';
@@ -21,6 +22,8 @@ export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ agentId: string }> },
 ) {
+  const denied = await cloudReadGate(req); // #1624 F-P5
+  if (denied) return denied;
   const { agentId } = await params;
   if (!agentId || typeof agentId !== 'string') {
     return NextResponse.json({ error: 'Missing agentId' }, { status: 400 });
