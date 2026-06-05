@@ -384,6 +384,15 @@ export async function resolveWorkspaceContext(
  * Filter an array of records by workspace_id.
  * Records without workspace_id are treated as belonging to 'default-workspace'
  * (backward compat for single-workspace instances).
+ *
+ * NOTE (#1622 / F-13): this NULL→default coalesce is the documented legacy
+ * behavior, but it is also the F-13 leak surface — an unstamped row becomes
+ * visible to the default workspace. The real guarantee is the DB-level NOT NULL
+ * constraint on workspace_id (scripts/migrate-workspace-id-phase3-notnull.mjs,
+ * applied post-sign-off): once enforced, no NULL can exist so this branch is
+ * provably dead. Do NOT tighten this to treat NULL as a non-match until NOT
+ * NULL is applied everywhere — un-migrated single-workspace OSS instances still
+ * rely on the coalesce to see their (legitimately NULL) legacy rows.
  */
 export function filterByWorkspace<T extends Record<string, any>>(
   records: T[],
@@ -415,6 +424,10 @@ export function stampWorkspace<T extends Record<string, any>>(
 /**
  * Check if a specific record belongs to the given workspace.
  * Returns true if access is allowed.
+ *
+ * See filterByWorkspace re: the NULL→default coalesce (#1622 / F-13). The
+ * DB-level NOT NULL constraint is the authoritative fix; this coalesce is the
+ * legacy backward-compat path for un-migrated instances.
  */
 export function belongsToWorkspace(
   record: Record<string, any>,

@@ -196,3 +196,68 @@ The Settings page (`src/app/(dashboard)/settings/page.tsx`) includes a **Workspa
 1. **v0.16 (current)**: Workspace_id columns added, API filtering enforced, UI switcher
 2. **v0.17**: Comments table workspace_id, roadmap versions workspace_id
 3. **v1.0**: Workspace creation flow, invitations, admin roles, billing per workspace
+
+## workspace_id backfill + NOT NULL (#1622, F-13) — Runbook
+
+**Problem (F-13):** `filterByWorkspace`/`belongsToWorkspace` coalesce a NULL
+`workspace_id` to `default-workspace`. Any unstamped legacy row is therefore
+visible to the default workspace. Phases 1–2 added the column + backfilled
+NULLs but left it NULLABLE, so a future unstamped INSERT can re-open the leak.
+
+**Fix:** guarantee `workspace_id` is non-null at the DB level.
+
+**Script:** `scripts/migrate-workspace-id-phase3-notnull.mjs` (idempotent).
+
+### Scope (target tables)
+Tenant-scoped tables that already carry `workspace_id` and are read through the
+workspace filter or a direct `WHERE workspace_id = $1` query:
+`projects, tasks, sessions, vision_docs, api_tokens, roadmap_versions,
+agent_metrics, kudos, outbox, heartbeats, incidents, settings,
+workspace_memberships, admin_audit`.
+
+**Excluded (by design):**
+- `org_studio_workspaces`, `org_studio_users` — not tenant-scoped (they define
+  tenants / are cross-workspace); a NOT NULL `workspace_id` is nonsensical.
+- `*_backup` tables — archival, never read through the filter.
+- Tables with no `workspace_id` today (`comments`, `embeddings`,
+  `dispatch_attempts`, `notification_*`, `bootstrap_pings`, `skill_installs`,
+  `watchdog_pauses`) — NOT filtered by workspace (comments inherit isolation via
+  their parent task; the rest are operational/agent-scoped). Adding the column
+  there is a new feature (see Migration Path v0.17+), not a backfill.
+
+### Step 1 — backfill + verify (reversible, ships to `done`)
+```
+node scripts/migrate-workspace-id-phase3-notnull.mjs
+```
+Ensures the column exists, UPDATEs any NULL → `default-workspace`, and asserts
+**0 NULLs per table** (exits 1 if any remain). This is the DONE-WHEN check.
+Verified 2026-06-04: 0 NULLs across all 14 target tables.
+
+### Step 2 — apply NOT NULL (IRREVERSIBLE; human sign-off required)
+Do **not** run against the cloud DB until #1622 is signed off.
+```
+CONFIRM_NOT_NULL=yes node scripts/migrate-workspace-id-phase3-notnull.mjs --apply-not-null
+```
+Re-verifies 0 NULLs, then `ALTER COLUMN workspace_id SET NOT NULL` on each
+still-nullable target inside a single transaction. The `CONFIRM_NOT_NULL=yes`
+env guard prevents accidental firing. (6 tables are already NOT NULL and are
+skipped; 8 remain to be constrained: projects, tasks, sessions, vision_docs,
+roadmap_versions, kudos, outbox, incidents.)
+
+### Rollback
+- **Backfill (Step 1):** reversible by design — it only sets a column that
+  already defaults to `default-workspace`.
+- **NOT NULL (Step 2):** literal SQL reversal, per constrained table:
+  ```
+  ALTER TABLE <table> ALTER COLUMN workspace_id DROP NOT NULL;
+  ```
+  "Irreversible" in the operational sense: once enforced in prod, any INSERT
+  path that forgets to stamp `workspace_id` starts erroring. Before apply,
+  confirm every INSERT supplies it (auth.ts / api-tokens.ts / outbox.ts /
+  heartbeats.ts / launch-prep.ts all default to `default-workspace` — verified
+  2026-06-04). If an unstamped path surfaces post-apply, run the DROP NOT NULL
+  above + redeploy.
+
+**Regression test:** `src/__tests__/workspace-id-backfill-1622.test.ts` locks the
+filter semantics (explicit isolation + the documented NULL→default legacy path)
+so the coalesce isn't accidentally tightened before NOT NULL is enforced.
