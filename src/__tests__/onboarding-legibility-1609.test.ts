@@ -147,6 +147,24 @@ describe('deriveOnboardingLegibility (#1609 — partial-setup legibility)', () =
     });
   });
 
+  describe('progress/summary metadata for partial setup entry points', () => {
+    it('exposes a step progress label that excludes the Welcome screen', () => {
+      expect(deriveOnboardingLegibility(at({ step: 1 })).progressLabel).toBe('Step 1 of 4');
+      expect(deriveOnboardingLegibility(at({ step: 2 })).progressLabel).toBe('Step 2 of 4');
+      expect(deriveOnboardingLegibility(at({ step: 4 })).progressLabel).toBe('Step 4 of 4');
+    });
+
+    it('summarizes remaining and skipped optional setup areas for a returning user', () => {
+      const leg = deriveOnboardingLegibility(at({ step: 3, orgName: 'Acme' }));
+      expect(leg.summary.completedCount).toBe(1);
+      expect(leg.summary.optionalTotal).toBe(3);
+      expect(leg.summary.currentLabel).toBe('Team');
+      expect(leg.summary.currentOptional).toBe(true);
+      expect(leg.summary.remainingOptionalLabels).toEqual(['Team']);
+      expect(leg.summary.skippedOptionalLabels).toEqual(['Runtime']);
+    });
+  });
+
   // Invariant: at any cursor, a step before the cursor is exactly one of
   // complete|skipped, the cursor step is current, and after is upcoming.
   it('invariant: status partitions cleanly by cursor position', () => {

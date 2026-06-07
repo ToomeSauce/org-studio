@@ -50,8 +50,19 @@ export interface OnboardingLegibility {
   /** True once the user can finish (always true here — no step is hard-required;
    *  finishing is the only requirement). Surfaced so the UI can say so plainly. */
   canFinish: boolean;
-  /** One-line guidance for resuming/next action, given the current state. */
+  /** Short summary surfaced above the current step: what remains / what to do next. */
   nextStepHint: string;
+  /** Current progress label, e.g. "Step 2 of 4". Welcome is excluded from the count. */
+  progressLabel: string;
+  /** Richer resume details for partial setup, surfaced in the wizard and dashboard entry points. */
+  summary: {
+    completedCount: number;
+    optionalTotal: number;
+    remainingOptionalLabels: string[];
+    skippedOptionalLabels: string[];
+    currentLabel: string;
+    currentOptional: boolean;
+  };
 }
 
 export const ONBOARDING_STEP_LABELS = ['Welcome', 'Organization', 'Runtime', 'Team', 'Done'];
@@ -113,12 +124,29 @@ export function deriveOnboardingLegibility(s: OnboardingStateSnapshot): Onboardi
 
   // No step is hard-required; finishing is the only requirement.
   const canFinish = true;
+  const optionalSteps = steps.filter((st) => st.optional);
+  const completedOptional = optionalSteps.filter((st) => st.status === 'complete');
+  const skippedOptionalLabels = skippedOptional.map((i) => ONBOARDING_STEP_LABELS[i]);
+  const remainingOptionalLabels = optionalSteps
+    .filter((st) => st.status === 'current' || st.status === 'upcoming')
+    .map((st) => st.label);
+  const currentStep = steps.find((st) => st.status === 'current') ?? steps[0];
+  const progressOrdinal = Math.min(Math.max(s.step, 1), 4);
 
   return {
     steps,
     skippedOptional,
     canFinish,
     nextStepHint: buildNextStepHint(s, skippedOptional),
+    progressLabel: `Step ${progressOrdinal} of 4`,
+    summary: {
+      completedCount: completedOptional.length,
+      optionalTotal: optionalSteps.length,
+      remainingOptionalLabels,
+      skippedOptionalLabels,
+      currentLabel: currentStep.label,
+      currentOptional: currentStep.optional,
+    },
   };
 }
 

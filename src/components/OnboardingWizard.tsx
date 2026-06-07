@@ -215,6 +215,29 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
     });
     return (
     <div className="mb-12">
+      {step > 0 && (
+        <div className="max-w-xl mx-auto mb-5 rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--bg-secondary)] px-4 py-3 sm:px-5">
+          <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-tertiary)]">
+              {leg.progressLabel}
+            </p>
+            <p className="text-[var(--text-xs)] text-[var(--text-muted)]">
+              {leg.summary.completedCount}/{leg.summary.optionalTotal} optional setup areas filled
+            </p>
+          </div>
+          <p className="mt-2 text-[var(--text-sm)] text-[var(--text-secondary)] leading-relaxed">
+            {leg.summary.currentOptional ? `${leg.summary.currentLabel} is optional.` : `You're on ${leg.summary.currentLabel}.`}{' '}
+            {leg.summary.remainingOptionalLabels.length > 0
+              ? `Still available: ${leg.summary.remainingOptionalLabels.join(', ')}.`
+              : 'Nothing else remains after this step.'}
+          </p>
+          {leg.summary.skippedOptionalLabels.length > 0 && (
+            <p className="mt-1.5 text-[var(--text-xs)] text-[var(--text-tertiary)] leading-relaxed">
+              Skipped so far: {leg.summary.skippedOptionalLabels.join(', ')} — you can add {leg.summary.skippedOptionalLabels.length === 1 ? 'it' : 'them'} later in Settings.
+            </p>
+          )}
+        </div>
+      )}
       <div className="flex items-center justify-center gap-3">
         {leg.steps.map((st) => {
           const isComplete = st.status === 'complete';
