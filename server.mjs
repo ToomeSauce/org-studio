@@ -996,9 +996,42 @@ let _pubsubReconnectAttempt = 0;
 const PUBSUB_HEARTBEAT_INTERVAL_MS = 30_000; // 30s
 const PUBSUB_RECONNECT_DELAYS = [5000, 10000, 20000, 60000]; // exponential backoff, cap at 60s
 
+// --- Single-flight reconnect guards (fix: reconnect-storm OOM) ---
+// Root cause of the 2026-06 Postgres connection storm: every 'end'/'error'
+// event called scheduleReconnect(), which unconditionally setTimeout'd a new
+// initializePostgresListener(). With no dedupe, no old-client teardown, and
+// two event sources (end AND error) firing on the same dying socket, reconnect
+// timers and pg.Client objects compounded — 67k reconnects, Postgres "too many
+// clients", then Node OOM. These guards enforce exactly one live listener and
+// at most one pending reconnect timer at any time.
+let _pubsubListener = null;        // the current active pg.Client (or null)
+let _pubsubReconnectTimer = null;  // pending reconnect setTimeout handle (or null)
+let _pubsubConnecting = false;     // true while a connect attempt is in flight
+let _pubsubListenerSeq = 0;        // monotonic id; stale clients' handlers no-op
+const PUBSUB_APP_NAME = 'org-studio-listener'; // identifies this conn in pg_stat_activity
+const _pubsubReconnectWindow = []; // timestamps of recent reconnects (rolling 10-min window)
+const PUBSUB_RECONNECT_ALARM_WINDOW_MS = 10 * 60 * 1000;
+const PUBSUB_RECONNECT_ALARM_THRESHOLD = 5; // >5 reconnects / 10 min = abnormal
+
 function getPubsubReconnectDelay() {
   const idx = Math.min(_pubsubReconnectAttempt, PUBSUB_RECONNECT_DELAYS.length - 1);
   return PUBSUB_RECONNECT_DELAYS[idx];
+}
+
+// Tear down the current listener client: detach all handlers (so a late
+// end/error from the dying socket can't schedule another reconnect) and end it.
+function teardownPubsubListener() {
+  if (_pubsubHeartbeatTimer) {
+    clearInterval(_pubsubHeartbeatTimer);
+    _pubsubHeartbeatTimer = null;
+  }
+  const old = _pubsubListener;
+  _pubsubListener = null;
+  if (old) {
+    try { old.removeAllListeners(); } catch {}
+    // best-effort async close; swallow errors (socket may already be dead)
+    try { Promise.resolve(old.end()).catch(() => {}); } catch {}
+  }
 }
 
 async function initializePostgresListener() {
@@ -1008,30 +1041,61 @@ async function initializePostgresListener() {
     return;
   }
 
-  // Clear any existing heartbeat timer
-  if (_pubsubHeartbeatTimer) {
-    clearInterval(_pubsubHeartbeatTimer);
-    _pubsubHeartbeatTimer = null;
+  // Single-flight entry guard: never start a second concurrent connect.
+  if (_pubsubConnecting) {
+    console.warn('[LISTEN] connect already in flight — skipping duplicate initialize');
+    return;
+  }
+  _pubsubConnecting = true;
+
+  // A fresh attempt supersedes any pending reconnect timer.
+  if (_pubsubReconnectTimer) {
+    clearTimeout(_pubsubReconnectTimer);
+    _pubsubReconnectTimer = null;
   }
 
+  // Tear down any prior client (handlers + socket) before opening a new one.
+  // This is what prevents old clients from piling up.
+  teardownPubsubListener();
+
+  // Tag this listener generation; handlers below ignore events if superseded.
+  const mySeq = ++_pubsubListenerSeq;
+
+  // Schedule exactly one reconnect. Ignored if this generation is stale or a
+  // reconnect is already pending.
+  function scheduleReconnect(reason) {
+    if (mySeq !== _pubsubListenerSeq) return; // a newer listener already owns the world
+    pubsubHealth.connected = false;
+    pubsubHealth.lastError = reason;
+    if (_pubsubReconnectTimer) return; // already one pending — don't stack
+    teardownPubsubListener();
+    const delay = getPubsubReconnectDelay();
+    _pubsubReconnectAttempt++;
+    pubsubHealth.reconnectCount++;
+    // Reconnect-rate alarm (defense-in-depth): the single-flight guard above makes
+    // the old storm structurally impossible, but if some future change reopens it,
+    // surface it loudly instead of letting it ramp silently to OOM.
+    const _now = Date.now();
+    _pubsubReconnectWindow.push(_now);
+    while (_pubsubReconnectWindow.length && _now - _pubsubReconnectWindow[0] > PUBSUB_RECONNECT_ALARM_WINDOW_MS) {
+      _pubsubReconnectWindow.shift();
+    }
+    if (_pubsubReconnectWindow.length > PUBSUB_RECONNECT_ALARM_THRESHOLD) {
+      console.error(`[LISTEN][ALARM] ${_pubsubReconnectWindow.length} reconnects in <10min — possible reconnect storm (expected <=${PUBSUB_RECONNECT_ALARM_THRESHOLD})`);
+    }
+    console.warn(`[LISTEN] ${reason}. Reconnecting in ${delay / 1000}s (attempt #${_pubsubReconnectAttempt})`);
+    _pubsubReconnectTimer = setTimeout(() => {
+      _pubsubReconnectTimer = null;
+      initializePostgresListener();
+    }, delay);
+  }
+
+  let listener;
   try {
     const pg = await import('pg');
     const Client = pg.default?.Client || pg.Client;
-    const listener = new Client({ connectionString: dbUrl });
-
-    function scheduleReconnect(reason) {
-      pubsubHealth.connected = false;
-      pubsubHealth.lastError = reason;
-      if (_pubsubHeartbeatTimer) {
-        clearInterval(_pubsubHeartbeatTimer);
-        _pubsubHeartbeatTimer = null;
-      }
-      const delay = getPubsubReconnectDelay();
-      _pubsubReconnectAttempt++;
-      pubsubHealth.reconnectCount++;
-      console.warn(`[LISTEN] ${reason}. Reconnecting in ${delay / 1000}s (attempt #${_pubsubReconnectAttempt})`);
-      setTimeout(() => initializePostgresListener(), delay);
-    }
+    listener = new Client({ connectionString: dbUrl, application_name: PUBSUB_APP_NAME });
+    _pubsubListener = listener;
 
     listener.on('error', (err) => {
       scheduleReconnect(`Connection error: ${err.message}`);
@@ -1182,7 +1246,8 @@ async function initializePostgresListener() {
     pubsubHealth.lastConnectedAt = new Date().toISOString();
     pubsubHealth.lastError = null;
     _pubsubReconnectAttempt = 0; // reset backoff on successful connect
-    console.log('[LISTEN] Connected to PostgreSQL, listening for org_studio_change events');
+    _pubsubConnecting = false;   // connect finished; release single-flight gate
+    console.log(`[LISTEN] Connected to PostgreSQL (application_name=${PUBSUB_APP_NAME}), listening for org_studio_change events`);
     
     // Subscribe to notifications
     await listener.query('LISTEN org_studio_change');
@@ -1190,6 +1255,11 @@ async function initializePostgresListener() {
 
     // Start heartbeat: NOTIFY every 30s so we know the connection is alive
     _pubsubHeartbeatTimer = setInterval(async () => {
+      // If a newer listener generation has taken over, stop this stale heartbeat.
+      if (mySeq !== _pubsubListenerSeq) {
+        clearInterval(_pubsubHeartbeatTimer);
+        return;
+      }
       try {
         await listener.query("NOTIFY org_studio_heartbeat, 'ping'");
       } catch (err) {
@@ -1200,12 +1270,10 @@ async function initializePostgresListener() {
     console.log('[LISTEN] Heartbeat started (30s interval)');
   } catch (e) {
     console.warn('[LISTEN] Failed to initialize PostgreSQL listener:', e.message);
-    pubsubHealth.connected = false;
-    pubsubHealth.lastError = e.message;
-    const delay = getPubsubReconnectDelay();
-    _pubsubReconnectAttempt++;
-    pubsubHealth.reconnectCount++;
-    setTimeout(() => initializePostgresListener(), delay);
+    _pubsubConnecting = false; // release gate so the scheduled reconnect can run
+    // Route through the deduped scheduler instead of a raw setTimeout so a
+    // connect failure can't stack its own reconnect on top of an event-driven one.
+    scheduleReconnect(`Init failed: ${e.message}`);
   }
 }
 
