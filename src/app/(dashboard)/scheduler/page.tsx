@@ -183,7 +183,7 @@ function LoopCard({ loop, teammate, onUpdate, onDelete, onToggleEnabled, onRunNo
     try {
       await onToggleEnabled(loop.id, !loop.enabled);
       const enable = !loop.enabled;
-      setStatusMsg(enable ? '✓ Loop enabled — cron job created' : '✓ Loop paused — cron job removed');
+      setStatusMsg(enable ? '✓ Loop enabled — push dispatch active' : '✓ Loop paused — dispatch off');
       setTimeout(() => setStatusMsg(null), 3000);
     } finally {
       setToggling(false);
@@ -743,10 +743,11 @@ export default function SchedulerPage() {
         console.error('Toggle failed:', data.error);
         return;
       }
-      // Update with cronJobId from response
-      if (enable && data.cronJobId) {
-        setLoops(prev => prev.map(l => l.id === loopId ? { ...l, cronJobId: data.cronJobId, enabled: true } : l));
-      } else if (!enable) {
+      // #1633 — enable is now push-based: the server returns no cronJobId and
+      // clears any stale one. Reflect that locally (clear the cron badge).
+      if (enable) {
+        setLoops(prev => prev.map(l => l.id === loopId ? { ...l, cronJobId: undefined, enabled: true } : l));
+      } else {
         setLoops(prev => prev.map(l => l.id === loopId ? { ...l, cronJobId: undefined, enabled: false } : l));
       }
     } catch (e) {
@@ -786,7 +787,13 @@ export default function SchedulerPage() {
       });
       const data = await res.json();
       if (data.ok) {
-        setSyncResult(`Synced ${data.synced} loop${data.synced !== 1 ? 's' : ''}`);
+        // #1633 — sync is now a cleanup pass; report removed/cleared counts.
+        const removed = data.cronRemoved ?? data.synced ?? 0;
+        setSyncResult(
+          removed > 0
+            ? `Cleaned up ${removed} legacy cron${removed !== 1 ? 's' : ''}`
+            : 'No legacy crons to clean up',
+        );
         // Re-fetch store to get updated loop state
         // (the ws data should auto-refresh, but show result for a few seconds)
         setTimeout(() => setSyncResult(null), 4000);
@@ -915,7 +922,7 @@ export default function SchedulerPage() {
                 ? 'bg-[var(--bg-tertiary)] text-[var(--text-muted)] border-[var(--border-default)]'
                 : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] border-[var(--border-default)]'
             )}
-            title="Reconcile loops with Gateway cron jobs"
+            title="Clean up legacy Scheduler cron jobs (dispatch is push-based now)"
           >
             <RefreshCw size={12} className={syncing ? 'animate-spin' : ''} /> Sync
           </button>

@@ -12,7 +12,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { rpc } from '@/lib/gateway-rpc';
 import { sendToAgent } from '@/lib/runtimes/registry';
 import { enqueueOutbox } from '@/lib/outbox';
-import { buildLoopPrompt, buildDispatchMessage, clearConsumedHandoffs } from '@/lib/scheduler';
+import { buildDispatchMessage, clearConsumedHandoffs } from '@/lib/scheduler';
 import type { AgentLoop } from '@/lib/store';
 import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 import { writeHeartbeat } from '@/lib/heartbeats';
@@ -74,7 +74,9 @@ import {
 } from '@/lib/done-but-unmet';
 import { validateMetricSource, pollMetricSource } from '@/lib/metric-source';
 import { searchMemory } from '@/lib/embedding/search';
-import { enrichStewardNudge, enrichProposePrompt, type MemoryHit } from '@/lib/embedding/precedent';const DEFAULT_MODEL = 'foundry-openai-chat/gpt-5.4';
+import { enrichStewardNudge, enrichProposePrompt, type MemoryHit } from '@/lib/embedding/precedent';
+// #1633 — push-based dispatch policy (enable/runNow/sync no longer create heavy crons).
+import { planEnable, planRunNow, planSync } from '@/lib/scheduler-dispatch-policy';
 
 // Minimum seconds between event-driven triggers for the same agent (debounce)
 const TRIGGER_COOLDOWN_MS = 60_000; // 1 minute
@@ -1096,46 +1098,24 @@ export async function POST(request: NextRequest) {
         const loop = getLoop(store, loopId);
         if (!loop) return NextResponse.json({ error: 'Loop not found' }, { status: 404 });
 
-        // Check gateway availability
-        const hasGateway = await checkGateway();
-        if (!hasGateway) {
-          return NextResponse.json(
-            { error: 'Agent runtime not connected. Set GATEWAY_URL and GATEWAY_TOKEN in .env.local to enable scheduling.', code: 'NO_GATEWAY' },
-            { status: 503 }
-          );
-        }
-
-        const agentName = getAgentName(store, loop.agentId);
-        const agentRole = getAgentRole(store, loop.agentId);
-        const globalPreamble = store.settings?.loopPreamble || '';
-        const prompt = await buildLoopPrompt(loop, agentName, globalPreamble, agentRole);
-
-        // Create recurring cron job via Gateway (scouting heartbeat — runs on long interval)
-        const result = await rpc('cron.add', {
-          name: `Scheduler: ${agentName}`,
-          agentId: loop.agentId,
-          sessionTarget: 'isolated',
-          schedule: { kind: 'every', everyMs: loop.intervalMinutes * 60000 },
-          payload: {
-            kind: 'agentTurn',
-            message: prompt,
-            model: loop.model || DEFAULT_MODEL,
-            timeoutSeconds: 300,
-          },
-          delivery: { mode: 'none' },
-        });
-
-        const cronJobId = result?.id || result?.jobId || result?.job?.id;
-        if (!cronJobId) {
-          console.error('cron.add response missing id:', result);
-          return NextResponse.json({ error: 'cron.add did not return a job ID', detail: result }, { status: 502 });
-        }
-
-        // Persist back to store
-        updateLoopInStore(store, loopId, { enabled: true, cronJobId });
+        // #1633 — push-based dispatch: enabling a loop NO LONGER creates a
+        // recurring `Scheduler: <agent>` cron with a full agentTurn payload
+        // (the old heavyweight LLM loop tax). Dispatch is event-driven: the
+        // store route calls `{ action: 'trigger', agentId }` when work lands
+        // in backlog, and `fireOneShot` pushes a focused message. That path
+        // keys off `loop.enabled`, NOT `cronJobId`, so enabling is now just a
+        // flag flip. We also clear any stale cronJobId so a later `sync` won't
+        // think there's a live heavy cron to reconcile.
+        //
+        // No gateway check is required to enable — the event `trigger` path
+        // does its own gateway/outbox handling at dispatch time. Removing the
+        // gateway gate also means enabling a loop never 503s just because the
+        // runtime is momentarily unreachable.
+        const { setEnabled } = planEnable();
+        updateLoopInStore(store, loopId, { enabled: setEnabled, cronJobId: undefined });
         await writeLoops(store); // #1497: targeted settings write, not full-store rewrite
 
-        return NextResponse.json({ ok: true, cronJobId });
+        return NextResponse.json({ ok: true, mode: 'push', dispatch: 'event-driven' });
       }
 
       case 'disable': {
@@ -1179,37 +1159,26 @@ export async function POST(request: NextRequest) {
         const loop = getLoop(store, loopId);
         if (!loop) return NextResponse.json({ error: 'Loop not found' }, { status: 404 });
 
-        // Check gateway availability
-        const hasGateway = await checkGateway();
-        if (!hasGateway) {
-          return NextResponse.json(
-            { error: 'Agent runtime not connected. Set GATEWAY_URL and GATEWAY_TOKEN in .env.local to run loops.', code: 'NO_GATEWAY' },
-            { status: 503 }
-          );
+        // #1633 — manual trigger ALWAYS fires a direct one-shot via the same
+        // push path the event-driven dispatcher uses. We no longer route
+        // through `cron.run` on a recurring `Scheduler:` job (those heavy crons
+        // are being removed). `fireOneShot` re-reads the store, builds a
+        // focused dispatch message, and enqueues to the outbox — so this works
+        // whether or not any cron job exists. If a stale cronJobId is still on
+        // the loop, opportunistically clear it so `sync` has nothing to chase.
+        const { fireOneShot: shouldFire } = planRunNow();
+        if (shouldFire) {
+          await fireOneShot(store, loop, 'manual');
         }
 
-        if (loop.cronJobId) {
-          // Trigger existing cron job, force even if stuck
-          try {
-            await rpc('cron.run', { id: loop.cronJobId, runMode: 'force' });
-          } catch (e: any) {
-            // If the cron job doesn't exist anymore, clear it and fire a one-shot
-            console.error('cron.run error:', e?.message || e);
-            const freshStore2 = await readStore();
-            updateLoopInStore(freshStore2, loopId, { cronJobId: undefined });
-            await writeLoops(freshStore2); // #1497: targeted settings write
-            await fireOneShot(store, loop, 'cron-fallback');
-          }
-        } else {
-          await fireOneShot(store, loop, 'cron-fallback');
-        }
-
-        // Update lastRun
+        // Update lastRun (and clear any stale cronJobId left from the old model)
         const freshStore = await readStore();
-        updateLoopInStore(freshStore, loopId, { lastRun: Date.now() });
+        const lastRunUpdate: Partial<AgentLoop> = { lastRun: Date.now() };
+        if (loop.cronJobId) lastRunUpdate.cronJobId = undefined;
+        updateLoopInStore(freshStore, loopId, lastRunUpdate);
         await writeLoops(freshStore); // #1497: targeted settings write
 
-        return NextResponse.json({ ok: true });
+        return NextResponse.json({ ok: true, dispatched: shouldFire, method: 'one-shot' });
       }
 
       case 'runHistory': {
@@ -1231,10 +1200,24 @@ export async function POST(request: NextRequest) {
       }
 
       case 'sync': {
+        // #1633 — `sync` is now a CLEANUP pass, not a (re)creation pass.
+        //
+        // The old behavior recreated a recurring `Scheduler: <agent>` cron
+        // (full agentTurn LLM payload, fires every intervalMinutes) for any
+        // enabled loop whose cron was missing. That is exactly the heavyweight
+        // autonomous loop tax #1633 removes — and because it ran on every sync,
+        // it would silently resurrect the heavy crons even after they were
+        // deleted. Dispatch is event-driven now (see `case 'trigger'`), keyed
+        // off `loop.enabled`, so no per-agent cron is needed at all.
+        //
+        // This pass instead TEARS DOWN legacy scheduler crons and clears their
+        // stored references. It never calls `cron.add`, so a sync can't
+        // recreate the tax. Planning is delegated to the pure `planSync` policy
+        // (unit-tested in scheduler-dispatch-policy.test.ts).
         const store = await readStore();
         const loops: AgentLoop[] = store.settings?.loops || [];
 
-        // Check gateway availability
+        // Check gateway availability (we still need it to list/remove crons).
         const hasGateway = await checkGateway();
         if (!hasGateway) {
           return NextResponse.json(
@@ -1243,66 +1226,66 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        // Get all cron jobs from Gateway
+        // Get all cron jobs from Gateway so we can find legacy Scheduler crons
+        // to remove (both loop-referenced and orphaned). includeDisabled:true
+        // is required — legacy `Scheduler:` jobs are often left DISABLED, and
+        // a default cron.list hides them, which would let sync clear the store
+        // ref while leaving the disabled job orphaned on the Gateway forever.
         let cronJobs: any[] = [];
         try {
-          const result = await rpc('cron.list', {});
+          const result = await rpc('cron.list', { includeDisabled: true });
           cronJobs = result?.jobs || [];
         } catch (e: any) {
           return NextResponse.json({ error: 'Failed to list cron jobs: ' + (e?.message || e) }, { status: 502 });
         }
 
-        const cronIds = new Set(cronJobs.map((j: any) => j.id));
-        let synced = 0;
+        const plan = planSync(
+          loops.map((l) => ({ id: l.id, agentId: l.agentId, enabled: l.enabled, cronJobId: l.cronJobId })),
+          cronJobs.map((j: any) => ({ id: j.id, name: j.name })),
+        );
+
+        let removed = 0;
+        let cleared = 0;
         let freshStore = await readStore();
 
-        for (const loop of loops) {
-          if (loop.enabled && (!loop.cronJobId || !cronIds.has(loop.cronJobId))) {
-            // Enabled loop whose cron is missing OR was never created
-            // (cronJobId null). The null case used to be skipped, which
-            // meant a freshly-seeded or wiped loop never got a dispatch
-            // cron and silently never ran. Recreate in both cases.
-            const agentName = getAgentName(freshStore, loop.agentId);
-            const agentRole = getAgentRole(freshStore, loop.agentId);
-            const globalPreamble = freshStore.settings?.loopPreamble || '';
-            const prompt = await buildLoopPrompt(loop, agentName, globalPreamble, agentRole);
+        // 1. Per-loop steps: remove the live cron (if any) and clear the stored ref.
+        for (const step of plan.loopSteps) {
+          if (step.removeCronId) {
             try {
-              const result = await rpc('cron.add', {
-                name: `Scheduler: ${agentName}`,
-                agentId: loop.agentId,
-                sessionTarget: 'isolated',
-                schedule: { kind: 'every', everyMs: loop.intervalMinutes * 60000 },
-                payload: {
-                  kind: 'agentTurn',
-                  message: prompt,
-                  model: loop.model || DEFAULT_MODEL,
-                  timeoutSeconds: 300,
-                },
-                delivery: { mode: 'none' },
-              });
-              const newId = result?.id || result?.jobId || result?.job?.id;
-              freshStore = await readStore();
-              updateLoopInStore(freshStore, loop.id, { cronJobId: newId });
-              await writeLoops(freshStore); // #1497: targeted settings write
-              synced++;
+              await rpc('cron.remove', { id: step.removeCronId });
+              removed++;
             } catch (e: any) {
-              console.error(`Failed to recreate cron for loop ${loop.id}:`, e?.message || e);
+              console.warn(`[sync #1633] cron.remove warning for ${step.removeCronId}:`, e?.message || e);
             }
-          } else if (!loop.enabled && loop.cronJobId) {
-            // Disabled loop but lingering cron job — remove
-            try {
-              await rpc('cron.remove', { id: loop.cronJobId });
-            } catch (e: any) {
-              console.warn(`cron.remove warning for ${loop.cronJobId}:`, e?.message || e);
-            }
+          }
+          if (step.clearStoredCronJobId) {
             freshStore = await readStore();
-            updateLoopInStore(freshStore, loop.id, { cronJobId: undefined });
+            updateLoopInStore(freshStore, step.loopId, { cronJobId: undefined });
             await writeLoops(freshStore); // #1497: targeted settings write
-            synced++;
+            cleared++;
           }
         }
 
-        return NextResponse.json({ ok: true, synced });
+        // 2. Orphaned legacy `Scheduler:` crons that no loop references anymore.
+        for (const orphan of plan.orphanSteps) {
+          try {
+            await rpc('cron.remove', { id: orphan.removeCronId });
+            removed++;
+            console.log(`[sync #1633] removed orphaned legacy scheduler cron "${orphan.name}" (${orphan.removeCronId})`);
+          } catch (e: any) {
+            console.warn(`[sync #1633] cron.remove warning for orphan ${orphan.removeCronId}:`, e?.message || e);
+          }
+        }
+
+        // `synced` retained for UI back-compat (single count it renders).
+        const synced = removed + cleared;
+        return NextResponse.json({
+          ok: true,
+          synced,
+          mode: 'cleanup',
+          cronRemoved: removed,
+          cronJobIdsCleared: cleared,
+        });
       }
 
       case 'trigger': {
