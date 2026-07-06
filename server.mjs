@@ -2026,8 +2026,12 @@ async function computeDailyMetrics(targetDate) {
             `SELECT id, task_id, author, content, type, mentions, created_at
                FROM org_studio_comments
               WHERE scope_kind = 'task'
-                AND created_at >= to_timestamp($1 / 1000.0)
-                AND created_at <  to_timestamp($2 / 1000.0)
+                -- created_at is a BIGINT ms-epoch (matches createdAt across the
+                -- store), NOT timestamptz. Comparing via to_timestamp() threw
+                -- 'cannot compare bigint >= timestamp with time zone' on every
+                -- run — primary path never succeeded, fallback masked it (#1649).
+                AND created_at >= $1
+                AND created_at <  $2
               ORDER BY task_id, created_at ASC`,
             [dayStart, dayEnd],
           );

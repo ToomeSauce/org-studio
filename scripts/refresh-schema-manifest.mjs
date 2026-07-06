@@ -34,6 +34,7 @@ const TABLES = [
   'org_studio_projects',
   'org_studio_tasks',
   'org_studio_roadmap_versions',
+  'org_studio_comments',
 ];
 
 const client = new pg.Client(dbUrl);

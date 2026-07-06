@@ -175,18 +175,19 @@ export function validateSqlAgainstSchema(
 
 /**
  * Extract every SQL template literal that references an org_studio_* table
- * from a TypeScript source file's text. Assumes SQL lives in backtick
- * template literals WITHOUT ${} interpolation (true for project-state.ts —
- * a unit test pins that assumption).
+ * from a TypeScript/JS source file's text. Anchors matches at template
+ * literals that BEGIN with a SQL verb, so backtick pairing stays correct in
+ * files that also contain interpolated (non-SQL) template literals. Extracted
+ * SQL must not use ${} interpolation (true for the audited files — unit
+ * tests pin that assumption).
  */
 export function extractSqlStatementsFromSource(sourceText: string): Array<{ sql: string; line: number }> {
   const out: Array<{ sql: string; line: number }> = [];
-  const re = /`([^`]*org_studio_[^`]*)`/g;
+  const re = /`(\s*(?:SELECT|UPDATE|INSERT|DELETE)\b[^`]*)`/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(sourceText)) !== null) {
     const sql = m[1];
-    // Only statements, not comments/strings that merely mention a table name.
-    if (/^\s*(select|update|insert|delete)\b/i.test(stripComments(sql))) {
+    if (/org_studio_/i.test(sql)) {
       out.push({ sql, line: sourceText.slice(0, m.index).split('\n').length });
     }
   }
