@@ -7,6 +7,9 @@ import { versionSortKey, compareVersions, isValidVersion } from '@/lib/version-u
 import { renameVersionInProjectData, rvDerivedId } from '@/lib/roadmap-rename';
 import { syncProjectShadowVersion } from '@/lib/roadmap-sync';
 import { recordInternalCallFailure } from '@/lib/dispatch-ledger';
+// #1645 — currentVersion sync goes through the shared service layer instead
+// of an HTTP self-fetch of POST /api/store (the #1640 failure class).
+import { updateProjectService } from '@/lib/store-service';
 import { validateMetricSource } from '@/lib/metric-source';
 
 // #1461 — allow-list for version_type (must match the DB CHECK constraint
@@ -702,25 +705,15 @@ export async function POST(
           // Auto-sync: if this version is set to "current", update the project's currentVersion
           if (status === 'current') {
             try {
-              // Update via store API internally
-              const storeRes = await fetch(`http://localhost:${process.env.PORT || 4501}/api/store`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  ...(process.env.ORG_STUDIO_API_KEY ? { 'Authorization': `Bearer ${process.env.ORG_STUDIO_API_KEY}` } : {}),
-                },
-                body: JSON.stringify({
-                  action: 'updateProject',
-                  id: projectId,
-                  updates: { currentVersion: version },
-                }),
-              });
-              if (!storeRes.ok) {
-                recordInternalCallFailure('roadmap-route:upsert-currentVersion-sync', '/api/store', storeRes.status, 'http-status');
-                console.warn(`[Roadmap] Failed to sync currentVersion to project: ${storeRes.status}`);
+              // #1645: direct service call (was HTTP self-fetch of /api/store).
+              // Same side-effects: provider write + NOTIFY org_studio_change.
+              const syncRes = await updateProjectService(workspaceId, projectId, { currentVersion: version });
+              if (!syncRes.ok) {
+                recordInternalCallFailure('roadmap-route:upsert-currentVersion-sync', 'store-service:updateProject', syncRes.status, 'service-error');
+                console.warn(`[Roadmap] Failed to sync currentVersion to project: ${syncRes.error}`);
               }
             } catch (e) {
-              recordInternalCallFailure('roadmap-route:upsert-currentVersion-sync', '/api/store', null, 'fetch-throw');
+              recordInternalCallFailure('roadmap-route:upsert-currentVersion-sync', 'store-service:updateProject', null, 'service-throw');
               console.warn('[Roadmap] Failed to sync currentVersion to project:', e);
             }
           }
@@ -871,16 +864,14 @@ export async function POST(
 
           if (resolvedStatus === 'current') {
             try {
-              await fetch(`http://localhost:${process.env.PORT || 4501}/api/store`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  ...(process.env.ORG_STUDIO_API_KEY ? { 'Authorization': `Bearer ${process.env.ORG_STUDIO_API_KEY}` } : {}),
-                },
-                body: JSON.stringify({ action: 'updateProject', id: projectId, updates: { currentVersion: version } }),
-              });
+              // #1645: direct service call (was HTTP self-fetch of /api/store).
+              const syncRes = await updateProjectService(workspaceId, projectId, { currentVersion: version });
+              if (!syncRes.ok) {
+                recordInternalCallFailure('roadmap-route:create-currentVersion-sync', 'store-service:updateProject', syncRes.status, 'service-error');
+                console.warn(`[Roadmap #1461 create] currentVersion sync failed: ${syncRes.error}`);
+              }
             } catch (e) {
-              recordInternalCallFailure('roadmap-route:create-currentVersion-sync', '/api/store', null, 'fetch-throw');
+              recordInternalCallFailure('roadmap-route:create-currentVersion-sync', 'store-service:updateProject', null, 'service-throw');
               console.warn('[Roadmap #1461 create] currentVersion sync failed:', (e as any)?.message || e);
             }
           }
@@ -1065,16 +1056,14 @@ export async function POST(
 
           if (newStatus === 'current' && existing.status !== 'current') {
             try {
-              await fetch(`http://localhost:${process.env.PORT || 4501}/api/store`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  ...(process.env.ORG_STUDIO_API_KEY ? { 'Authorization': `Bearer ${process.env.ORG_STUDIO_API_KEY}` } : {}),
-                },
-                body: JSON.stringify({ action: 'updateProject', id: projectId, updates: { currentVersion: version } }),
-              });
+              // #1645: direct service call (was HTTP self-fetch of /api/store).
+              const syncRes = await updateProjectService(workspaceId, projectId, { currentVersion: version });
+              if (!syncRes.ok) {
+                recordInternalCallFailure('roadmap-route:patch-currentVersion-sync', 'store-service:updateProject', syncRes.status, 'service-error');
+                console.warn(`[Roadmap #1461 patch] currentVersion sync failed: ${syncRes.error}`);
+              }
             } catch (e) {
-              recordInternalCallFailure('roadmap-route:patch-currentVersion-sync', '/api/store', null, 'fetch-throw');
+              recordInternalCallFailure('roadmap-route:patch-currentVersion-sync', 'store-service:updateProject', null, 'service-throw');
               console.warn('[Roadmap #1461 patch] currentVersion sync failed:', (e as any)?.message || e);
             }
           }
