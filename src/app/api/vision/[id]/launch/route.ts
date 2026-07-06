@@ -15,6 +15,7 @@ import { buildLaunchMessage } from '@/lib/vision-cron';
 import { getStoreProvider } from '@/lib/store-provider';
 import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
 import { ensureLaunchPreconditions } from '@/lib/launch-prep';
+import { recordInternalCallFailure } from '@/lib/dispatch-ledger';
 
 export const dynamic = 'force-dynamic';
 
@@ -95,11 +96,32 @@ export async function POST(
     // Check for VISION.md — try Postgres doc first, then filesystem
     // (after launch-prep this should always pass when DATABASE_URL is set;
     // file-store mode still falls through to disk).
+    // #1645: was an UNAUTHENTICATED HTTP self-fetch of GET /api/vision/:id/doc
+    // — same #1640 class as the roadmap-GET bug (cloud read gate would 401 it
+    // and the catch masked the failure as "no doc"). Direct DB existence
+    // check instead; same fallback order (Postgres → filesystem).
     let hasDoc = false;
-    try {
-      const docRes = await fetch(`http://127.0.0.1:${process.env.PORT || 4501}/api/vision/${projectId}/doc`);
-      hasDoc = docRes.ok;
-    } catch {
+    if (process.env.DATABASE_URL) {
+      try {
+        const pg = await import('pg');
+        const Client = (pg as any).default?.Client || (pg as any).Client;
+        const client = new Client(process.env.DATABASE_URL);
+        await client.connect();
+        try {
+          const docCheck = await client.query(
+            'SELECT 1 FROM org_studio_vision_docs WHERE project_id = $1 AND workspace_id = $2 LIMIT 1',
+            [projectId, workspaceId],
+          );
+          hasDoc = docCheck.rows.length > 0;
+        } finally {
+          await client.end();
+        }
+      } catch (e: any) {
+        recordInternalCallFailure('vision-launch:doc-check', 'pg:org_studio_vision_docs', null, 'query-throw');
+        console.warn(`[Vision Launch] doc existence check failed for ${projectId}:`, e?.message || e);
+      }
+    }
+    if (!hasDoc) {
       // Fallback: check filesystem
       const docPath = project.visionDocPath
         ? project.visionDocPath.startsWith('/') ? project.visionDocPath : join(process.cwd(), project.visionDocPath)
