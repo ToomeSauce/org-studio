@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { cloudReadGate } from '@/lib/read-gate';
+import { cloudReadGate, internalAuthHeaders } from '@/lib/read-gate';
 import { getStoreProvider } from '@/lib/store-provider';
 import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
 
@@ -73,7 +73,7 @@ export async function GET(request: NextRequest) {
     let allKudos: KudosEntry[] = [];
     try {
       const res = await fetch('http://localhost:4501/api/kudos?limit=500', {
-        headers: { 'X-Internal-Request': 'true' },
+        headers: internalAuthHeaders(), // #1645: authed internal read (kudos GET is open today, but keep internal calls uniform)
       });
       if (res.ok) {
         const data = await res.json();

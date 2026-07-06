@@ -7,6 +7,10 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
 import { detectSignals, DetectedSignal } from '@/lib/signal-detector';
 import { getStoreProvider } from '@/lib/store-provider';
 import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
+// #1645: internal self-fetches must authenticate (store GET + kudos POST are
+// gated in cloud mode — unauthenticated calls silently 401'd, #1640 class).
+import { internalAuthHeaders } from '@/lib/read-gate';
+import { recordInternalCallFailure } from '@/lib/dispatch-ledger';
 
 /**
  * Signals API — Auto-detected cultural signals
@@ -50,9 +54,12 @@ function saveDismissedSignals(ids: string[]): void {
 async function loadStore() {
   try {
     const response = await fetch('http://localhost:4501/api/store', {
-      headers: { 'X-Internal-Request': 'true' },
+      headers: internalAuthHeaders(),
     });
-    if (!response.ok) throw new Error('Failed to load store');
+    if (!response.ok) {
+      recordInternalCallFailure('signals:load-store', '/api/store', response.status, 'http-status');
+      throw new Error('Failed to load store');
+    }
     return response.json();
   } catch (err) {
     console.error('[Signals API] Failed to load store:', err);
@@ -89,9 +96,12 @@ async function fetchCommentsForStore(req: NextRequest, store: any): Promise<Map<
 async function loadRecentKudos(maxAge = 7 * 24 * 60 * 60 * 1000) {
   try {
     const response = await fetch('http://localhost:4501/api/kudos?limit=100', {
-      headers: { 'X-Internal-Request': 'true' },
+      headers: internalAuthHeaders(),
     });
-    if (!response.ok) return [];
+    if (!response.ok) {
+      recordInternalCallFailure('signals:load-kudos', '/api/kudos', response.status, 'http-status');
+      return [];
+    }
     const data = await response.json();
     const now = Date.now();
     return (data.kudos || []).filter((k: any) => now - k.createdAt < maxAge);
@@ -141,12 +151,9 @@ async function handleGET(req: NextRequest) {
     if (autoConfirm && signals.length > 0) {
       for (const signal of signals) {
         try {
-          await fetch('http://localhost:4501/api/kudos', {
+          const kudosRes = await fetch('http://localhost:4501/api/kudos', {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Internal-Request': 'true',
-            },
+            headers: internalAuthHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
               agentId: signal.agentId,
               givenBy: 'system',
@@ -159,6 +166,10 @@ async function handleGET(req: NextRequest) {
               confirmed: true,
             }),
           });
+          if (!kudosRes.ok) {
+            recordInternalCallFailure('signals:auto-confirm-kudos', '/api/kudos', kudosRes.status, 'http-status');
+            console.error(`[Signals] Auto-confirm kudos POST returned ${kudosRes.status} for ${signal.id}`);
+          }
           // Mark as dismissed so it doesn't re-fire
           const dismissed = loadDismissedSignals();
           if (!dismissed.includes(signal.id)) {
@@ -229,10 +240,7 @@ async function handlePOST(req: NextRequest) {
       // Create a kudos/flag entry from the signal
       const response = await fetch('http://localhost:4501/api/kudos', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Internal-Request': 'true',
-        },
+        headers: internalAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           agentId: signal.agentId,
           givenBy: 'system',
@@ -247,6 +255,7 @@ async function handlePOST(req: NextRequest) {
       });
 
       if (!response.ok) {
+        recordInternalCallFailure('signals:confirm-kudos', '/api/kudos', response.status, 'http-status');
         throw new Error('Failed to create kudos entry');
       }
 
