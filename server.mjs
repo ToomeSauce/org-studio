@@ -2788,6 +2788,38 @@ server.listen(port, async () => {
   setInterval(() => safeRoadmapReconcile('cron'), ROADMAP_RECONCILE_INTERVAL_MS);
   console.log('[RoadmapReconcile] Periodic reconcile cron started (15min tick, #982)');
 
+  // #1642: Daily schedule-drift reconcile — query-class only (one GET; the
+  // endpoint reads store + gateway cron.list read-only and persists findings).
+  // Orphan/zombie findings render on /health; #1643 will alert on them.
+  const SCHEDULE_DRIFT_INTERVAL_MS = 24 * 60 * 60_000;
+  const safeScheduleDriftReconcile = async () => {
+    try {
+      const port = process.env.PORT || 4501;
+      const apiKey = process.env.ORG_STUDIO_API_KEY || '';
+      const res = await fetch(`http://127.0.0.1:${port}/api/observability/schedules`, {
+        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+      });
+      if (!res.ok) {
+        console.warn(`[ScheduleDrift #1642] reconcile GET returned HTTP ${res.status}`);
+        return;
+      }
+      const body = await res.json().catch(() => ({}));
+      const n = Array.isArray(body.findings) ? body.findings.length : 0;
+      const mc = Number(body.modelCallScheduleCount) || 0;
+      // Summarize-once discipline: one line per daily tick, only elevated when drift exists.
+      if (n > 0 || mc > 0) {
+        console.warn(`[ScheduleDrift #1642] findings=${n} modelCallSchedules=${mc} — see /health Schedules panel`);
+      } else {
+        console.log(`[ScheduleDrift #1642] clean (entries=${Array.isArray(body.entries) ? body.entries.length : '?'}, drift=0)`);
+      }
+    } catch (e) {
+      console.warn('[ScheduleDrift #1642] reconcile failed (non-fatal):', e.message);
+    }
+  };
+  setTimeout(safeScheduleDriftReconcile, 45_000); // startup pass (after routes warm)
+  setInterval(safeScheduleDriftReconcile, SCHEDULE_DRIFT_INTERVAL_MS);
+  console.log('[ScheduleDrift] Daily schedule-drift reconcile started (24h tick, #1642)');
+
   // Daily metrics computation — runs at startup (15s delay) + daily at midnight
   setTimeout(async () => {
     await computeDailyMetrics(); // today

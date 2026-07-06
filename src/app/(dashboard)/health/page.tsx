@@ -227,6 +227,109 @@ function PubSubStatus() {
   );
 }
 
+// #1642 — Schedules panel: unified inventory + drift findings.
+function SchedulesPanel() {
+  const [snap, setSnap] = useState<any>(null);
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    const load = () =>
+      fetch('/api/observability/schedules')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => { if (!cancelled && d) setSnap(d); })
+        .catch(() => {});
+    load();
+    const iv = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, []);
+  if (!snap) return <p className="text-sm text-[var(--text-muted)]">Checking...</p>;
+
+  const findings = snap.findings || [];
+  const entries = snap.entries || [];
+  const modelCallCount = snap.modelCallScheduleCount || 0;
+  const costBadge = (c: string) =>
+    c === 'model-call'
+      ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+      : c === 'query'
+        ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+        : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400';
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2.5 text-sm">
+        <StatusDot ok={findings.length === 0 && modelCallCount === 0} />
+        <span className="font-medium text-[var(--text-primary)]">
+          {entries.length} schedules tracked
+          {findings.length > 0 ? ` — ${findings.length} drift finding${findings.length > 1 ? 's' : ''}` : ' — no drift'}
+        </span>
+        {modelCallCount > 0 && (
+          <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">
+            ⚠ {modelCallCount} enabled model-call schedule{modelCallCount > 1 ? 's' : ''} (#1633 expects 0)
+          </span>
+        )}
+        {!snap.gatewayReachable && (
+          <span className="text-xs text-amber-500">gateway unreachable — cron inventory incomplete</span>
+        )}
+        <button
+          onClick={() => setExpanded((e) => !e)}
+          className="ml-auto text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+        >
+          {expanded ? 'collapse' : 'details'}
+        </button>
+      </div>
+
+      {findings.length > 0 && (
+        <div className="space-y-1.5">
+          {findings.map((f: any) => (
+            <div
+              key={`${f.kind}-${f.scheduleId}`}
+              className="px-3 py-2 rounded-[var(--radius-md)] bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-300"
+            >
+              <span className="font-semibold uppercase mr-1.5">{f.kind}</span>
+              <span className="font-medium">{f.name}</span> — {f.explanation}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {expanded && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-left text-[var(--text-muted)]">
+                <th className="py-1 pr-3 font-medium">Name</th>
+                <th className="py-1 pr-3 font-medium">Source</th>
+                <th className="py-1 pr-3 font-medium">Owner</th>
+                <th className="py-1 pr-3 font-medium">Interval</th>
+                <th className="py-1 pr-3 font-medium">Cost</th>
+                <th className="py-1 pr-3 font-medium">Enabled</th>
+                <th className="py-1 font-medium">Last fire</th>
+              </tr>
+            </thead>
+            <tbody>
+              {entries.map((e: any) => (
+                <tr key={e.id} className="border-t border-[var(--border-subtle)] text-[var(--text-secondary)]">
+                  <td className="py-1 pr-3 text-[var(--text-primary)]">{e.name}</td>
+                  <td className="py-1 pr-3">{e.source}</td>
+                  <td className="py-1 pr-3">{e.owner || '—'}</td>
+                  <td className="py-1 pr-3">{e.intervalDescription}</td>
+                  <td className="py-1 pr-3">
+                    <span className={clsx('px-1.5 py-0.5 rounded font-medium', costBadge(e.costClass))}>
+                      {e.costClass}
+                    </span>
+                  </td>
+                  <td className="py-1 pr-3">{e.enabled ? '✓' : 'off'}</td>
+                  <td className="py-1">{e.lastFire ? relativeTime(e.lastFire) : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------- page ----------
 
 export default function HealthPage() {
@@ -350,6 +453,11 @@ export default function HealthPage() {
         {/* ── 3b. Roadmap Reconcile (#982) ── */}
         <Panel title="Roadmap Reconcile">
           <RoadmapReconcileStatus />
+        </Panel>
+
+        {/* ── 3c. Schedules (#1642) ── */}
+        <Panel title="Schedules">
+          <SchedulesPanel />
         </Panel>
 
         {/* ── 4. Stuck Agents ── */}
