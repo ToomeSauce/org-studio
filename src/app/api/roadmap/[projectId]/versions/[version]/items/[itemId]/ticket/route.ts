@@ -33,6 +33,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 import { recordInternalCallFailure } from '@/lib/dispatch-ledger';
+// #1645: internal self-fetches always send the internal Bearer so cloud-mode
+// read gating can never silently 401 them (#1640 class).
+import { internalAuthHeaders } from '@/lib/read-gate';
 
 const ALLOWED_PRIORITY = new Set(['low', 'medium', 'high', 'critical']);
 
@@ -97,6 +100,7 @@ export async function POST(
   try {
     const roadmapRes = await fetch(`${internalBase()}/api/roadmap/${encodeURIComponent(projectId)}`, {
       cache: 'no-store',
+      headers: internalAuthHeaders(),
     });
     if (!roadmapRes.ok) {
       // #1641 — count internal-call failures even when surfaced (trend signal).
@@ -203,6 +207,7 @@ export async function POST(
     try {
       const verifyRes = await fetch(`${internalBase()}/api/roadmap/${encodeURIComponent(projectId)}`, {
         cache: 'no-store',
+        headers: internalAuthHeaders(),
       });
       if (verifyRes.ok) {
         const verifyData = await verifyRes.json();
@@ -226,6 +231,7 @@ export async function POST(
     try {
       const refreshRes = await fetch(`${internalBase()}/api/roadmap/${encodeURIComponent(projectId)}`, {
         cache: 'no-store',
+        headers: internalAuthHeaders(),
       });
       const refreshData = await refreshRes.json();
       const v = (refreshData.versions || []).find((x: any) => x.version === version);
@@ -282,6 +288,7 @@ export async function POST(
   try {
     const finalRes = await fetch(`${internalBase()}/api/roadmap/${encodeURIComponent(projectId)}`, {
       cache: 'no-store',
+      headers: internalAuthHeaders(),
     });
     const finalData = await finalRes.json();
     const v = (finalData.versions || []).find((x: any) => x.version === version);
