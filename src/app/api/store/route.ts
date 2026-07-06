@@ -26,6 +26,10 @@ import { validateUpdateTaskPayload } from '@/lib/update-task-validation';
 import { canonicalizeTeammate } from '@/lib/canonicalize-teammate';
 import { resolveWakeTrigger } from '@/lib/wake-trigger';
 import { getRuntimeRegistry } from '@/lib/runtimes/registry';
+// #1645 — shared service layer: route + internal callers share one
+// implementation of updateProject side-effects (no HTTP self-fetch).
+import { updateProjectService, triggerAgentLoopService } from '@/lib/store-service';
+import { recordInternalCallFailure } from '@/lib/dispatch-ledger';
 // #1492 — stamp heldByHuman on task snapshots so the UI can render a STOP
 // badge on the card without an extra round-trip per task.
 import { isTaskHeldByHumanStop } from '@/lib/stop-window';
@@ -281,44 +285,10 @@ function checkAndTriggerStuckTask(task: any, store: StoreData, workspaceId: stri
   })();
 }
 
-/** Fire event-driven scheduler trigger for an agent when work lands in their backlog. Best-effort, non-blocking with retry. */
+/** Fire event-driven scheduler trigger for an agent when work lands in their backlog. Best-effort, non-blocking with retry.
+ * #1645: implementation moved to src/lib/store-service.ts (shared with internal callers). */
 function triggerAgentLoop(assignee: string, store: StoreData) {
-  if (!assignee) return;
-  // Resolve assignee name → agentId
-  const teammates = store.settings?.teammates || [];
-  const match = teammates.find((t: any) =>
-    t.name?.toLowerCase() === assignee.toLowerCase() ||
-    t.agentId === assignee.toLowerCase()
-  );
-  const agentId = match?.agentId;
-  if (!agentId) return;
-
-  // Fire-and-forget — retry logic runs async, never blocks the response
-  (async () => {
-    const MAX_RETRIES = 3;
-    const DELAYS = [1000, 5000, 15000]; // 1s, 5s, 15s
-    const apiKey = process.env.ORG_STUDIO_API_KEY || '';
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
-
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      try {
-        const res = await fetch(SCHEDULER_URL, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ action: 'trigger', agentId }),
-        });
-        if (res.ok) return; // success
-        console.warn(`triggerAgentLoop attempt ${attempt + 1} failed: HTTP ${res.status}`);
-      } catch (e: any) {
-        console.warn(`triggerAgentLoop attempt ${attempt + 1} error:`, e?.message || e);
-      }
-      if (attempt < MAX_RETRIES - 1) {
-        await new Promise(r => setTimeout(r, DELAYS[attempt]));
-      }
-    }
-    console.error(`triggerAgentLoop: all ${MAX_RETRIES} attempts failed for agent ${agentId}`);
-  })();
+  triggerAgentLoopService(assignee, store);
 }
 
 
@@ -1773,120 +1743,17 @@ export async function POST(req: NextRequest) {
 
       case 'updateProject': {
         console.log('[API:store:updateProject]', { id: payload.id, updates: JSON.stringify(payload.updates).slice(0, 500) });
-        
-        // Check if devOwner is changing
-        const oldProject = store.projects.find((p: any) => p.id === payload.id);
 
-        // Workspace guard
-        if (oldProject && !belongsToWorkspace(oldProject, workspace.id)) {
-          return NextResponse.json({ error: 'Forbidden — project belongs to another workspace' }, { status: 403 });
-        }
-
-        const newDevOwner = payload.updates?.devOwner;
-        const devOwnerChanged = newDevOwner && oldProject?.devOwner && newDevOwner !== oldProject.devOwner;
-
-        // PERF: Use targeted provider.updateProject() instead of full store write
-        await getStoreProvider(workspace.id).updateProject(payload.id, payload.updates);
-        console.log('[API:store:updateProject] completed for', payload.id);
-
-        // #1224: project-level autonomy.approvedThrough was a legacy bridge
-        // when approvals were a single scalar. Now approvals live as
-        // per-component approvedVersions[]. Strip any incoming scalar (the UI
-        // no longer writes it; this is just defense-in-depth) and skip the
-        // cascade — component-level updates fire their own promote retrigger
-        // via `updateComponent`.
-        if (payload.updates?.autonomy && 'approvedThrough' in payload.updates.autonomy) {
-          delete (payload.updates.autonomy as any).approvedThrough;
-        }
-        const newApproved: string | undefined = undefined;
-        const oldApproved: string | undefined = undefined;
-        if (newApproved && newApproved !== oldApproved) {
-          console.log(`[ApprovedThrough] ${payload.id}: ${oldApproved || 'null'} → ${newApproved}`);
-          // Fire-and-forget: attempt promote if there's a shipped current version
-          (async () => {
-            try {
-              const { promoteProjectToNextVersion } = await import('@/lib/project-state');
-              const pg = await import('pg');
-              const Pool = (pg as any).default?.Pool || (pg as any).Pool;
-              const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 3 });
-              const client = await pool.connect();
-              try {
-                const result = await promoteProjectToNextVersion(payload.id, client);
-                if (result.promoted) {
-                  console.log(`[ApprovedThrough] Promoted ${payload.id}: ${result.from} → ${result.to} (${result.movedTasks} tasks → backlog)`);
-                  // Trigger scheduler for devOwner
-                  const freshStore = await getStoreProvider(workspace.id).read();
-                  const proj = freshStore.projects.find((p: any) => p.id === payload.id);
-                  if (proj?.devOwner && result.movedTasks > 0) {
-                    triggerAgentLoop(proj.devOwner, freshStore);
-                  }
-                } else {
-                  console.log(`[ApprovedThrough] ${payload.id}: promote skipped — ${result.reason}`);
-                }
-              } finally {
-                client.release();
-                await pool.end();
-              }
-            } catch (e: any) {
-              console.error(`[ApprovedThrough] promote check failed for ${payload.id}:`, e?.message);
-            }
-          })();
-        }
-
-        // Log project state changes
-        if (payload.updates?.state && payload.updates.state !== oldProject?.state) {
-          console.log(`[ProjectState] ${payload.id}: ${oldProject?.state || 'undefined'} → ${payload.updates.state}`);
-          // When activating a previously inactive project, re-check promote
-          // in case horizon was bumped while inactive. (#1185 rename: was started/stopped)
-          const newActive = payload.updates.state === 'active' || payload.updates.state === 'started';
-          const oldInactive = oldProject?.state === 'inactive' || oldProject?.state === 'stopped';
-          if (newActive && oldInactive) {
-            (async () => {
-              try {
-                const { promoteProjectToNextVersion } = await import('@/lib/project-state');
-                const pg = await import('pg');
-                const Pool = (pg as any).default?.Pool || (pg as any).Pool;
-                const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 3 });
-                const client = await pool.connect();
-                try {
-                  const result = await promoteProjectToNextVersion(payload.id, client);
-                  if (result.promoted) {
-                    console.log(`[ProjectState] Restart promote ${payload.id}: ${result.from} → ${result.to} (${result.movedTasks} tasks → backlog)`);
-                    const freshStore = await getStoreProvider(workspace.id).read();
-                    const proj = freshStore.projects.find((p: any) => p.id === payload.id);
-                    if (proj?.devOwner && result.movedTasks > 0) {
-                      triggerAgentLoop(proj.devOwner, freshStore);
-                    }
-                  }
-                } finally {
-                  client.release();
-                  await pool.end();
-                }
-              } catch (e: any) {
-                console.error(`[ProjectState] restart promote failed for ${payload.id}:`, e?.message);
-              }
-            })();
-          }
+        // #1645: full behavior lives in the shared service layer so internal
+        // callers (roadmap route currentVersion sync) fire the exact same
+        // side-effects without an HTTP self-fetch. See src/lib/store-service.ts.
+        const result = await updateProjectService(workspace.id, payload.id, payload.updates, store);
+        if (!result.ok) {
+          return NextResponse.json({ error: result.error }, { status: result.status });
         }
 
         // Note: Vision cron management has been replaced by the Launch model
         // No auto-create/update/delete cron logic needed here anymore
-
-        // If devOwner changed, reassign active tasks (NOT done tasks) to new owner
-        if (devOwnerChanged) {
-          const projectTasks = store.tasks.filter((t: any) => 
-            t.projectId === payload.id && 
-            t.assignee?.toLowerCase() === oldProject.devOwner.toLowerCase()
-          );
-          for (const task of projectTasks) {
-            // Skip done tasks — they stay credited to whoever completed them
-            if (task.status === 'done') continue;
-            await getStoreProvider(workspace.id).updateTask(task.id, { assignee: newDevOwner });
-          }
-          if (projectTasks.filter((t: any) => t.status !== 'done').length > 0) {
-            console.log(`[DevOwner] Reassigned ${projectTasks.filter((t: any) => t.status !== 'done').length} active task(s) from ${oldProject.devOwner} to ${newDevOwner} (skipped ${projectTasks.filter((t: any) => t.status === 'done').length} done)`);
-          }
-        }
 
         return NextResponse.json({ ok: true });
       }
@@ -2327,7 +2194,12 @@ export async function POST(req: NextRequest) {
           loopCount: 0,
         });
 
-        // Trigger the agent's scheduler so they pick this up immediately
+        // Trigger the agent's scheduler so they pick this up immediately.
+        // #1645: was an unauthenticated fetch — /api/scheduler requires write
+        // scope (2026.5.28 tightening), so this silently 401'd and handoff
+        // recipients were never dispatched. Now sends the internal Bearer and
+        // counts failures (#1641). Keeps the agentId fallback (raw assignee
+        // string) that triggerAgentLoop doesn't have.
         try {
           const assignee = (task.assignee || '').toLowerCase();
           const teammates = store.settings?.teammates || [];
@@ -2336,13 +2208,22 @@ export async function POST(req: NextRequest) {
           );
           const agentId = teammate?.agentId || assignee;
           if (agentId) {
-            await fetch('http://localhost:4501/api/scheduler', {
+            const apiKey = process.env.ORG_STUDIO_API_KEY || '';
+            const res = await fetch(SCHEDULER_URL, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: {
+                'Content-Type': 'application/json',
+                ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+              },
               body: JSON.stringify({ action: 'trigger', agentId }),
             });
+            if (!res.ok) {
+              recordInternalCallFailure('store-route:addHandoff-trigger', '/api/scheduler', res.status, 'http-status');
+              console.warn(`addHandoff: trigger returned ${res.status} for ${agentId}`);
+            }
           }
         } catch (e: any) {
+          recordInternalCallFailure('store-route:addHandoff-trigger', '/api/scheduler', null, 'fetch-throw');
           console.warn('addHandoff: trigger failed:', e?.message);
         }
 
