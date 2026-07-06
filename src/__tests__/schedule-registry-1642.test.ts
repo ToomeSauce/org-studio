@@ -131,10 +131,26 @@ describe('buildScheduleRegistry', () => {
     expect(snap.entries.filter((e) => e.source === 'org-studio-loop')).toHaveLength(2);
     expect(snap.entries.filter((e) => e.source === 'gateway-cron')).toHaveLength(2);
     expect(snap.entries.filter((e) => e.source === 'server-interval')).toHaveLength(SERVER_INTERVALS.length);
-    // The seeded orphan agentTurn cron is the only model-call schedule.
+    // The seeded orphan agentTurn cron is the only model-call schedule
+    // counted against the #1633 guard (it's scheduler-shaped and orphaned).
     expect(snap.modelCallScheduleCount).toBe(1);
+    expect(snap.operatorModelCallCrons).toBe(0);
     // And it also shows up as a drift finding (fake orphan detected within one cycle).
     expect(snap.findings.some((f) => f.kind === 'orphan' && f.scheduleId === 'cron-1')).toBe(true);
+  });
+
+  it('operator-owned model-call crons are informational, not #1633 violations', async () => {
+    const snap = await buildScheduleRegistry({
+      loops: baseLoops,
+      listGatewayJobs: async () => [
+        // Legit operator cron: heavy agentTurn but NOT scheduler-shaped —
+        // e.g. the Garage trading runs or weekly reports.
+        { id: 'cron-trading', name: 'Garage: Morning Trading', enabled: true, schedule: { kind: 'cron', expr: '30 9 * * 1-5' }, payload: { kind: 'agentTurn', message: 'analyze and submit orders' } },
+      ],
+    });
+    expect(snap.modelCallScheduleCount).toBe(0); // not counted against the guard
+    expect(snap.operatorModelCallCrons).toBe(1); // but visible
+    expect(snap.findings).toHaveLength(0);
   });
 
   it('#1633 invariant: zero enabled model-call schedules in the DECLARED baseline', async () => {

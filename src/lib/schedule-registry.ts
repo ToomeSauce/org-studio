@@ -61,7 +61,15 @@ export interface ScheduleRegistrySnapshot {
   entries: ScheduleEntry[];
   findings: DriftFinding[];
   gatewayReachable: boolean;
-  modelCallScheduleCount: number; // #1633 regression guard: expect 0 unconditional
+  /**
+   * #1633 regression guard — counts enabled model-call schedules that ORG
+   * STUDIO declares (loops, server intervals) or that drift analysis flagged
+   * as scheduler orphans. Expected 0. Operator-owned gateway crons (trading
+   * runs, email checks, reports) are model-call by design and are counted
+   * separately in operatorModelCallCrons — informational, not a violation.
+   */
+  modelCallScheduleCount: number;
+  operatorModelCallCrons: number;
 }
 
 /**
@@ -228,8 +236,21 @@ export async function buildScheduleRegistry(deps: {
     heartbeatsByAgent: deps.heartbeatsByAgent,
   });
 
+  // #1633 guard scope: Org Studio's own declared schedules + orphaned
+  // scheduler crons. Operator crons are model-call by design — informational.
+  const orphanIds = new Set(findings.filter((f) => f.kind === 'orphan').map((f) => f.scheduleId));
   const modelCallScheduleCount = entries.filter(
-    (e) => e.costClass === 'model-call' && e.enabled,
+    (e) =>
+      e.costClass === 'model-call' &&
+      e.enabled &&
+      (e.source !== 'gateway-cron' || orphanIds.has(e.id)),
+  ).length;
+  const operatorModelCallCrons = entries.filter(
+    (e) =>
+      e.costClass === 'model-call' &&
+      e.enabled &&
+      e.source === 'gateway-cron' &&
+      !orphanIds.has(e.id),
   ).length;
 
   return {
@@ -238,6 +259,7 @@ export async function buildScheduleRegistry(deps: {
     findings,
     gatewayReachable,
     modelCallScheduleCount,
+    operatorModelCallCrons,
   };
 }
 

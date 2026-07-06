@@ -264,7 +264,12 @@ function SchedulesPanel() {
         </span>
         {modelCallCount > 0 && (
           <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">
-            ⚠ {modelCallCount} enabled model-call schedule{modelCallCount > 1 ? 's' : ''} (#1633 expects 0)
+            ⚠ {modelCallCount} scheduler-owned model-call schedule{modelCallCount > 1 ? 's' : ''} (#1633 expects 0)
+          </span>
+        )}
+        {snap.operatorModelCallCrons > 0 && (
+          <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+            {snap.operatorModelCallCrons} operator model-call cron{snap.operatorModelCallCrons > 1 ? 's' : ''}
           </span>
         )}
         {!snap.gatewayReachable && (
