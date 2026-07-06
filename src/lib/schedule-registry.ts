@@ -325,14 +325,23 @@ export function persistFindings(findings: DriftFinding[], generatedAt: string): 
           _findingsTableEnsured = true;
         }
         // Replace-current semantics: delete previous snapshot, insert new.
-        await client.query(`DELETE FROM org_studio_schedule_drift_findings`);
-        for (const f of findings) {
-          await client.query(
-            `INSERT INTO org_studio_schedule_drift_findings
-               (kind, schedule_id, source, name, explanation, reconciled_at)
-             VALUES ($1,$2,$3,$4,$5,$6)`,
-            [f.kind, f.scheduleId, f.source, f.name, f.explanation, generatedAt],
-          );
+        // Transactional — two concurrent reconciles interleaving delete/insert
+        // otherwise leave a partial findings set (observed on first deploy).
+        await client.query('BEGIN');
+        try {
+          await client.query(`DELETE FROM org_studio_schedule_drift_findings`);
+          for (const f of findings) {
+            await client.query(
+              `INSERT INTO org_studio_schedule_drift_findings
+                 (kind, schedule_id, source, name, explanation, reconciled_at)
+               VALUES ($1,$2,$3,$4,$5,$6)`,
+              [f.kind, f.scheduleId, f.source, f.name, f.explanation, generatedAt],
+            );
+          }
+          await client.query('COMMIT');
+        } catch (txErr) {
+          await client.query('ROLLBACK').catch(() => {});
+          throw txErr;
         }
       } finally {
         client.release();
