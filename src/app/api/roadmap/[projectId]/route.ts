@@ -181,15 +181,13 @@ export async function GET(
           };
         });
 
-        // Derive item.done from linked task status (don't trust stored done flag)
-        let allTasks: any[] = [];
-        try {
-          const storeRes = await fetch(`http://127.0.0.1:${process.env.PORT || 4501}/api/store`);
-          if (storeRes.ok) {
-            const storeData = await storeRes.json();
-            allTasks = storeData.tasks || [];
-          }
-        } catch {}
+        // Derive item.done from linked task status (don't trust stored done flag).
+        // #1640 — read via the store provider (already workspace-scoped above),
+        // NOT an HTTP self-fetch of /api/store: after #1624's cloud read gate,
+        // an unauthenticated internal fetch 401s silently, allTasks came back
+        // empty, and every taskId-linked item was clobbered to done:false
+        // (progress bars showed 0/N on fully-shipped versions).
+        const allTasks: any[] = store.tasks || [];
         const taskStatusById = new Map(allTasks.map((t: any) => [t.id, t.status]));
         // #1381 — also map taskId → ticketNumber so we can render (#NNN) server-side.
         const taskNumberById = new Map(allTasks.map((t: any) => [t.id, t.ticketNumber]));
@@ -199,7 +197,12 @@ export async function GET(
           for (const item of ver.items || []) {
             if (item.taskId) {
               const taskStatus = taskStatusById.get(item.taskId);
-              item.done = taskStatus === 'done';
+              // #1640 — only derive when the linked task actually resolves.
+              // A dangling taskId (task deleted / other workspace) keeps the
+              // stored done flag instead of being force-clobbered to false.
+              if (taskStatus !== undefined) {
+                item.done = taskStatus === 'done';
+              }
               // #1381 — surface taskTicketNumber + a server-rendered displayTitle
               // so UI sites no longer need to keep (#NNN) baked into the stored
               // title string. We also strip any already-baked (#NNN) suffix from
