@@ -32,6 +32,10 @@ const WeeklyDigestSection = dynamic(() => import('@/components/WeeklyDigestSecti
   ssr: false,
   loading: () => <div className="h-32 animate-pulse bg-[var(--bg-secondary)] rounded-[var(--radius-md)]" />,
 });
+const CostAnalyticsSection = dynamic(() => import('@/components/CostAnalyticsSection'), {
+  ssr: false,
+  loading: () => <div className="h-32 animate-pulse bg-[var(--bg-secondary)] rounded-[var(--radius-md)]" />,
+});
 
 interface Teammate {
   agentId?: string;
@@ -239,6 +243,9 @@ export default function PerformancePage() {
 
         {/* Weekly Digest */}
         <WeeklyDigestSection />
+
+        {/* Token & Cost Analytics (#1644) */}
+        <CostAnalyticsSection />
 
         {/* Team Health Section */}
         <TeamHealthSection />
