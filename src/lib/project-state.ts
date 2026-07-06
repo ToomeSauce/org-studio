@@ -483,8 +483,12 @@ export async function promoteProjectToNextVersion(
                loop_count = 0,
                loop_paused_at = NULL,
                loop_pause_reason = NULL,
-               claim_started_at = NULL,
-               claim_lease_expires_at = NULL
+               -- claim-lease fields live in the data JSONB bag (store-provider
+               -- reads them via data->>'claim_started_at'), NOT typed columns.
+               -- Referencing them as columns made this UPDATE throw per-item
+               -- ('column "claim_started_at" does not exist'), silently
+               -- caught below — launch reported 0 tasks moved (2026-07-06).
+               data = (COALESCE(data, '{}'::jsonb) - 'claim_started_at' - 'claim_lease_expires_at')
            WHERE id = $4 AND workspace_id = $5 AND status = $6`,
           [updates.status, targetVersion, devOwner, item.taskId, wsId, 'planning', historyEntry, updates.lastActivityAt],
         );
