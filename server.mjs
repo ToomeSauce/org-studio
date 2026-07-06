@@ -28,6 +28,7 @@ import { ensureHeartbeatSchema, startLoopWatchdog, logIncident } from './lib/hea
 import { ensureOutboxSchema, startOutboxWorker } from './lib/outbox.mjs';
 import { ensureSkillInstallsSchema, runDriftCheck } from './lib/skill-installs.mjs';
 import { initHealthAlerts, sendHealthAlert, isHealthAlertsEnabled } from './lib/health-alerts.mjs';
+import { startHostSampler } from './lib/host-sampler.mjs';
 import { verifyWebhookSignature, resolveWebhookSecret } from './lib/webhook-auth.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -2664,6 +2665,34 @@ server.listen(port, async () => {
 
   // Initialize health alerts (startup log)
   initHealthAlerts();
+
+  // #1643 — host-signal sampler (load/event-loop-delay/mem every 30s, direct
+  // pg — deliberately not an internal HTTP self-fetch) + breaker drain tick.
+  // The drain refires budget-queued dispatch intents when under budget and
+  // runs the throttled anomaly checks. Skipped alongside the outbox worker
+  // guard: environments without local runtimes shouldn't refire dispatches.
+  startHostSampler();
+  if (!(process.env.OUTBOX_WORKER_DISABLED === '1' || process.env.OUTBOX_WORKER_DISABLED === 'true')) {
+    const BREAKER_DRAIN_MS = 60 * 1000;
+    setInterval(async () => {
+      try {
+        const res = await fetch(`http://127.0.0.1:${port}/api/scheduler`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${process.env.ORG_STUDIO_API_KEY || ''}`,
+          },
+          body: JSON.stringify({ action: 'breaker-drain' }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.drained?.length > 0) {
+            console.log(`[DispatchBreaker] drain tick refired: ${data.drained.join(', ')} (${data.remaining} still queued)`);
+          }
+        }
+      } catch { /* non-fatal — next tick retries */ }
+    }, BREAKER_DRAIN_MS).unref?.();
+  }
 
   // --- Telegram comms deprecation notice (v0.15) ---
   if (!ENABLE_TELEGRAM_COMMS) {

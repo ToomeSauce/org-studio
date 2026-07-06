@@ -94,6 +94,8 @@ export const SERVER_INTERVALS: Omit<ScheduleEntry, 'lastFire'>[] = [
   { id: 'srv-outbox-prune', source: 'server-interval', name: 'Outbox sent-row prune', owner: 'system', intervalDescription: 'periodic', costClass: 'query', enabled: true },
   { id: 'srv-heartbeats-tick', source: 'server-interval', name: 'Agent heartbeat staleness tick (lib/heartbeats)', owner: 'system', intervalDescription: 'periodic', costClass: 'query', enabled: true, detail: 'Can TRIGGER restart dispatches; those are ledgered (#1641)' },
   { id: 'srv-schedule-drift-reconcile', source: 'server-interval', name: 'Schedule-drift reconcile (#1642)', owner: 'system', intervalDescription: '24h', costClass: 'query', enabled: true, detail: 'This registry\'s own daily tick — self-inventoried' },
+  { id: 'srv-breaker-drain', source: 'server-interval', name: 'Dispatch-breaker drain tick (#1643)', owner: 'system', intervalDescription: '1m', costClass: 'query', enabled: true, detail: 'Refires budget-queued dispatch intents when under budget; refired dispatches are ledgered (#1641). Also runs throttled anomaly checks.' },
+  { id: 'srv-host-sampler', source: 'server-interval', name: 'Host-signal sampler (#1643)', owner: 'system', intervalDescription: '30s', costClass: 'query', enabled: true, detail: 'load1/event-loop-delay/mem → org_studio_host_samples (direct pg, not an internal self-fetch)' },
 ];
 
 /** Classify a gateway cron job's cost class from its payload shape. */

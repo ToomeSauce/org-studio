@@ -17,6 +17,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cloudReadGate } from '@/lib/read-gate';
 import { getObservabilitySummary } from '@/lib/dispatch-ledger';
+import { getBreakerSummary } from '@/lib/dispatch-breaker';
+import { getStoreProviderAllWorkspaces } from '@/lib/store-provider';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,5 +41,19 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  return NextResponse.json(summary);
+  // #1643 — breaker/budget/host-sample panel. Best-effort: a failure here
+  // must not take down the T1 summary.
+  let breaker = null;
+  try {
+    const provider = getStoreProviderAllWorkspaces() as any;
+    const settings =
+      typeof provider.readSlim === 'function'
+        ? (await provider.readSlim())?.settings
+        : (await provider.read())?.settings;
+    breaker = await getBreakerSummary(settings, windowMinutes);
+  } catch {
+    breaker = null;
+  }
+
+  return NextResponse.json({ ...summary, breaker });
 }

@@ -144,6 +144,7 @@ export type DispatchOutcome =
   | 'enqueued'          // dispatch message enqueued to outbox
   | 'no-work'           // buildDispatchMessage found nothing actionable
   | 'skipped-in-flight' // agent already mid-turn
+  | 'budget-queued'     // #1643 — over budget; intent queued by the breaker
   | 'enqueue-failed';   // enqueueOutbox threw
 
 export interface LedgerDispatch {

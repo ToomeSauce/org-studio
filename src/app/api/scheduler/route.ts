@@ -20,6 +20,13 @@ import {
   recordDispatch,
   type DispatchOutcome as LedgerOutcome,
 } from '@/lib/dispatch-ledger';
+import {
+  gateDispatch,
+  drainQueue,
+  checkAnomalies,
+  pruneHostSamples,
+  resolveBudgetConfig,
+} from '@/lib/dispatch-breaker';
 import { getStoreProviderAllWorkspaces, type StoreData } from '@/lib/store-provider';
 import { bounceLeaseLevel3, type BounceProvider } from '@/lib/lease-bounce';
 import {
@@ -870,6 +877,8 @@ export function clearInFlightAgent(agentId: string) {
  *   cron-retry    — inline retry after enqueueOutbox failure.
  *   cron-fallback — fallback when an existing cron job is missing.
  *   resume        — re-trigger after a comment-driven resume.
+ *   breaker-drain — #1643: refire of a budget-queued dispatch intent by the
+ *                   breaker drain tick.
  *   manual        — explicit human/CLI trigger of fireOneShot.
  */
 type FireOneShotSource =
@@ -879,6 +888,7 @@ type FireOneShotSource =
   | 'cron-retry'
   | 'cron-fallback'
   | 'resume'
+  | 'breaker-drain'
   | 'manual';
 
 async function fireOneShot(
@@ -993,6 +1003,36 @@ async function fireOneShot(
     console.log(`[Dispatch src=${source}] skipping ${agentName} — already in-flight`);
     recordDispatch({ ...ledgerBase, outcome: 'skipped-in-flight' as LedgerOutcome });
     return undefined;
+  }
+
+  // #1643 — dispatch budget gate (circuit breaker). Lives INSIDE fireOneShot
+  // so all call sites are covered by construction (#1521/#1641 pattern).
+  // Over budget → the breaker QUEUES the dispatch intent (never drops) and
+  // opens a breach window (which alerts exactly once via the #1621 webhook).
+  // The gate fails OPEN on substrate errors — a broken observability layer
+  // must never stall the org. Skipped for 'breaker-drain' refires? No —
+  // drain refires go through the gate too (safe cycle: re-queue if the
+  // budget was exhausted mid-drain), so work is deferred, never lost.
+  {
+    const budgetCfg = resolveBudgetConfig(store.settings);
+    const gate = await gateDispatch({
+      cfg: budgetCfg,
+      agentId: loop.agentId,
+      source,
+      concurrent: getInFlightAgents().length,
+      workspaceId: 'default-workspace',
+    });
+    if (!gate.allow) {
+      console.warn(
+        `[Dispatch src=${source}] budget breaker queued ${agentName} — ${gate.reason}`,
+      );
+      recordDispatch({
+        ...ledgerBase,
+        outcome: 'budget-queued' as LedgerOutcome,
+        triggerReason: gate.reason,
+      });
+      return undefined;
+    }
   }
 
   // #948: Removed redundant `hasInProgressTask` concurrency gate.
@@ -1984,6 +2024,31 @@ export async function POST(request: NextRequest) {
         });
 
         return NextResponse.json({ ok: true, swept, steward: { nudged: stewardNudged, escalated: stewardEscalated }, proposeNext: { nudged: proposeNudged }, metricCapture: { polled: metricsPolled } });
+      }
+
+      case 'breaker-drain': {
+        // #1643 — breaker drain tick. Called by server.mjs on an interval
+        // (registered in SERVER_INTERVALS, #1642). Refires queued dispatch
+        // intents while under budget; the refire goes back through the
+        // budget gate inside fireOneShot, so an exhausted budget re-queues
+        // instead of dropping. Also runs the (5-min-throttled) anomaly
+        // checks and prunes old host samples, so one interval covers T3's
+        // background surface.
+        const drainStore = await readStore();
+        const cfg = resolveBudgetConfig(drainStore.settings);
+        const result = await drainQueue({
+          cfg,
+          concurrent: getInFlightAgents().length,
+          workspaceId: 'default-workspace',
+          refire: async (agentId: string, _origSource: string) => {
+            const loop = getLoopByAgent(drainStore, agentId);
+            if (!loop) return; // loop disabled since queueing — intent already marked drained; store-event triggers cover re-entry
+            await fireOneShot(drainStore, loop, 'breaker-drain');
+          },
+        });
+        await checkAnomalies({ cfg, workspaceId: 'default-workspace' });
+        void pruneHostSamples();
+        return NextResponse.json({ ok: true, ...result });
       }
 
       case 'escalate-stale-backlog': {

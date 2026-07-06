@@ -328,6 +328,134 @@ function BackupHistorySection() {
 }
 
 /** Data Storage section — shows current storage mode and connection info */
+function DispatchBudgetSection() {
+  // #1643 — per-workspace dispatch budget (circuit breaker) config.
+  // Stored in settings.dispatchBudget via the normal updateSettings path.
+  const DEFAULTS = { enabled: true, maxTurnsPerHour: 30, maxConcurrentTurns: 4, turnDurationCeilingMs: 20 * 60 * 1000 };
+  const [cfg, setCfg] = useState<any>(DEFAULTS);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/store')
+      .then(r => r.json())
+      .then(data => {
+        const raw = data?.settings?.dispatchBudget || {};
+        setCfg({
+          enabled: raw.enabled !== false,
+          maxTurnsPerHour: raw.maxTurnsPerHour ?? DEFAULTS.maxTurnsPerHour,
+          maxConcurrentTurns: raw.maxConcurrentTurns ?? DEFAULTS.maxConcurrentTurns,
+          turnDurationCeilingMs: raw.turnDurationCeilingMs ?? DEFAULTS.turnDurationCeilingMs,
+        });
+      })
+      .catch(() => {})
+      .finally(() => setLoaded(true));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await fetch('/api/store', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'updateSettings', settings: { dispatchBudget: cfg } }),
+      });
+      setDirty(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const setNum = (key: string, v: string, min: number) => {
+    const n = parseInt(v, 10);
+    setCfg((c: any) => ({ ...c, [key]: Number.isFinite(n) && n >= min ? n : c[key] }));
+    setDirty(true);
+  };
+
+  return (
+    <section className="bg-[var(--card)] border border-[var(--border-default)] rounded-[var(--radius-lg)] p-5 space-y-4 shadow-[var(--shadow-sm),inset_0_1px_0_var(--card-highlight)]">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-[var(--text-sm)] font-semibold text-[var(--text-primary)]">Dispatch Budget</h2>
+          <p className="text-[var(--text-xs)] text-[var(--text-tertiary)] mt-0.5">
+            Circuit breaker for agent dispatches. Over-budget dispatches are queued (never dropped) and drain automatically. One summarized health alert per breach window.
+          </p>
+        </div>
+        <button
+          onClick={save}
+          disabled={!dirty || saving}
+          className="flex items-center gap-1.5 px-3 py-1.5 min-h-[44px] rounded-[var(--radius-md)] text-[var(--text-xs)] font-medium border transition-all disabled:opacity-40 disabled:cursor-not-allowed bg-[var(--accent-primary)] text-white border-[var(--accent-primary)] hover:bg-[var(--accent-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)]"
+        >
+          <Save size={13} /> {saving ? 'Saving...' : 'Save'}
+        </button>
+      </div>
+
+      {!loaded ? (
+        <p className="text-[var(--text-xs)] text-[var(--text-muted)]">Loading…</p>
+      ) : (
+        <div className="space-y-3">
+          <label className="flex items-center gap-2 text-[var(--text-sm)] text-[var(--text-secondary)] cursor-pointer">
+            <input
+              type="checkbox"
+              checked={cfg.enabled}
+              onChange={e => { setCfg((c: any) => ({ ...c, enabled: e.target.checked })); setDirty(true); }}
+              className="accent-[var(--accent-primary)]"
+            />
+            Budget enforcement enabled
+          </label>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label htmlFor="budget-turns-hour" className="text-[var(--text-xs)] text-[var(--text-tertiary)] block mb-1">Max turns / hour</label>
+              <input
+                id="budget-turns-hour"
+                type="number"
+                min={1}
+                value={cfg.maxTurnsPerHour}
+                onChange={e => setNum('maxTurnsPerHour', e.target.value, 1)}
+                className="w-full bg-[var(--bg-primary)] border border-[var(--border-default)] rounded-[var(--radius-md)] px-3 py-2 text-[var(--text-sm)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+              />
+            </div>
+            <div>
+              <label htmlFor="budget-concurrent" className="text-[var(--text-xs)] text-[var(--text-tertiary)] block mb-1">Max concurrent turns</label>
+              <input
+                id="budget-concurrent"
+                type="number"
+                min={1}
+                value={cfg.maxConcurrentTurns}
+                onChange={e => setNum('maxConcurrentTurns', e.target.value, 1)}
+                className="w-full bg-[var(--bg-primary)] border border-[var(--border-default)] rounded-[var(--radius-md)] px-3 py-2 text-[var(--text-sm)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+              />
+            </div>
+            <div>
+              <label htmlFor="budget-ceiling" className="text-[var(--text-xs)] text-[var(--text-tertiary)] block mb-1">Turn ceiling (minutes)</label>
+              <input
+                id="budget-ceiling"
+                type="number"
+                min={1}
+                value={Math.round(cfg.turnDurationCeilingMs / 60000)}
+                onChange={e => {
+                  const mins = parseInt(e.target.value, 10);
+                  if (Number.isFinite(mins) && mins >= 1) {
+                    setCfg((c: any) => ({ ...c, turnDurationCeilingMs: mins * 60000 }));
+                    setDirty(true);
+                  }
+                }}
+                className="w-full bg-[var(--bg-primary)] border border-[var(--border-default)] rounded-[var(--radius-md)] px-3 py-2 text-[var(--text-sm)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+              />
+            </div>
+          </div>
+          <p className="text-[var(--text-xs)] text-[var(--text-muted)]">
+            Turns longer than the ceiling trigger an anomaly alert. Queue + breach windows are visible at <code className="text-[10px] bg-[var(--bg-tertiary)] px-1 py-0.5 rounded font-mono">/api/observability</code>.
+          </p>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function DataStorageSection() {
   const [storageInfo, setStorageInfo] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -782,6 +910,9 @@ export default function SettingsPage() {
           className="w-full bg-[var(--bg-primary)] border border-[var(--border-default)] rounded-[var(--radius-md)] px-4 py-3 text-[var(--text-sm)] text-[var(--text-primary)] placeholder:text-[var(--text-muted)] resize-y focus:outline-none focus:border-[var(--accent-primary)] focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] transition-colors font-mono leading-relaxed min-h-[100px]"
         />
       </section>
+
+      {/* Dispatch Budget (#1643) */}
+      <DispatchBudgetSection />
 
       {/* Onboarding Reset */}
       <ResetOnboardingSection />
