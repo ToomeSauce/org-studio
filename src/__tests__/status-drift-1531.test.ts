@@ -93,8 +93,13 @@ describe('#1531 — promoteProjectToNextVersion writes status_history atomically
     expect(taskUpdate!.sql).toMatch(/loop_count\s*=\s*0/i);
 
     // #1535 — claim lease must be cleared on transition OUT of in-progress.
-    expect(taskUpdate!.sql).toMatch(/claim_started_at\s*=\s*NULL/i);
-    expect(taskUpdate!.sql).toMatch(/claim_lease_expires_at\s*=\s*NULL/i);
+    // 2026-07-06: claim fields live in the `data` JSONB bag, NOT typed columns
+    // (store-provider reads data->>'claim_started_at'). The original typed-
+    // column form threw 'column does not exist' per item — caught silently —
+    // and every launch since #1535 reported success with movedTasks:0. The
+    // clear now strips the keys from the data bag.
+    expect(taskUpdate!.sql).toMatch(/data\s*=\s*\(COALESCE\(data, '\{\}'::jsonb\)\s*-\s*'claim_started_at'\s*-\s*'claim_lease_expires_at'\)/i);
+    expect(taskUpdate!.sql).not.toMatch(/claim_started_at\s*=\s*NULL/i); // typed-column form must not come back
 
     // And the result reports the move.
     expect(result.promoted).toBe(true);
