@@ -24,6 +24,8 @@
 import { isVersionGreater } from './version-utils';
 import { promoteProjectToNextVersion } from './project-state';
 import { sendVersionShippedNudge } from './vision-notify';
+import { internalAuthHeaders } from './read-gate';
+import { recordInternalCallFailure } from './dispatch-ledger';
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -38,8 +40,16 @@ function triggerSchedulerForAgent(assigneeName: string): void {
   (async () => {
     try {
       // Resolve display name → agentId
-      const storeRes = await fetch('http://localhost:4501/api/store');
-      if (!storeRes.ok) return;
+      // #1645: was an unauthenticated GET — cloud mode's read gate 401s it,
+      // the early-return swallowed the failure, and auto-advance dispatch
+      // silently never fired (#1640 class). Now authed + counted.
+      const storeRes = await fetch('http://localhost:4501/api/store', {
+        headers: internalAuthHeaders(),
+      });
+      if (!storeRes.ok) {
+        recordInternalCallFailure('roadmap-sync:trigger-store-read', '/api/store', storeRes.status, 'http-status');
+        return;
+      }
       const store = await storeRes.json();
       const teammates: any[] = store?.settings?.teammates || [];
       const match = teammates.find((t: any) =>
@@ -107,10 +117,15 @@ function fireVersionShippedNudge(
       // Read teammates from store API (same pattern as triggerSchedulerForAgent above).
       let teammates: any[] = [];
       try {
-        const storeRes = await fetch('http://localhost:4501/api/store');
+        // #1645: authed internal read + failure counter (was unauthenticated).
+        const storeRes = await fetch('http://localhost:4501/api/store', {
+          headers: internalAuthHeaders(),
+        });
         if (storeRes.ok) {
           const store = await storeRes.json();
           teammates = store?.settings?.teammates || [];
+        } else {
+          recordInternalCallFailure('roadmap-sync:nudge-store-read', '/api/store', storeRes.status, 'http-status');
         }
       } catch { /* fall through with empty teammates — helper will skip */ }
 
