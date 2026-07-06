@@ -32,6 +32,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
+import { recordInternalCallFailure } from '@/lib/dispatch-ledger';
 
 const ALLOWED_PRIORITY = new Set(['low', 'medium', 'high', 'critical']);
 
@@ -98,6 +99,8 @@ export async function POST(
       cache: 'no-store',
     });
     if (!roadmapRes.ok) {
+      // #1641 — count internal-call failures even when surfaced (trend signal).
+      recordInternalCallFailure('ticket-route:precheck', '/api/roadmap', roadmapRes.status, 'http-status');
       return NextResponse.json(
         { error: 'roadmap_lookup_failed', status: roadmapRes.status },
         { status: 502 }

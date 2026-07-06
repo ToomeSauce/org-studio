@@ -6,6 +6,7 @@ import { checkArchivedProject } from '@/lib/archived-project-compat';
 import { versionSortKey, compareVersions, isValidVersion } from '@/lib/version-utils';
 import { renameVersionInProjectData, rvDerivedId } from '@/lib/roadmap-rename';
 import { syncProjectShadowVersion } from '@/lib/roadmap-sync';
+import { recordInternalCallFailure } from '@/lib/dispatch-ledger';
 import { validateMetricSource } from '@/lib/metric-source';
 
 // #1461 — allow-list for version_type (must match the DB CHECK constraint
@@ -533,11 +534,14 @@ export async function POST(
                       }),
                     },
                   );
-                  if (!storeRes.ok)
+                  if (!storeRes.ok) {
+                    recordInternalCallFailure('roadmap-route:rename-currentVersion-sync', '/api/store', storeRes.status, 'http-status');
                     console.warn(
                       `[Roadmap] Failed to sync currentVersion to project after rename: ${storeRes.status}`,
                     );
+                  }
                 } catch (e) {
+                  recordInternalCallFailure('roadmap-route:rename-currentVersion-sync', '/api/store', null, 'fetch-throw');
                   console.warn(
                     '[Roadmap] Failed to sync currentVersion to project after rename:',
                     e,
@@ -711,8 +715,12 @@ export async function POST(
                   updates: { currentVersion: version },
                 }),
               });
-              if (!storeRes.ok) console.warn(`[Roadmap] Failed to sync currentVersion to project: ${storeRes.status}`);
+              if (!storeRes.ok) {
+                recordInternalCallFailure('roadmap-route:upsert-currentVersion-sync', '/api/store', storeRes.status, 'http-status');
+                console.warn(`[Roadmap] Failed to sync currentVersion to project: ${storeRes.status}`);
+              }
             } catch (e) {
+              recordInternalCallFailure('roadmap-route:upsert-currentVersion-sync', '/api/store', null, 'fetch-throw');
               console.warn('[Roadmap] Failed to sync currentVersion to project:', e);
             }
           }
@@ -872,6 +880,7 @@ export async function POST(
                 body: JSON.stringify({ action: 'updateProject', id: projectId, updates: { currentVersion: version } }),
               });
             } catch (e) {
+              recordInternalCallFailure('roadmap-route:create-currentVersion-sync', '/api/store', null, 'fetch-throw');
               console.warn('[Roadmap #1461 create] currentVersion sync failed:', (e as any)?.message || e);
             }
           }
@@ -1065,6 +1074,7 @@ export async function POST(
                 body: JSON.stringify({ action: 'updateProject', id: projectId, updates: { currentVersion: version } }),
               });
             } catch (e) {
+              recordInternalCallFailure('roadmap-route:patch-currentVersion-sync', '/api/store', null, 'fetch-throw');
               console.warn('[Roadmap #1461 patch] currentVersion sync failed:', (e as any)?.message || e);
             }
           }

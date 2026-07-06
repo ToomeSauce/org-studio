@@ -16,6 +16,10 @@ import { buildDispatchMessage, clearConsumedHandoffs } from '@/lib/scheduler';
 import type { AgentLoop } from '@/lib/store';
 import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 import { writeHeartbeat } from '@/lib/heartbeats';
+import {
+  recordDispatch,
+  type DispatchOutcome as LedgerOutcome,
+} from '@/lib/dispatch-ledger';
 import { getStoreProviderAllWorkspaces, type StoreData } from '@/lib/store-provider';
 import { bounceLeaseLevel3, type BounceProvider } from '@/lib/lease-bounce';
 import {
@@ -845,7 +849,7 @@ async function checkGateway(): Promise<boolean> {
  */
 
 // In-flight tracking — shared with store route via scheduler-bridge
-import { setInFlightAgent, clearInFlightAgent as bridgeClearInFlight, isInFlight } from '@/lib/runtimes/scheduler-bridge';
+import { setInFlightAgent, clearInFlightAgent as bridgeClearInFlight, isInFlight, getInFlightAgents } from '@/lib/runtimes/scheduler-bridge';
 
 // Re-export for backward compat
 export function clearInFlightAgent(agentId: string) {
@@ -974,9 +978,20 @@ async function fireOneShot(
       `readMs=${readMs} tickets=[${agentTicketStatuses}]`,
   );
 
+  // #1641 — ledger writes are fire-and-forget; capture the shared fields
+  // once so every outcome branch below records with identical context.
+  const ledgerBase = {
+    agentId: loop.agentId,
+    source,
+    readMs,
+    ticketFingerprint: agentTicketStatuses,
+    concurrentDispatchCount: getInFlightAgents().length,
+  };
+
   // Prevent duplicate dispatch if agent is already in-flight
   if (isInFlight(loop.agentId)) {
     console.log(`[Dispatch src=${source}] skipping ${agentName} — already in-flight`);
+    recordDispatch({ ...ledgerBase, outcome: 'skipped-in-flight' as LedgerOutcome });
     return undefined;
   }
 
@@ -1000,6 +1015,7 @@ async function fireOneShot(
   const message = await buildDispatchMessage(store, loop.agentId, agentName, agentRole);
   if (!message) {
     // No actionable work to dispatch
+    recordDispatch({ ...ledgerBase, outcome: 'no-work' as LedgerOutcome });
     return undefined;
   }
 
@@ -1048,9 +1064,22 @@ async function fireOneShot(
       // Heartbeat failures must never break scheduler execution
     }
 
+    // #1641 — ledger row keyed by idempotencyKey so the outbox-drain
+    // completion callback can close it out (duration_ms).
+    recordDispatch({
+      ...ledgerBase,
+      dispatchId: idempotencyKey,
+      outcome: 'enqueued' as LedgerOutcome,
+    });
+
     return sessionKey;
   } catch (e: any) {
     console.error(`fireOneShot: enqueueOutbox failed for ${agentName}:`, e?.message || e);
+    recordDispatch({
+      ...ledgerBase,
+      outcome: 'enqueue-failed' as LedgerOutcome,
+      triggerReason: String(e?.message || e).slice(0, 200),
+    });
     // Clear in-flight on failure so agent can be retried
     bridgeClearInFlight(loop.agentId);
 
