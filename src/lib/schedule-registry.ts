@@ -329,6 +329,10 @@ export function persistFindings(findings: DriftFinding[], generatedAt: string): 
         // otherwise leave a partial findings set (observed on first deploy).
         await client.query('BEGIN');
         try {
+          // Serialize concurrent replaces: without this, txn B's DELETE can
+          // run before txn A commits — both insert, doubling the snapshot
+          // (observed: 14 rows from 7 findings under two parallel GETs).
+          await client.query(`SELECT pg_advisory_xact_lock(1642)`);
           await client.query(`DELETE FROM org_studio_schedule_drift_findings`);
           for (const f of findings) {
             await client.query(
