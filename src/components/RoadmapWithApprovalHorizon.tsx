@@ -6,6 +6,7 @@ import { clsx } from 'clsx';
 import { compareVersions } from '@/lib/version-utils';
 import { roadmapItemDisplayTitle, roadmapItemEditableTitle } from '@/lib/roadmap-item-display';
 import { summarizeLoopSafety, type LoopSafetySummary } from '@/lib/loop-safety';
+import { shouldSurfacePromoteRefusal } from '@/lib/promote-refusal';
 
 /**
  * RoadmapWithApprovalHorizon
@@ -781,7 +782,23 @@ export function RoadmapWithApprovalHorizon({
             );
           });
           setOptimisticApprovedVersions(previousApprovedVersions);
+          return;
         }
+        // #1646: the updateComponent handler now awaits the promote and
+        // returns its outcome. Surface actionable refusals (e.g. `project
+        // inactive`) so approving never silently no-ops again. Benign
+        // refusals (nothing launchable yet) stay quiet — the decision
+        // logic lives in shouldSurfacePromoteRefusal (tested).
+        res.json().catch(() => ({})).then((respBody) => {
+          const decision = shouldSurfacePromoteRefusal(
+            previousApprovedVersions,
+            next,
+            respBody?.promote,
+          );
+          if (decision.surface && decision.message) {
+            alert(decision.message);
+          }
+        });
       })
       .catch((e) => {
         console.error('Failed to update approval (network):', e);

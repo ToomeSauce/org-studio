@@ -1843,57 +1843,70 @@ export async function POST(req: NextRequest) {
           console.log(
             `[ComponentApproval] ${projectId}/${targetComponentId}: approvedVersions ${oldApprovedVersionsKey} → ${newApprovedVersionsKey}`,
           );
-          // Fire-and-forget promote against this project. promoteProjectToNextVersion
-          // walks every component (post follow-up) and advances any whose horizon
-          // has expanded enough to make a shipped/current version unstick.
-          (async () => {
+          // #1646: AWAIT the promote (was fire-and-forget) and return its
+          // outcome so the UI can surface refusals (e.g. `project inactive`)
+          // instead of silently no-oping — the 2026-07-06 incident. The
+          // dev-agent trigger stays fire-and-forget. On substrate error we
+          // still return ok:true for the component write (the approval DID
+          // persist) with promote.reason describing the failure.
+          let promoteOutcome: { promoted: boolean; reason?: string | null; from?: string | null; to?: string | null; movedTasks?: number } =
+            { promoted: false, reason: 'promote not attempted' };
+          if (!process.env.DATABASE_URL) {
+            // File/OSS mode: promote needs Postgres. Keep the old silent
+            // behavior (approval persisted, no launch machinery available).
+            return NextResponse.json({ ok: true });
+          }
+          try {
+            const { promoteProjectToNextVersion } = await import('@/lib/project-state');
+            const pg = await import('pg');
+            const Pool = (pg as any).default?.Pool || (pg as any).Pool;
+            const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 3 });
+            const client = await pool.connect();
             try {
-              const { promoteProjectToNextVersion } = await import('@/lib/project-state');
-              const pg = await import('pg');
-              const Pool = (pg as any).default?.Pool || (pg as any).Pool;
-              const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 3 });
-              const client = await pool.connect();
-              try {
-                const result = await promoteProjectToNextVersion(projectId, client);
-                if (result.promoted) {
-                  console.log(
-                    `[ComponentApproval] Promoted ${projectId}: ${result.from} → ${result.to} (${result.movedTasks} tasks → backlog)`,
+              const result = await promoteProjectToNextVersion(projectId, client);
+              promoteOutcome = result;
+              if (result.promoted) {
+                console.log(
+                  `[ComponentApproval] Promoted ${projectId}: ${result.from} → ${result.to} (${result.movedTasks} tasks → backlog)`,
+                );
+                const freshStore = await getStoreProvider(workspace.id).read();
+                const proj = freshStore.projects.find((p: any) => p.id === projectId);
+                // Trigger the component's owner if known, else any project devOwner.
+                // #1214: when the promote moved tasks to a specific version
+                // (result.to), prefer that version's owner over the component
+                // owner. Resolve version string → versionId via the component.
+                let versionLevelOwner: string | undefined;
+                if (proj && result.to) {
+                  const compsList: any[] = (proj as any).components?.length
+                    ? (proj as any).components
+                    : ((proj as any).sections || []);
+                  const targetCmp = compsList.find((c: any) => c.id === targetComponentId);
+                  const matchedVer = targetCmp?.versions?.find(
+                    (v: any) => v.version === result.to || v.label === result.to,
                   );
-                  const freshStore = await getStoreProvider(workspace.id).read();
-                  const proj = freshStore.projects.find((p: any) => p.id === projectId);
-                  // Trigger the component's owner if known, else any project devOwner.
-                  // #1214: when the promote moved tasks to a specific version
-                  // (result.to), prefer that version's owner over the component
-                  // owner. Resolve version string → versionId via the component.
-                  let versionLevelOwner: string | undefined;
-                  if (proj && result.to) {
-                    const compsList: any[] = (proj as any).components?.length
-                      ? (proj as any).components
-                      : ((proj as any).sections || []);
-                    const targetCmp = compsList.find((c: any) => c.id === targetComponentId);
-                    const matchedVer = targetCmp?.versions?.find(
-                      (v: any) => v.version === result.to || v.label === result.to,
-                    );
-                    if (matchedVer) {
-                      versionLevelOwner = getEffectiveOwner(proj as any, targetComponentId, matchedVer.id);
-                    }
-                  }
-                  const ownerToWake = versionLevelOwner || newComp.owner || proj?.devOwner;
-                  if (ownerToWake && result.movedTasks > 0) {
-                    triggerAgentLoop(ownerToWake, freshStore);
+                  if (matchedVer) {
+                    versionLevelOwner = getEffectiveOwner(proj as any, targetComponentId, matchedVer.id);
                   }
                 }
-              } finally {
-                client.release();
-                await pool.end();
+                const ownerToWake = versionLevelOwner || newComp.owner || proj?.devOwner;
+                if (ownerToWake && result.movedTasks > 0) {
+                  triggerAgentLoop(ownerToWake, freshStore);
+                }
+              } else {
+                console.log(`[ComponentApproval] ${projectId}: promote refused — ${result.reason}`);
               }
-            } catch (e: any) {
-              console.error(
-                `[ComponentApproval] promote check failed for ${projectId}:`,
-                e?.message,
-              );
+            } finally {
+              client.release();
+              await pool.end();
             }
-          })();
+          } catch (e: any) {
+            console.error(
+              `[ComponentApproval] promote check failed for ${projectId}:`,
+              e?.message,
+            );
+            promoteOutcome = { promoted: false, reason: `promote check failed: ${e?.message || 'unknown error'}` };
+          }
+          return NextResponse.json({ ok: true, promote: promoteOutcome });
         }
 
         return NextResponse.json({ ok: true });
