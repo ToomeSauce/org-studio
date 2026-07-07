@@ -100,7 +100,7 @@ Tasks flow through a simple 4-column kanban plus a **Blocked** status. The defau
 | **Done** | — | **Default destination for finished work.** |
 | **Blocked** (status) | — | Cannot proceed without external input. Two cases: waiting on a teammate / dependency, OR awaiting human sign-off on irreversible/security-sensitive work. |
 
-> **Note (#1290, 2026-05-08):** The Review column was removed. It kept getting misused as a generic sanity-check shelf. Default destination is now Done; for the rare irreversible/security-sensitive case, use Blocked + a `blockedReason` like `"awaiting human sign-off — <why>"`.
+> **Note (#1290, 2026-05-08):** The Review column was removed. It kept getting misused as a generic sanity-check shelf. Default destination is now Done; for rare irreversible/security-sensitive work, use Blocked + `blockedReasonType: "irreversible-decision"` and include a short `blockedReason`/comment with what is staged for sign-off.
 
 ### QA is a component, not a column
 
@@ -110,7 +110,7 @@ QA work runs through the **same columns** as every other ticket. A project may h
 - **Default path is backlog → in-progress → done.** Ship reversible work straight to done.
 - **Planning is agent-encouraged.** Agents pull from planning, flesh out acceptance criteria, then move to backlog.
 - **Backlog is the intake queue.** Agents pick from the top first.
-- **Use Blocked for two cases.** (a) Waiting on another task/teammate (use `blockedBy: [<ticket-numbers>]` for auto-unblock). (b) Awaiting human sign-off on irreversible work — DB migrations, destructive deletes, money/billing, auth/secrets, public launches (set `blockedReason` and post a comment summarizing what's been staged).
+- **Use Blocked for two cases.** (a) Waiting on another task/teammate (use `blockedBy: [<ticket-numbers>]` and `blockedReasonType: "external-dependency"` for auto-unblock semantics). (b) Awaiting human sign-off on irreversible work — DB migrations, destructive deletes, money/billing, auth/secrets, public launches (set `blockedReasonType: "irreversible-decision"` and post a comment summarizing what's been staged).
 - **Cross-domain coordination is via comment pings**, not column hops. Direction changes happen in the vision doc / roadmap.
 - Task order determines priority within a column.
 
@@ -128,7 +128,7 @@ Every task gets tested before leaving in-progress. The agent self-tests, documen
 - Write a brief test plan (in `testPlan` or a comment).
 - Execute it yourself: curl endpoints, check builds, verify output, run the relevant UI path.
 - Document results in `reviewNotes` or a final comment.
-- Move to **done** (or review if `needsReview` applies).
+- Move to **done**. For irreversible/security-sensitive work that cannot be safely reverted, move to **blocked** with `blockedReasonType: "irreversible-decision"` until human sign-off lands.
 
 ### QA component projects
 
@@ -184,7 +184,7 @@ The scheduler prompt is built from 8 configurable sections:
 |---------|---------|
 | task-management | How to fetch and prioritize tasks |
 | column-workflow | What each column means |
-| review-guidance | When to use review vs done, testing rules |
+| review-guidance | Done-vs-blocked gate semantics and testing rules |
 | work-loop | The main execution loop |
 | api-reference | Store API endpoints |
 | rules | Behavioral constraints |
