@@ -7,6 +7,13 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { checkLane, getWorkerConfigs, workersEnabled, DEFAULT_WORKERS } from '@/lib/workers/config';
 import { parseEngineEvents, type WorkerRunResult } from '@/lib/workers/engine-codex';
 import { WorkerRuntime } from '@/lib/workers/worker-runtime';
+import {
+  assembleBrief,
+  generateWorkerAgentsMd,
+  extractAttemptSummary,
+  renderStructuredCloseout,
+  GENERATED_AGENTS_MD_MARKER,
+} from '@/lib/workers/context-assembler';
 
 const savedEnv: Record<string, string | undefined> = {};
 function setEnv(k: string, v: string | undefined) {
@@ -189,6 +196,8 @@ describe('#1657: WorkerRuntime send() = enqueue semantics', () => {
     const deps = {
       fetchStore: vi.fn(async () => makeStore()),
       postComment: vi.fn(async () => undefined),
+      fetchComments: vi.fn(async () => []),
+      writeAgentsMd: vi.fn(async () => vi.fn(async () => undefined)),
       runEngine: vi.fn(async () => OK_RESULT),
       recordDispatch: vi.fn(),
       recordModelCall: vi.fn(),
@@ -328,5 +337,221 @@ describe('#1657: WorkerRuntime send() = enqueue semantics', () => {
     const { rt } = makeRuntime();
     expect(await rt.discover()).toEqual([]);
     expect((await rt.health()).connected).toBe(false);
+  });
+
+  // --- #1658 W-3: ContextAssembler wiring in the job path ---
+
+  it('job brief includes ticket fields, comment thread, and operating rules (#1658)', async () => {
+    enableWorkers();
+    const comments = [
+      { author: 'Basil', content: 'Please keep it additive.', createdAt: 1, type: 'comment' },
+    ];
+    let capturedBrief = '';
+    const { rt, deps } = makeRuntime({
+      fetchComments: vi.fn(async () => comments),
+      runEngine: vi.fn(async (opts: any) => {
+        capturedBrief = opts.brief;
+        return OK_RESULT;
+      }),
+    });
+    await rt.send('worker-codex', 'DISPATCH HEADER', {});
+    await new Promise((r) => setTimeout(r, 0));
+    expect(deps.fetchComments).toHaveBeenCalledWith('task-1');
+    expect(capturedBrief).toContain('DISPATCH HEADER');
+    expect(capturedBrief).toContain('#42: Fix the thing');
+    expect(capturedBrief).toContain('Ticket discussion');
+    expect(capturedBrief).toContain('Please keep it additive.');
+    expect(capturedBrief).toContain('Do NOT run whole-project builds');
+  });
+
+  it('writes generated AGENTS.md before the run and restores it after (#1658)', async () => {
+    enableWorkers();
+    const restore = vi.fn(async () => undefined);
+    const calls: string[] = [];
+    const { rt } = makeRuntime({
+      writeAgentsMd: vi.fn(async (repo: string, content: string) => {
+        calls.push('write');
+        expect(repo).toBe('/tmp');
+        expect(content).toContain(GENERATED_AGENTS_MD_MARKER);
+        expect(content).toContain('#42');
+        return restore;
+      }),
+      runEngine: vi.fn(async () => {
+        calls.push('run');
+        return OK_RESULT;
+      }),
+    });
+    await rt.send('worker-codex', 'brief', {});
+    await new Promise((r) => setTimeout(r, 0));
+    expect(calls).toEqual(['write', 'run']);
+    expect(restore).toHaveBeenCalled();
+  });
+
+  it('restores AGENTS.md even when the engine crashes (#1658)', async () => {
+    enableWorkers();
+    const restore = vi.fn(async () => undefined);
+    const { rt } = makeRuntime({
+      writeAgentsMd: vi.fn(async () => restore),
+      runEngine: vi.fn(async () => {
+        throw new Error('boom');
+      }),
+    });
+    await rt.send('worker-codex', 'brief', {});
+    await new Promise((r) => setTimeout(r, 0));
+    expect(restore).toHaveBeenCalled();
+  });
+
+  it('posts a STRUCTURED closeout with files/verification/outcome (#1658)', async () => {
+    enableWorkers();
+    const result: WorkerRunResult = {
+      ...OK_RESULT,
+      commands: [
+        { command: 'npx vitest run src/x.test.ts', exitCode: 0 },
+        { command: 'ls -la', exitCode: 0 },
+        { command: 'npx tsc --noEmit src/x.ts', exitCode: 2 },
+      ],
+    };
+    const { rt, deps } = makeRuntime({ runEngine: vi.fn(async () => result) });
+    await rt.send('worker-codex', 'brief', {});
+    await new Promise((r) => setTimeout(r, 0));
+    const closeout = (deps.postComment as any).mock.calls[0][2] as string;
+    expect(closeout).toContain('Files touched');
+    expect(closeout).toContain('update: a.ts');
+    expect(closeout).toContain('Verification run');
+    expect(closeout).toContain('vitest run src/x.test.ts');
+    expect(closeout).not.toContain('ls -la'); // non-verification commands excluded
+    expect(closeout).toContain('What failed');
+    expect(closeout).toContain('exit 2');
+  });
+});
+
+describe('#1658: assembleBrief', () => {
+  const task = {
+    id: 't1',
+    ticketNumber: 7,
+    title: 'T',
+    description: 'D',
+    doneWhen: 'DW',
+    constraints: 'C',
+  };
+
+  it('renders prior attempts from devHandoff + system bounce comments', () => {
+    const brief = assembleBrief({
+      dispatchMessage: 'HDR',
+      task: { ...task, devHandoff: { message: 'DB is migrated now', author: 'Ana', createdAt: 5 } },
+      comments: [
+        { author: 'System', type: 'system', content: 'Reopened by Basil: broke on staging', createdAt: 1 },
+        { author: 'Ana', type: 'comment', content: 'normal chat', createdAt: 2 },
+      ],
+    });
+    expect(brief).toContain('Prior attempts');
+    expect(brief).toContain('DB is migrated now');
+    expect(brief).toContain('Reopened by Basil');
+    expect(brief.indexOf('Prior attempts')).toBeLessThan(brief.indexOf('Ticket discussion'));
+  });
+
+  it('includes the leash block via the #1654 renderer when project has boundaries', () => {
+    const brief = assembleBrief({
+      dispatchMessage: 'HDR',
+      task,
+      project: {
+        id: 'p1',
+        name: 'Proj',
+        budget: { ceilingUsdMonth: 100 },
+        boundaries: { freeToDecide: ['tech stack'], mustAsk: ['spending money'] },
+      },
+      spend: { spendUsd: 25 },
+    });
+    expect(brief).toContain('Autonomy leash — Proj');
+    expect(brief).toContain('$25.00 of $100.00/mo');
+    expect(brief).toContain('Must ask BEFORE acting: spending money');
+  });
+
+  it('trims the OLD end of long threads, keeps the newest comments', () => {
+    const comments = Array.from({ length: 30 }, (_, i) => ({
+      author: `A${i}`,
+      content: `comment number ${i} ${'x'.repeat(300)}`,
+      createdAt: i,
+      type: 'comment' as const,
+    }));
+    const brief = assembleBrief({ dispatchMessage: 'HDR', task, comments, maxThreadChars: 2000 });
+    expect(brief).toContain('comment number 29'); // newest survives
+    expect(brief).not.toContain('comment number 0 '); // oldest trimmed
+    expect(brief).toContain('older comment(s) omitted');
+  });
+
+  it('omits empty sections cleanly', () => {
+    const brief = assembleBrief({ dispatchMessage: 'HDR', task: { id: 't', title: 'X' } });
+    expect(brief).not.toContain('Ticket discussion');
+    expect(brief).not.toContain('Prior attempts');
+    expect(brief).not.toContain('Autonomy leash');
+    expect(brief).toContain('Operating rules');
+  });
+});
+
+describe('#1658: generateWorkerAgentsMd + extractAttemptSummary', () => {
+  it('AGENTS.md carries marker, host policy, deny list, git rules', () => {
+    const md = generateWorkerAgentsMd({
+      task: { id: 't', ticketNumber: 9, title: 'Fix' },
+      workerId: 'worker-codex',
+      repoConventions: 'Use tabs.',
+      host: { buildPolicy: 'ci-only', denyCommands: ['next build'], notes: 'Thermal-limited host.' },
+    });
+    expect(md.startsWith(GENERATED_AGENTS_MD_MARKER)).toBe(true);
+    expect(md).toContain('worker-codex');
+    expect(md).toContain('Use tabs.');
+    expect(md).toContain('ci-only');
+    expect(md).toContain('`next build`');
+    expect(md).toContain('Thermal-limited host.');
+    expect(md).toContain('Do NOT push');
+  });
+
+  it('extractAttemptSummary classifies outcome, verification, failures', () => {
+    const res: WorkerRunResult = {
+      ok: false,
+      exitCode: 1,
+      durationMs: 100,
+      commands: [
+        { command: 'npx vitest run a.test.ts', exitCode: 1 },
+        { command: 'cat file.ts', exitCode: 0 },
+      ],
+      fileChanges: [
+        { path: 'a.ts', kind: 'update' },
+        { path: 'a.ts', kind: 'update' }, // duplicate deduped
+      ],
+      messages: ['first', 'Could not fix the flaky test — mock leaks between cases.'],
+      errors: [],
+      usage: null,
+      rawEventCount: 4,
+    };
+    const s = extractAttemptSummary(res);
+    expect(s.outcome).toBe('failed');
+    expect(s.filesTouched).toEqual(['update: a.ts']);
+    expect(s.verificationRuns).toHaveLength(1);
+    expect(s.failedCommands).toEqual([{ command: 'npx vitest run a.test.ts', exitCode: 1 }]);
+    expect(s.finalMessage).toContain('mock leaks');
+  });
+
+  it('timeout errors classify as timeout outcome', () => {
+    const s = extractAttemptSummary({
+      ok: false,
+      exitCode: null,
+      durationMs: 5000,
+      commands: [],
+      fileChanges: [],
+      messages: [],
+      errors: ['engine killed at 5000ms timeout'],
+      usage: null,
+      rawEventCount: 0,
+    });
+    expect(s.outcome).toBe('timeout');
+    const closeout = renderStructuredCloseout({
+      dispatchId: 'd123456789012',
+      engineLabel: 'codex/m',
+      durationMs: 5000,
+      summary: s,
+    });
+    expect(closeout).toContain('⏱️ timeout');
+    expect(closeout).toContain('none detected — flag for human review');
   });
 });

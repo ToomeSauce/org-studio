@@ -36,9 +36,19 @@
 import type { AgentRuntime, RuntimeAgent, AgentMetadata } from '../runtimes/types';
 import { getWorkerConfigs, checkLane, workersEnabled, type WorkerConfig } from './config';
 import { runCodexEngine, type WorkerRunResult, type EngineRunOpts } from './engine-codex';
+import {
+  assembleBrief,
+  generateWorkerAgentsMd,
+  extractAttemptSummary,
+  renderStructuredCloseout,
+  GENERATED_AGENTS_MD_MARKER,
+  type BriefComment,
+} from './context-assembler';
 import { recordDispatch, recordModelCall } from '../dispatch-ledger';
 import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
+import { readFile, writeFile, unlink } from 'fs/promises';
+import { join } from 'path';
 
 /** Where a project's working checkout lives for local-process mode.
  *  v1: explicit map via WORKER_REPO_PATHS env (JSON: {projectId: absPath}).
@@ -91,35 +101,75 @@ async function defaultPostComment(taskId: string, author: string, content: strin
   }
 }
 
-function renderCloseout(dispatchId: string, worker: WorkerConfig, res: WorkerRunResult): string {
-  const files =
-    res.fileChanges.map((f) => `- ${f.kind}: ${f.path}`).join('\n') || '- (none)';
-  const cmds =
-    res.commands
-      .map((c) => `- \`${c.command.slice(0, 90)}\` → exit ${c.exitCode}`)
-      .join('\n') || '- (none)';
-  const u = res.usage;
-  return [
-    `🤖 **Worker run** \`${dispatchId.slice(0, 12)}\` — ${worker.engine}/${worker.model}, ` +
-      `${Math.round(res.durationMs / 1000)}s, ${res.ok ? '✅ completed' : '⚠️ failed'}`,
-    ``,
-    `**Files changed:**\n${files}`,
-    ``,
-    `**Commands:**\n${cmds}`,
-    ``,
-    `**Summary:** ${res.messages[res.messages.length - 1]?.slice(0, 600) || '(no final message)'}`,
-    ...(res.errors.length
-      ? [``, `**Warnings/errors:**\n${res.errors.map((e) => `- ${e.slice(0, 200)}`).join('\n')}`]
-      : []),
-    ``,
-    `**Usage:** in ${u?.inputTokens ?? '?'} (cached ${u?.cachedInputTokens ?? '?'}) / out ${u?.outputTokens ?? '?'}`,
-  ].join('\n');
+/** Full comment thread via the canonical listComments action (#1658).
+ *  Best-effort: [] on any failure — the brief degrades, the job still runs. */
+async function defaultFetchComments(taskId: string): Promise<BriefComment[]> {
+  try {
+    const r = await fetch(`${ORG_STUDIO_BASE()}/api/store`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(process.env.ORG_STUDIO_API_KEY
+          ? { Authorization: `Bearer ${process.env.ORG_STUDIO_API_KEY}` }
+          : {}),
+      },
+      body: JSON.stringify({ action: 'listComments', taskId, limit: 50 }),
+    });
+    if (!r.ok) return [];
+    const data = await r.json();
+    const list = Array.isArray(data?.comments) ? data.comments : [];
+    // listComments returns newest-first; the brief wants oldest-first.
+    return [...list].sort((a: any, b: any) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * AGENTS.md handling for a SHARED checkout (v1 local-process mode — W-5
+ * provisioning gives each job its own checkout and this simplifies to a
+ * plain write). Save whatever AGENTS.md exists, write the generated one,
+ * and return a restore function that puts the original back (or removes
+ * ours) after the run. Restore runs in finally — a crashed job never
+ * leaves a generated AGENTS.md behind for humans/agents to trip on.
+ */
+async function defaultWriteAgentsMd(
+  repoRoot: string,
+  content: string,
+): Promise<() => Promise<void>> {
+  const p = join(repoRoot, 'AGENTS.md');
+  let original: string | null = null;
+  try {
+    original = await readFile(p, 'utf8');
+  } catch {
+    original = null; // no pre-existing AGENTS.md
+  }
+  // Merge: generated job context on top, existing repo AGENTS.md below —
+  // repo conventions the maintainers wrote still reach the engine.
+  const merged =
+    original && !original.startsWith(GENERATED_AGENTS_MD_MARKER)
+      ? `${content}\n---\n\n${original}`
+      : content;
+  await writeFile(p, merged, 'utf8');
+  return async () => {
+    try {
+      if (original !== null && !original.startsWith(GENERATED_AGENTS_MD_MARKER)) {
+        await writeFile(p, original, 'utf8');
+      } else {
+        await unlink(p);
+      }
+    } catch (e: any) {
+      console.warn('[worker] AGENTS.md restore failed:', e?.message);
+    }
+  };
 }
 
 /** Injectable IO seams — production uses the defaults; tests stub them. */
 export interface WorkerRuntimeDeps {
   fetchStore: () => Promise<any | null>;
   postComment: (taskId: string, author: string, content: string) => Promise<void>;
+  fetchComments: (taskId: string) => Promise<BriefComment[]>;
+  writeAgentsMd: (repoRoot: string, content: string) => Promise<() => Promise<void>>;
   runEngine: (opts: EngineRunOpts) => Promise<WorkerRunResult>;
   recordDispatch: typeof recordDispatch;
   recordModelCall: typeof recordModelCall;
@@ -128,6 +178,8 @@ export interface WorkerRuntimeDeps {
 const DEFAULT_DEPS: WorkerRuntimeDeps = {
   fetchStore: defaultFetchStore,
   postComment: defaultPostComment,
+  fetchComments: defaultFetchComments,
+  writeAgentsMd: defaultWriteAgentsMd,
   runEngine: runCodexEngine,
   recordDispatch,
   recordModelCall,
@@ -248,10 +300,14 @@ export class WorkerRuntime implements AgentRuntime {
       ticketFingerprint: task.ticketNumber ? `${task.ticketNumber}:${task.status}` : undefined,
     });
 
+    // Owning project — for the leash block in the brief (#1654 renderer).
+    const project =
+      (store.projects || []).find((p: any) => p.id === task.projectId) || null;
+
     // ENQUEUE: fire-and-forget the actual engine run. Errors are contained
     // inside runJob (closeout comment + console) — they must never become
     // an unhandled rejection.
-    void this.runJob({ worker, task, repo, message, dispatchId })
+    void this.runJob({ worker, task, project, repo, message, dispatchId })
       .catch((e: any) => {
         console.error(`[worker] job ${dispatchId} crashed:`, e?.message || e);
       })
@@ -267,26 +323,39 @@ export class WorkerRuntime implements AgentRuntime {
     return { ok: true, enqueued: true, dispatchId, ticketNumber: task.ticketNumber };
   }
 
-  /** The background job: run the engine, meter it, post the closeout. */
+  /** The background job: assemble context, run the engine, meter it,
+   *  write the structured closeout back to the ticket (#1658). */
   private async runJob(job: {
     worker: WorkerConfig;
     task: any;
+    project: any;
     repo: string;
     message: string;
     dispatchId: string;
   }): Promise<void> {
-    const { worker, task, repo, message, dispatchId } = job;
-    const brief =
-      `${message}\n\n` +
-      `You are an autonomous worker on ticket #${task.ticketNumber}: ${task.title}\n` +
-      (task.description ? `\nDescription:\n${task.description}\n` : '') +
-      (task.doneWhen ? `\nDone when: ${task.doneWhen}\n` : '') +
-      (task.constraints ? `\nConstraints: ${task.constraints}\n` : '') +
-      `\nMake the changes in this repository. Verify with targeted checks only ` +
-      `(single-file tests / typecheck) — do NOT run whole-project builds. ` +
-      `Commit your work on the current branch with a descriptive message. Do not push.`;
+    const { worker, task, project, repo, message, dispatchId } = job;
 
+    // --- ContextAssembler forward path (#1658) ---
+    const comments = await this.deps.fetchComments(task.id);
+    const brief = assembleBrief({
+      dispatchMessage: message,
+      task,
+      comments,
+      project,
+    });
+    const agentsMd = generateWorkerAgentsMd({
+      task,
+      workerId: worker.id,
+      // v1: conventions/host advisory come from env knobs; W-4 formalizes
+      // HostProfile, W-5 wires per-checkout config.
+      repoConventions: process.env.WORKER_REPO_CONVENTIONS || undefined,
+      host: { buildPolicy: 'ci-only' },
+    });
+
+    let restoreAgentsMd: (() => Promise<void>) | null = null;
     try {
+      restoreAgentsMd = await this.deps.writeAgentsMd(repo, agentsMd);
+
       const res = await this.deps.runEngine({
         cwd: repo,
         brief,
@@ -305,7 +374,19 @@ export class WorkerRuntime implements AgentRuntime {
         cacheReadTokens: res.usage?.cachedInputTokens ?? null,
       });
 
-      await this.deps.postComment(task.id, worker.id, renderCloseout(dispatchId, worker, res));
+      // --- ContextAssembler reverse path: structured closeout (#1658) ---
+      const summary = extractAttemptSummary(res);
+      await this.deps.postComment(
+        task.id,
+        worker.id,
+        renderStructuredCloseout({
+          dispatchId,
+          engineLabel: `${worker.engine}/${worker.model}`,
+          durationMs: res.durationMs,
+          summary,
+          usage: res.usage,
+        }),
+      );
     } catch (e: any) {
       // Spawn-level failure (binary missing etc.) — post an honest failure
       // comment so the board shows what happened.
@@ -315,6 +396,9 @@ export class WorkerRuntime implements AgentRuntime {
         `🤖 **Worker run** \`${dispatchId.slice(0, 12)}\` — ⚠️ failed to start: ${e?.message || e}`,
       );
       throw e;
+    } finally {
+      // Never leave the generated AGENTS.md in a shared checkout.
+      if (restoreAgentsMd) await restoreAgentsMd();
     }
   }
 
