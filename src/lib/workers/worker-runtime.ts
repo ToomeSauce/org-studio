@@ -408,6 +408,7 @@ export class WorkerRuntime implements AgentRuntime {
     dispatchId: string;
   }): Promise<void> {
     const { worker, task, project, profile, repo, message, dispatchId } = job;
+    console.log(`[worker] job ${dispatchId} started (mode=${worker.mode}, repo=${repo}, ticket=${task.ticketNumber})`);
 
     // --- ContextAssembler forward path (#1658) ---
     const comments = await this.deps.fetchComments(task.id);
@@ -417,6 +418,7 @@ export class WorkerRuntime implements AgentRuntime {
       comments,
       project,
     });
+    console.log(`[worker] job ${dispatchId} brief assembled (${brief.length} chars, ${comments.length} comments)`);
     if (worker.mode === 'gh-actions') {
       try {
         const ticketNumber = Number(task.ticketNumber || 0);
@@ -431,6 +433,9 @@ export class WorkerRuntime implements AgentRuntime {
             smoke: process.env.WORKER_SMOKE_MODE === 'true',
           },
           worker,
+        );
+        console.log(
+          `[worker] job ${dispatchId} remote run finished: ok=${res.ok} detail=${res.detail} pr=${res.prUrl || 'none'}`,
         );
 
         this.deps.recordModelCall({
