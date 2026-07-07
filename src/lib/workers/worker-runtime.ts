@@ -44,9 +44,18 @@ import {
   GENERATED_AGENTS_MD_MARKER,
   type BriefComment,
 } from './context-assembler';
+import {
+  resolveHostProfile,
+  toHostAdvisory,
+  codexSandboxModeFor,
+  buildOsWrapper,
+  type HostProfile,
+} from './host-profile';
+import { tryAcquireHostSlot } from './host-semaphore';
 import { recordDispatch, recordModelCall } from '../dispatch-ledger';
 import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
+import { execFileSync } from 'child_process';
 import { readFile, writeFile, unlink } from 'fs/promises';
 import { join } from 'path';
 
@@ -65,6 +74,18 @@ function resolveRepoPath(projectId: string | undefined): string | null {
 }
 
 const ORG_STUDIO_BASE = () => `http://localhost:${process.env.PORT || 4501}`;
+
+let systemdRunAvailableCache: boolean | null = null;
+function defaultSystemdRunAvailable(): boolean {
+  if (systemdRunAvailableCache !== null) return systemdRunAvailableCache;
+  try {
+    execFileSync('systemd-run', ['--version'], { stdio: 'ignore', timeout: 3000 });
+    systemdRunAvailableCache = true;
+  } catch {
+    systemdRunAvailableCache = false;
+  }
+  return systemdRunAvailableCache;
+}
 
 async function defaultFetchStore(): Promise<any | null> {
   try {
@@ -173,6 +194,10 @@ export interface WorkerRuntimeDeps {
   runEngine: (opts: EngineRunOpts) => Promise<WorkerRunResult>;
   recordDispatch: typeof recordDispatch;
   recordModelCall: typeof recordModelCall;
+  /** #1659 — OS-backstop availability probe (systemd-run). */
+  systemdRunAvailable: () => boolean;
+  /** #1659 — per-host job semaphore (worker jobs only). */
+  acquireHostSlot: typeof tryAcquireHostSlot;
 }
 
 const DEFAULT_DEPS: WorkerRuntimeDeps = {
@@ -183,6 +208,8 @@ const DEFAULT_DEPS: WorkerRuntimeDeps = {
   runEngine: runCodexEngine,
   recordDispatch,
   recordModelCall,
+  systemdRunAvailable: defaultSystemdRunAvailable,
+  acquireHostSlot: tryAcquireHostSlot,
 };
 
 export interface EnqueueResult {
@@ -304,14 +331,28 @@ export class WorkerRuntime implements AgentRuntime {
     const project =
       (store.projects || []).find((p: any) => p.id === task.projectId) || null;
 
+    // #1659 W-4: resolve the worker's HostProfile (settings → presets) and
+    // take a per-host job slot BEFORE enqueueing. Worker jobs only — agent
+    // dispatch for openclaw/hermes never touches this path.
+    const profile: HostProfile | null = resolveHostProfile(store.settings, worker.hostId);
+    let releaseSlot: (() => void) | null = null;
+    if (profile) {
+      const slot = this.deps.acquireHostSlot(profile.id, profile.maxConcurrentJobs);
+      if (!slot.ok) {
+        throw new Error(slot.reason); // dispatch fails cleanly; outbox/scheduler retries later
+      }
+      releaseSlot = slot.release;
+    }
+
     // ENQUEUE: fire-and-forget the actual engine run. Errors are contained
     // inside runJob (closeout comment + console) — they must never become
     // an unhandled rejection.
-    void this.runJob({ worker, task, project, repo, message, dispatchId })
+    void this.runJob({ worker, task, project, profile, repo, message, dispatchId })
       .catch((e: any) => {
         console.error(`[worker] job ${dispatchId} crashed:`, e?.message || e);
       })
       .finally(() => {
+        releaseSlot?.();
         this.inFlight.delete(agentId);
         try {
           opts?.onComplete?.(agentId);
@@ -329,11 +370,12 @@ export class WorkerRuntime implements AgentRuntime {
     worker: WorkerConfig;
     task: any;
     project: any;
+    profile: HostProfile | null;
     repo: string;
     message: string;
     dispatchId: string;
   }): Promise<void> {
-    const { worker, task, project, repo, message, dispatchId } = job;
+    const { worker, task, project, profile, repo, message, dispatchId } = job;
 
     // --- ContextAssembler forward path (#1658) ---
     const comments = await this.deps.fetchComments(task.id);
@@ -346,11 +388,16 @@ export class WorkerRuntime implements AgentRuntime {
     const agentsMd = generateWorkerAgentsMd({
       task,
       workerId: worker.id,
-      // v1: conventions/host advisory come from env knobs; W-4 formalizes
-      // HostProfile, W-5 wires per-checkout config.
+      // v1: conventions come from an env knob; W-5 wires per-checkout config.
       repoConventions: process.env.WORKER_REPO_CONVENTIONS || undefined,
-      host: { buildPolicy: 'ci-only' },
+      // #1659 W-4 advisory layer: the HostProfile renders into AGENTS.md.
+      // No profile → conservative ci-only default (W-3 behavior).
+      host: toHostAdvisory(profile) || { buildPolicy: 'ci-only' },
     });
+
+    // #1659 W-4 layers 2+3: sandbox mode from buildPolicy; OS caps wrapper
+    // (systemd-run scope) + profile timeout tightening.
+    const wrapper = buildOsWrapper(profile, worker.timeoutMs, this.deps.systemdRunAvailable());
 
     let restoreAgentsMd: (() => Promise<void>) | null = null;
     try {
@@ -360,7 +407,9 @@ export class WorkerRuntime implements AgentRuntime {
         cwd: repo,
         brief,
         model: worker.model,
-        timeoutMs: worker.timeoutMs,
+        timeoutMs: wrapper.timeoutMs,
+        sandboxMode: codexSandboxModeFor(profile),
+        argvPrefix: wrapper.argvPrefix,
       });
 
       this.deps.recordModelCall({

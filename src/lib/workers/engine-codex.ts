@@ -59,6 +59,12 @@ export interface EngineRunOpts {
   model: string;
   timeoutMs: number;
   env?: Record<string, string>;
+  /** Codex sandbox policy (#1659 W-4) — from codexSandboxModeFor(profile).
+   *  Default 'danger-full-access' preserves W-2 behavior. */
+  sandboxMode?: string;
+  /** OS backstop argv prefix (#1659 W-4) — e.g. systemd-run scope wrapper
+   *  with CPUQuota/MemoryMax. Empty/omitted = plain spawn. */
+  argvPrefix?: string[];
 }
 
 /** Parse a raw JSONL event stream into the normalized result fields. */
@@ -114,6 +120,29 @@ export function parseEngineEvents(raw: string): Omit<WorkerRunResult, 'ok' | 'ex
 }
 
 /**
+ * Build the full spawn argv (wrapper prefix + codex invocation). Exported
+ * for tests — the deny/caps story is only trustworthy if the exact argv
+ * is assertable.
+ */
+export function buildEngineArgv(opts: EngineRunOpts): { cmd: string; args: string[] } {
+  const codexArgs = [
+    'exec',
+    '--json',
+    '--skip-git-repo-check',
+    '--sandbox',
+    opts.sandboxMode || 'danger-full-access', // isolation = provisioning layer (see header)
+    '-m',
+    opts.model,
+    opts.brief,
+  ];
+  const prefix = opts.argvPrefix || [];
+  if (prefix.length > 0) {
+    return { cmd: prefix[0], args: [...prefix.slice(1), 'codex', ...codexArgs] };
+  }
+  return { cmd: 'codex', args: codexArgs };
+}
+
+/**
  * Run the codex engine headless. Resolves with a normalized result;
  * only rejects on spawn-level failures (binary missing). Non-zero engine
  * exit resolves with ok:false so callers can post an honest closeout.
@@ -121,24 +150,12 @@ export function parseEngineEvents(raw: string): Omit<WorkerRunResult, 'ok' | 'ex
 export function runCodexEngine(opts: EngineRunOpts): Promise<WorkerRunResult> {
   const started = Date.now();
   return new Promise((resolve, reject) => {
-    const child = spawn(
-      'codex',
-      [
-        'exec',
-        '--json',
-        '--skip-git-repo-check',
-        '--sandbox',
-        'danger-full-access', // isolation = provisioning layer (see header)
-        '-m',
-        opts.model,
-        opts.brief,
-      ],
-      {
-        cwd: opts.cwd,
-        env: { ...process.env, ...(opts.env || {}) },
-        stdio: ['ignore', 'pipe', 'pipe'],
-      },
-    );
+    const { cmd, args } = buildEngineArgv(opts);
+    const child = spawn(cmd, args, {
+      cwd: opts.cwd,
+      env: { ...process.env, ...(opts.env || {}) },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
 
     let out = '';
     let err = '';

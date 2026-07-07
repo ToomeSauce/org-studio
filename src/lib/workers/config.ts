@@ -30,6 +30,9 @@ export interface WorkerConfig {
   lane: WorkerLane;
   /** Hard wall-clock cap per job (ms). */
   timeoutMs: number;
+  /** HostProfile id (#1659) — resolves against settings.hostProfiles, then
+   *  presets. Unset = no host constraints (W-2 behavior). */
+  hostId?: string;
 }
 
 export const DEFAULT_WORKERS: WorkerConfig[] = [
@@ -76,6 +79,7 @@ export function getWorkerConfigs(): WorkerConfig[] {
         },
         timeoutMs:
           Number.isFinite(w.timeoutMs) && w.timeoutMs > 0 ? w.timeoutMs : 15 * 60 * 1000,
+        hostId: typeof w.hostId === 'string' && w.hostId ? w.hostId : undefined,
       }));
   } catch {
     console.warn('[workers] WORKER_RUNTIME_CONFIG is not valid JSON — using defaults');
