@@ -145,7 +145,11 @@ jobs:
           printf '%s' "$BRIEF" > /tmp/brief.txt
 
           set +e
-          codex exec --json --skip-git-repo-check --sandbox workspace-write "$(cat /tmp/brief.txt)" | tee /tmp/engine-events.jsonl
+          # Sandbox note: codex's bwrap/landlock sandbox cannot initialize on
+          # Actions runners (no unprivileged userns loopback: 'bwrap: loopback:
+          # Failed RTM_NEWADDR'). The EPHEMERAL RUNNER is the isolation layer
+          # here (W-1 finding; design doc security ladder) — run full-access.
+          codex exec --json --skip-git-repo-check --sandbox danger-full-access "$(cat /tmp/brief.txt)" | tee /tmp/engine-events.jsonl
           ENGINE_EXIT=${PIPESTATUS[0]}
           set -e
           echo "$ENGINE_EXIT" > /tmp/engine-exit-code.txt
@@ -166,6 +170,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if git diff --quiet origin/main...HEAD 2>/dev/null && [ -z "$(git log origin/main..HEAD --oneline)" ]; then
+            echo "::error::engine produced no commits — nothing to open a PR for (see engine step + result artifact)"
+            exit 1
+          fi
           BODY="Automated worker job for Org Studio ticket #${{ inputs.ticket }} (marker \`${{ inputs.marker }}\`, run ${{ github.run_id }})."
           BODY="$BODY"$'\n\n'"**Workers never merge - this PR awaits human review.**"
           BODY="$BODY"$'\n\n'"- Lane: gh-actions ephemeral runner"
