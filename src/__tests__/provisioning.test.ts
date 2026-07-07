@@ -278,6 +278,139 @@ describe('#1660: GhActionsAdapter', () => {
   });
 });
 
+describe('#1660: GhActionsAdapter artifact result parsing', () => {
+  it('maps worker-result artifact pr_url + usage into ProvisionResult', async () => {
+    let marker = '';
+    const extractZipEntry = vi.fn(() =>
+      JSON.stringify({
+        pr_url: 'https://github.com/x/y/pull/123',
+        usage: {
+          input_tokens: 100,
+          cached_input_tokens: 25,
+          output_tokens: 50,
+          reasoning_output_tokens: 10,
+        },
+      }),
+    );
+
+    const fetchImpl = vi.fn(async (url: string, init: any) => {
+      if (url.includes('/dispatches')) {
+        marker = JSON.parse(init.body).inputs.marker;
+        return { ok: true, status: 204, json: async () => ({}) };
+      }
+      if (url.includes('/runs?')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ workflow_runs: [{ id: 88, name: `worker-job ${marker} — #1`, html_url: 'https://gh/run/88' }] }),
+        };
+      }
+      if (url.endsWith('/actions/runs/88')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: 88, status: 'completed', conclusion: 'success' }),
+        };
+      }
+      if (url.endsWith('/actions/runs/88/artifacts')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ artifacts: [{ name: 'worker-result', archive_download_url: 'https://gh/artifacts/worker-result.zip' }] }),
+        };
+      }
+      if (url === 'https://gh/artifacts/worker-result.zip') {
+        return {
+          ok: true,
+          status: 200,
+          arrayBuffer: async () => new Uint8Array([80, 75, 3, 4]).buffer,
+          json: async () => ({}),
+        };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    });
+
+    const adapter = new GhActionsAdapter({
+      workflowRepo: 'o/r',
+      token: 't',
+      fetchImpl,
+      pollIntervalMs: 1,
+      maxPolls: 2,
+      sleep: async () => undefined,
+      extractZipEntry,
+    });
+
+    const r = await adapter.provision({
+      repo: 'o/r',
+      ticketNumber: 1,
+      title: 'T',
+      brief: 'B',
+      model: 'm',
+      timeoutMs: 1000,
+    });
+
+    expect(r.ok).toBe(true);
+    expect(r.prUrl).toBe('https://github.com/x/y/pull/123');
+    expect(r.usage).toEqual({
+      inputTokens: 100,
+      cachedInputTokens: 25,
+      outputTokens: 50,
+      reasoningOutputTokens: 10,
+    });
+    expect(extractZipEntry).toHaveBeenCalledWith(expect.any(Buffer), 'result.json');
+  });
+
+  it('artifact lookup failure does not fail a successful run', async () => {
+    let marker = '';
+    const fetchImpl = vi.fn(async (url: string, init: any) => {
+      if (url.includes('/dispatches')) {
+        marker = JSON.parse(init.body).inputs.marker;
+        return { ok: true, status: 204, json: async () => ({}) };
+      }
+      if (url.includes('/runs?')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ workflow_runs: [{ id: 99, name: `worker-job ${marker} — #1`, html_url: 'https://gh/run/99' }] }),
+        };
+      }
+      if (url.endsWith('/actions/runs/99')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: 99, status: 'completed', conclusion: 'success' }),
+        };
+      }
+      if (url.endsWith('/actions/runs/99/artifacts')) {
+        return { ok: false, status: 500, json: async () => ({}) };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    });
+
+    const adapter = new GhActionsAdapter({
+      workflowRepo: 'o/r',
+      token: 't',
+      fetchImpl,
+      pollIntervalMs: 1,
+      maxPolls: 2,
+      sleep: async () => undefined,
+    });
+
+    const r = await adapter.provision({
+      repo: 'o/r',
+      ticketNumber: 1,
+      title: 'T',
+      brief: 'B',
+      model: 'm',
+      timeoutMs: 1000,
+    });
+
+    expect(r.ok).toBe(true);
+    expect(r.usage).toBeUndefined();
+    expect(r.prUrl).toBeUndefined();
+  });
+});
+
 describe('#1660: adapterForMode', () => {
   it('resolves local-process and gh-actions; unknown/unconfigured → null', () => {
     expect(adapterForMode('local-process')?.mode).toBe('local-process');

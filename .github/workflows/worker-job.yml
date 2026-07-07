@@ -120,15 +120,39 @@ jobs:
           BRIEF: ${{ inputs.brief }}
           # Engine credentials come from repo secrets; GitHub masks them in
           # logs. Absent secrets fail this step cleanly.
-          OPENAI_API_KEY: ${{ secrets.WORKER_OPENAI_API_KEY }}
+          FOUNDRY_API_KEY: ${{ secrets.WORKER_FOUNDRY_API_KEY }}
         run: |
-          if [ -z "$OPENAI_API_KEY" ]; then
-            echo "::error::WORKER_OPENAI_API_KEY secret not configured — engine mode unavailable"
+          if [ -z "$FOUNDRY_API_KEY" ]; then
+            echo "::error::WORKER_FOUNDRY_API_KEY secret not configured — engine mode unavailable"
             exit 1
           fi
-          npm i -g @openai/codex@0.42.0
+
+          npm i -g @openai/codex@0.142.5
+
+          mkdir -p ~/.codex
+          cat > ~/.codex/config.toml <<'EOF'
+          model = "gpt-5.3-codex"
+          model_provider = "foundry"
+          preferred_auth_method = "apikey"
+
+          [model_providers.foundry]
+          name = "Azure Foundry (openai-responses)"
+          base_url = "https://mac-mini-burner-resource.cognitiveservices.azure.com/openai/v1"
+          env_key = "FOUNDRY_API_KEY"
+          wire_api = "responses"
+          EOF
+
           printf '%s' "$BRIEF" > /tmp/brief.txt
+
+          set +e
           codex exec --json --skip-git-repo-check --sandbox workspace-write "$(cat /tmp/brief.txt)" | tee /tmp/engine-events.jsonl
+          ENGINE_EXIT=${PIPESTATUS[0]}
+          set -e
+          echo "$ENGINE_EXIT" > /tmp/engine-exit-code.txt
+          if [ "$ENGINE_EXIT" -ne 0 ]; then
+            echo "::warning::codex exited with code $ENGINE_EXIT; continuing to branch/PR/artifact steps"
+          fi
+
           # Commit whatever the engine changed (it is instructed to commit
           # itself; this is the safety net for uncommitted work).
           git add -A ':!/tmp' || true
@@ -138,6 +162,7 @@ jobs:
         run: git push origin "${{ steps.branch.outputs.branch }}"
 
       - name: Open PR (never merge)
+        id: open_pr
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -152,3 +177,60 @@ jobs:
             --title "worker(#${{ inputs.ticket }}): ${{ inputs.title }}" \
             --body "$BODY")
           echo "### Worker PR: $PR_URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Write result artifact
+        if: ${{ always() }}
+        env:
+          PR_URL: ${{ steps.open_pr.outputs.pr_url }}
+          SMOKE: ${{ inputs.smoke }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          usage = None
+          events_path = Path('/tmp/engine-events.jsonl')
+          if events_path.exists():
+            for line in events_path.read_text(encoding='utf-8', errors='ignore').splitlines():
+              try:
+                event = json.loads(line)
+              except Exception:
+                continue
+              if event.get('type') == 'turn.completed':
+                raw = event.get('usage') or {}
+                usage = {
+                  'input_tokens': raw.get('input_tokens') if isinstance(raw.get('input_tokens'), int) else None,
+                  'cached_input_tokens': raw.get('cached_input_tokens') if isinstance(raw.get('cached_input_tokens'), int) else None,
+                  'output_tokens': raw.get('output_tokens') if isinstance(raw.get('output_tokens'), int) else None,
+                  'reasoning_output_tokens': raw.get('reasoning_output_tokens') if isinstance(raw.get('reasoning_output_tokens'), int) else None,
+                }
+
+          engine_exit = None
+          exit_path = Path('/tmp/engine-exit-code.txt')
+          if exit_path.exists():
+            raw = exit_path.read_text(encoding='utf-8', errors='ignore').strip()
+            if raw:
+              try:
+                engine_exit = int(raw)
+              except Exception:
+                engine_exit = None
+
+          pr_url = (os.environ.get('PR_URL') or '').strip() or None
+          result = {
+            'pr_url': pr_url,
+            'usage': usage,
+            'smoke': os.environ.get('SMOKE') == 'true',
+            'engine_exit': engine_exit,
+          }
+          Path('result.json').write_text(json.dumps(result), encoding='utf-8')
+          PY
+
+      - name: Upload worker result artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-result
+          path: result.json
+          retention-days: 7

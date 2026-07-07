@@ -22,6 +22,7 @@ function setEnv(k: string, v: string | undefined) {
   else process.env[k] = v;
 }
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const [k, v] of Object.entries(savedEnv)) {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
@@ -199,6 +200,7 @@ describe('#1657: WorkerRuntime send() = enqueue semantics', () => {
       fetchComments: vi.fn(async () => []),
       writeAgentsMd: vi.fn(async () => vi.fn(async () => undefined)),
       runEngine: vi.fn(async () => OK_RESULT),
+      runRemote: vi.fn(async () => ({ ok: false, mode: 'gh-actions', detail: 'not configured' })),
       recordDispatch: vi.fn(),
       recordModelCall: vi.fn(),
       ...overrides,
@@ -287,6 +289,76 @@ describe('#1657: WorkerRuntime send() = enqueue semantics', () => {
     const { rt, deps } = makeRuntime();
     await expect(rt.send('worker-codex', 'brief')).rejects.toThrow(/No repo checkout/);
     expect(deps.runEngine).not.toHaveBeenCalled();
+  });
+
+  describe('gh-actions mode', () => {
+    function enableGhActionsWorkers(lane = { taskTypes: ['chore', 'bug'], projectIds: [] as string[] }) {
+      setEnv('WORKER_RUNTIME_ENABLED', 'true');
+      setEnv(
+        'WORKER_RUNTIME_CONFIG',
+        JSON.stringify([
+          {
+            id: 'worker-codex',
+            name: 'Worker (Codex)',
+            engine: 'codex',
+            model: 'gpt-5.3-codex',
+            mode: 'gh-actions',
+            lane,
+            timeoutMs: 5000,
+          },
+        ]),
+      );
+    }
+
+    it('enqueues, skips local engine/AGENTS writes, and posts PR closeout with usage', async () => {
+      enableGhActionsWorkers();
+      vi.stubEnv('WORKER_REPO_SLUGS', JSON.stringify({ 'proj-oss': 'x/y' }));
+
+      const runRemote = vi.fn(async () => ({
+        ok: true,
+        mode: 'gh-actions',
+        detail: 'run success',
+        prUrl: 'https://github.com/x/y/pull/1',
+        usage: {
+          inputTokens: 100,
+          cachedInputTokens: 0,
+          outputTokens: 50,
+          reasoningOutputTokens: 0,
+        },
+      }));
+
+      const { rt, deps } = makeRuntime({ runRemote });
+      const out = (await rt.send('worker-codex', 'brief', { idempotencyKey: 'd-remote' })) as any;
+      expect(out.enqueued).toBe(true);
+      expect(out.dispatchId).toBe('d-remote');
+
+      await new Promise((r) => setTimeout(r, 0));
+      expect(deps.runEngine).not.toHaveBeenCalled();
+      expect(deps.writeAgentsMd).not.toHaveBeenCalled();
+      expect(runRemote).toHaveBeenCalledWith(
+        expect.objectContaining({ repo: 'x/y', ticketNumber: 42, model: 'gpt-5.3-codex' }),
+        expect.objectContaining({ mode: 'gh-actions' }),
+      );
+      expect(deps.recordModelCall).toHaveBeenCalledWith(
+        expect.objectContaining({ dispatchId: 'd-remote', tokensIn: 100, tokensOut: 50 }),
+      );
+      const closeout = (deps.postComment as any).mock.calls[0][2] as string;
+      expect(closeout).toContain('gh-actions runner');
+      expect(closeout).toContain('https://github.com/x/y/pull/1');
+    });
+
+    it('missing WORKER_REPO_SLUGS entry posts ⛔ and throws', async () => {
+      enableGhActionsWorkers();
+      vi.stubEnv('WORKER_REPO_SLUGS', '{}');
+      const { rt, deps } = makeRuntime();
+      await expect(rt.send('worker-codex', 'brief')).rejects.toThrow(/No repo slug configured/);
+      expect(deps.postComment).toHaveBeenCalledWith(
+        'task-1',
+        'worker-codex',
+        expect.stringContaining('⛔ No repo slug configured'),
+      );
+      expect(deps.runRemote).not.toHaveBeenCalled();
+    });
   });
 
   it('no actionable work → skipped, no throw', async () => {

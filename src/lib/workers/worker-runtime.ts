@@ -52,6 +52,7 @@ import {
   type HostProfile,
 } from './host-profile';
 import { tryAcquireHostSlot } from './host-semaphore';
+import { GhActionsAdapter, type ProvisionJobSpec, type ProvisionResult } from './provisioning';
 import { recordDispatch, recordModelCall } from '../dispatch-ledger';
 import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
@@ -68,6 +69,20 @@ function resolveRepoPath(projectId: string | undefined): string | null {
     const map = JSON.parse(process.env.WORKER_REPO_PATHS || '{}');
     const p = map[projectId];
     return typeof p === 'string' && existsSync(p) ? p : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Target repo slug for remote provisioning modes.
+ *  v1 gh-actions: explicit map via WORKER_REPO_SLUGS env
+ *  (JSON: {projectId: "owner/name"}). */
+function resolveRepoSlug(projectId: string | undefined): string | null {
+  if (!projectId) return null;
+  try {
+    const map = JSON.parse(process.env.WORKER_REPO_SLUGS || '{}');
+    const slug = map[projectId];
+    return typeof slug === 'string' && slug.includes('/') ? slug : null;
   } catch {
     return null;
   }
@@ -146,6 +161,18 @@ async function defaultFetchComments(taskId: string): Promise<BriefComment[]> {
   }
 }
 
+async function defaultRunRemote(spec: ProvisionJobSpec, _worker: WorkerConfig): Promise<ProvisionResult> {
+  const token = process.env.WORKER_GH_TOKEN;
+  if (!token) {
+    throw new Error('WORKER_GH_TOKEN is required for worker mode=gh-actions');
+  }
+  const adapter = new GhActionsAdapter({
+    token,
+    workflowRepo: process.env.WORKER_WORKFLOW_REPO || 'ToomeSauce/org-studio',
+  });
+  return adapter.provision(spec);
+}
+
 /**
  * AGENTS.md handling for a SHARED checkout (v1 local-process mode — W-5
  * provisioning gives each job its own checkout and this simplifies to a
@@ -192,6 +219,7 @@ export interface WorkerRuntimeDeps {
   fetchComments: (taskId: string) => Promise<BriefComment[]>;
   writeAgentsMd: (repoRoot: string, content: string) => Promise<() => Promise<void>>;
   runEngine: (opts: EngineRunOpts) => Promise<WorkerRunResult>;
+  runRemote: (spec: ProvisionJobSpec, worker: WorkerConfig) => Promise<ProvisionResult>;
   recordDispatch: typeof recordDispatch;
   recordModelCall: typeof recordModelCall;
   /** #1659 — OS-backstop availability probe (systemd-run). */
@@ -206,6 +234,7 @@ const DEFAULT_DEPS: WorkerRuntimeDeps = {
   fetchComments: defaultFetchComments,
   writeAgentsMd: defaultWriteAgentsMd,
   runEngine: runCodexEngine,
+  runRemote: defaultRunRemote,
   recordDispatch,
   recordModelCall,
   systemdRunAvailable: defaultSystemdRunAvailable,
@@ -308,11 +337,14 @@ export class WorkerRuntime implements AgentRuntime {
       throw new Error(laneCheck.reason);
     }
 
-    const repo = resolveRepoPath(task.projectId);
+    const repo =
+      worker.mode === 'gh-actions' ? resolveRepoSlug(task.projectId) : resolveRepoPath(task.projectId);
     if (!repo) {
       const reason =
-        `No repo checkout configured for project ${task.projectId} ` +
-        `(set WORKER_REPO_PATHS={"${task.projectId}":"/abs/path"}). W-5 adds real provisioning.`;
+        worker.mode === 'gh-actions'
+          ? `No repo slug configured for project ${task.projectId} (set WORKER_REPO_SLUGS={"${task.projectId}":"owner/name"}).`
+          : `No repo checkout configured for project ${task.projectId} ` +
+            `(set WORKER_REPO_PATHS={"${task.projectId}":"/abs/path"}). W-5 adds real provisioning.`;
       await this.deps.postComment(task.id, worker.id, `⛔ ${reason}`);
       throw new Error(reason);
     }
@@ -385,6 +417,69 @@ export class WorkerRuntime implements AgentRuntime {
       comments,
       project,
     });
+    if (worker.mode === 'gh-actions') {
+      try {
+        const ticketNumber = Number(task.ticketNumber || 0);
+        const res = await this.deps.runRemote(
+          {
+            repo,
+            ticketNumber,
+            title: task.title,
+            brief,
+            model: worker.model,
+            timeoutMs: worker.timeoutMs,
+            smoke: process.env.WORKER_SMOKE_MODE === 'true',
+          },
+          worker,
+        );
+
+        this.deps.recordModelCall({
+          dispatchId,
+          agentId: worker.id,
+          modelRequested: worker.model,
+          modelServed: worker.model,
+          provider: 'worker:' + worker.engine,
+          tokensIn: res.usage?.inputTokens ?? null,
+          tokensOut: res.usage?.outputTokens ?? null,
+          cacheReadTokens: res.usage?.cachedInputTokens ?? null,
+        });
+
+        if (res.engineResult) {
+          const summary = extractAttemptSummary(res.engineResult);
+          await this.deps.postComment(
+            task.id,
+            worker.id,
+            renderStructuredCloseout({
+              dispatchId,
+              engineLabel: `${worker.engine}/${worker.model}`,
+              durationMs: res.engineResult.durationMs,
+              summary,
+              usage: res.usage || undefined,
+            }),
+          );
+        } else {
+          const lines = [
+            `🤖 **Worker run** \`${dispatchId.slice(0, 12)}\` — ${res.ok ? '✅ succeeded' : '❌ failed'} on gh-actions runner`,
+            '',
+            `Detail: ${res.detail}`,
+          ];
+          if (res.prUrl) lines.push(`PR: ${res.prUrl}`);
+          if (res.usage) {
+            lines.push(`Usage: in ${res.usage.inputTokens ?? '?'} / out ${res.usage.outputTokens ?? '?'}`);
+          }
+          await this.deps.postComment(task.id, worker.id, lines.join('\n'));
+        }
+      } catch (e: any) {
+        await this.deps.postComment(
+          task.id,
+          worker.id,
+          `🤖 **Worker run** \`${dispatchId.slice(0, 12)}\` — ⚠️ failed to start: ${e?.message || e}`,
+        );
+        throw e;
+      }
+      return;
+    }
+
     const agentsMd = generateWorkerAgentsMd({
       task,
       workerId: worker.id,

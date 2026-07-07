@@ -30,6 +30,11 @@
 import type { EngineRunOpts, WorkerRunResult } from './engine-codex';
 import { runCodexEngine } from './engine-codex';
 import { redactTokens, type FetchLike } from './github-app-auth';
+import { execFileSync } from 'child_process';
+import { randomBytes } from 'crypto';
+import { unlinkSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 
 export interface ProvisionJobSpec {
   /** Target repo, "owner/name". */
@@ -54,6 +59,12 @@ export interface ProvisionResult {
   detail: string;
   /** PR URL when the adapter opened one (gh-actions lane). */
   prUrl?: string;
+  usage?: {
+    inputTokens: number | null;
+    cachedInputTokens: number | null;
+    outputTokens: number | null;
+    reasoningOutputTokens: number | null;
+  } | null;
   /** Engine result when the job ran in-process (local modes). */
   engineResult?: WorkerRunResult;
 }
@@ -106,13 +117,30 @@ export interface GhActionsAdapterOpts {
   pollIntervalMs?: number;
   maxPolls?: number;
   sleep?: (ms: number) => Promise<void>;
+  extractZipEntry?: (zipBuf: Buffer, entry: string) => string;
 }
 
 const GH_API = 'https://api.github.com';
 
+function defaultExtractZipEntry(zipBuf: Buffer, entry: string): string {
+  const tmpPath = join(tmpdir(), `worker-result-${randomBytes(8).toString('hex')}.zip`);
+  try {
+    writeFileSync(tmpPath, zipBuf);
+    return execFileSync('unzip', ['-p', tmpPath, entry], { encoding: 'utf8' });
+  } finally {
+    try {
+      unlinkSync(tmpPath);
+    } catch {
+      // best effort temp cleanup
+    }
+  }
+}
+
 export class GhActionsAdapter implements ProvisioningAdapter {
   mode = 'gh-actions' as const;
-  private o: Required<Pick<GhActionsAdapterOpts, 'workflowFile' | 'pollIntervalMs' | 'maxPolls'>> &
+  private o: Required<
+    Pick<GhActionsAdapterOpts, 'workflowFile' | 'pollIntervalMs' | 'maxPolls' | 'extractZipEntry'>
+  > &
     GhActionsAdapterOpts;
 
   constructor(opts: GhActionsAdapterOpts) {
@@ -120,6 +148,7 @@ export class GhActionsAdapter implements ProvisioningAdapter {
       workflowFile: 'worker-job.yml',
       pollIntervalMs: 15_000,
       maxPolls: 80,
+      extractZipEntry: defaultExtractZipEntry,
       ...opts,
     };
   }
@@ -200,15 +229,59 @@ export class GhActionsAdapter implements ProvisioningAdapter {
       const run = await runRes.json();
       if (run.status === 'completed') {
         const ok = run.conclusion === 'success';
-        // The workflow exposes the PR URL as run output via a well-known
-        // artifact-free channel: the job writes it into the run's summary;
-        // v1 keeps it simple and reports the run URL (PR link inside).
-        return {
+        const out: ProvisionResult = {
           ok,
           mode: this.mode,
           detail: `run ${run.conclusion} — ${runUrl}`,
-          prUrl: undefined,
         };
+
+        try {
+          const artifactsRes = await this.f(
+            `${GH_API}/repos/${this.o.workflowRepo}/actions/runs/${runId}/artifacts`,
+            { headers: this.headers() },
+          );
+          if (!artifactsRes.ok) {
+            throw new Error(`artifacts list HTTP ${artifactsRes.status}`);
+          }
+          const artifactsData = await artifactsRes.json();
+          const artifact = (Array.isArray(artifactsData?.artifacts) ? artifactsData.artifacts : []).find(
+            (a: any) => a?.name === 'worker-result' && typeof a.archive_download_url === 'string',
+          );
+
+          if (artifact?.archive_download_url) {
+            const downloadRes = await this.f(artifact.archive_download_url, {
+              headers: this.headers(),
+            });
+            if (!downloadRes.ok) {
+              throw new Error(`artifact download HTTP ${downloadRes.status}`);
+            }
+            const zipBuf = Buffer.from(await (downloadRes as any).arrayBuffer());
+            const resultJson = this.o.extractZipEntry(zipBuf, 'result.json');
+            const parsed = JSON.parse(resultJson);
+
+            if (typeof parsed?.pr_url === 'string' && parsed.pr_url) {
+              out.prUrl = parsed.pr_url;
+            }
+
+            if (parsed?.usage === null) {
+              out.usage = null;
+            } else if (parsed?.usage && typeof parsed.usage === 'object') {
+              const u = parsed.usage;
+              out.usage = {
+                inputTokens: typeof u.input_tokens === 'number' ? u.input_tokens : null,
+                cachedInputTokens:
+                  typeof u.cached_input_tokens === 'number' ? u.cached_input_tokens : null,
+                outputTokens: typeof u.output_tokens === 'number' ? u.output_tokens : null,
+                reasoningOutputTokens:
+                  typeof u.reasoning_output_tokens === 'number' ? u.reasoning_output_tokens : null,
+              };
+            }
+          }
+        } catch (e: any) {
+          console.warn('[worker-provision] artifact parse failed:', redactTokens(String(e?.message || e)));
+        }
+
+        return out;
       }
     }
     return { ok: false, mode: this.mode, detail: `run ${runId} did not complete within poll budget — ${runUrl}` };
