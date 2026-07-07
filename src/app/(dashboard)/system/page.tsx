@@ -56,6 +56,28 @@ function Panel({ title, children, className }: { title: string; children: React.
   );
 }
 
+function formatUsd(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '—';
+  return `$${value.toFixed(2)}`;
+}
+
+function formatPercent(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '—';
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function formatDurationMs(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '—';
+  if (value < 1000) return `${Math.round(value)}ms`;
+  const seconds = value / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const minutes = seconds / 60;
+  if (minutes < 60) return `${minutes.toFixed(1)}m`;
+  const hours = minutes / 60;
+  if (hours < 24) return `${hours.toFixed(1)}h`;
+  return `${(hours / 24).toFixed(1)}d`;
+}
+
 // ---------- Observability panel (moved from /health, #1650 → #1651) ----------
 
 function ObservabilityPanel() {
@@ -255,6 +277,140 @@ function ObservabilityPanel() {
   );
 }
 
+type WorkerLaneMetrics = {
+  lane: 'worker' | 'runtime';
+  tickets: number;
+  dispatches: number;
+  costTotalUsd: number | null;
+  costPerTicketUsd: number | null;
+  ticketsDone: number;
+  medianTimeToDoneMs: number | null;
+  bounces: number;
+  bounceRate: number | null;
+};
+
+type WorkerScorecardSnapshot = {
+  windowDays: number;
+  generatedAt: string;
+  worker: WorkerLaneMetrics;
+  runtime: WorkerLaneMetrics;
+};
+
+function WorkerScorecardPanel() {
+  const [snap, setSnap] = useState<WorkerScorecardSnapshot | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [windowDays, setWindowDays] = useState(14);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () =>
+      fetch(`/api/observability/worker-scorecard?windowDays=${windowDays}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (cancelled) return;
+          if (d) {
+            setSnap(d);
+            setFailed(false);
+          } else {
+            setFailed(true);
+          }
+        })
+        .catch(() => { if (!cancelled) setFailed(true); });
+
+    load();
+    const iv = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, [windowDays]);
+
+  if (failed && !snap) {
+    return <p className="text-sm text-[var(--text-muted)]">Worker lane scorecard unavailable (no DATABASE_URL?).</p>;
+  }
+  if (!snap) return <p className="text-sm text-[var(--text-muted)]">Checking...</p>;
+
+  const hasData = [snap.worker, snap.runtime].some((lane) =>
+    lane.tickets > 0 || lane.dispatches > 0 || lane.ticketsDone > 0 || (lane.costTotalUsd ?? 0) > 0,
+  );
+
+  const rows = [
+    {
+      label: 'Cost/ticket',
+      worker: formatUsd(snap.worker.costPerTicketUsd),
+      runtime: formatUsd(snap.runtime.costPerTicketUsd),
+    },
+    {
+      label: 'Total cost',
+      worker: formatUsd(snap.worker.costTotalUsd),
+      runtime: formatUsd(snap.runtime.costTotalUsd),
+    },
+    {
+      label: 'Tickets',
+      worker: String(snap.worker.tickets),
+      runtime: String(snap.runtime.tickets),
+    },
+    {
+      label: 'Done',
+      worker: String(snap.worker.ticketsDone),
+      runtime: String(snap.runtime.ticketsDone),
+    },
+    {
+      label: 'Median time-to-done',
+      worker: formatDurationMs(snap.worker.medianTimeToDoneMs),
+      runtime: formatDurationMs(snap.runtime.medianTimeToDoneMs),
+    },
+    {
+      label: 'Bounce rate',
+      worker: formatPercent(snap.worker.bounceRate),
+      runtime: formatPercent(snap.runtime.bounceRate),
+    },
+  ];
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2.5 text-sm flex-wrap">
+        <StatusDot ok={hasData} />
+        <span className="font-medium text-[var(--text-primary)]">Worker vs runtime lanes</span>
+        <div className="ml-auto flex items-center gap-2">
+          <select
+            value={windowDays}
+            onChange={(e) => setWindowDays(parseInt(e.target.value, 10))}
+            className="text-xs bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded px-1.5 py-0.5 text-[var(--text-secondary)]"
+          >
+            <option value={7}>7d</option>
+            <option value={14}>14d</option>
+            <option value={30}>30d</option>
+          </select>
+          <span className="text-xs text-[var(--text-muted)]">updated {relativeTime(snap.generatedAt)}</span>
+        </div>
+      </div>
+
+      {!hasData ? (
+        <p className="text-sm text-[var(--text-muted)]">No lane data yet</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-left text-[var(--text-muted)]">
+                <th className="py-1 pr-3 font-medium">Metric</th>
+                <th className="py-1 pr-3 font-medium">Worker lane</th>
+                <th className="py-1 font-medium">Runtime lane</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.label} className="border-t border-[var(--border-subtle)] text-[var(--text-secondary)]">
+                  <td className="py-1 pr-3 text-[var(--text-primary)]">{row.label}</td>
+                  <td className="py-1 pr-3 font-mono">{row.worker}</td>
+                  <td className="py-1 font-mono">{row.runtime}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------- Schedules panel (moved from /health, #1642 → #1651) ----------
 
 function SchedulesPanel() {
@@ -379,6 +535,10 @@ export default function SystemPage() {
 
         <Panel title="Dispatch & Budgets">
           <ObservabilityPanel />
+        </Panel>
+
+        <Panel title="Worker Lane Scorecard (#1661)">
+          <WorkerScorecardPanel />
         </Panel>
 
         <Panel title="Schedules & Drift">
