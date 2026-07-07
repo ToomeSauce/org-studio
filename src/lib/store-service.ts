@@ -101,7 +101,7 @@ export function triggerAgentLoopService(assignee: string, store: StoreData): voi
 /* ------------------------------------------------------------------ */
 
 export type UpdateProjectResult =
-  | { ok: true }
+  | { ok: true; project: any }
   | { ok: false; status: 403; error: string };
 
 /**
@@ -151,7 +151,7 @@ export async function updateProjectService(
 
   // PERF: Use targeted provider.updateProject() instead of full store write.
   // (Postgres provider emits NOTIFY org_studio_change here.)
-  await provider.updateProject(projectId, updates);
+  const updatedProject = await provider.updateProject(projectId, updates);
   console.log('[StoreService:updateProject] completed for', projectId);
 
   // #1224: project-level autonomy.approvedThrough was a legacy bridge
@@ -213,5 +213,5 @@ export async function updateProjectService(
     }
   }
 
-  return { ok: true };
+  return { ok: true, project: updatedProject };
 }

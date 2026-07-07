@@ -96,6 +96,20 @@ export interface Project {
     cronJobId?: string; // @deprecated - replaced by Launch model
   };
 
+  // #1652 Phase A-1 — per-project autonomy budget + boundaries.
+  // Persisted via JSONB overflow (`data`) — no migration required.
+  budget?: {
+    ceilingUsdMonth?: number;
+    ceilingUsdVersion?: number;
+    // Alert threshold percent for budget warnings.
+    // Default 80 is applied by read/update validation helpers when absent.
+    alertPct?: number;
+  };
+  boundaries?: {
+    freeToDecide: string[];
+    mustAsk: string[];
+  };
+
   // --- Outcomes & Guardrails (Phase 2) ---
   outcomes?: Array<{
     id: string;
