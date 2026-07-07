@@ -24,6 +24,8 @@ import {
 } from '@/lib/workspace-auth';
 import { validateUpdateTaskPayload } from '@/lib/update-task-validation';
 import { DEFAULT_BOUNDARIES, validateBoundaries, validateBudget } from '@/lib/autonomy-budget';
+import { isProjectBudgetExceeded } from '@/lib/budget-gate';
+import { getMonthlyProjectSpend } from '@/lib/budget-spend';
 import { canonicalizeTeammate } from '@/lib/canonicalize-teammate';
 import { resolveWakeTrigger } from '@/lib/wake-trigger';
 import { getRuntimeRegistry } from '@/lib/runtimes/registry';
@@ -541,6 +543,25 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    const filteredProjects = filterByWorkspace(data.projects, workspace.id).map((project: any) => {
+      if (!project || project.budget === undefined) return project;
+      const normalizedBudget = validateBudget(project.budget, { allowUnknownKeys: true });
+      if (!normalizedBudget.ok) return project;
+      return { ...project, budget: normalizedBudget.value };
+    });
+
+    // #1653 — budget-hold visibility. Same derived-flag pattern as heldByHuman:
+    // never persisted, stamped on the snapshot so the UI can render a hold
+    // chip. Fail-open: snapshot null (no Postgres / error) → no flags.
+    const spendSnapshot = await getMonthlyProjectSpend().catch(() => null);
+    const budgetHeldProjects = new Set(
+      spendSnapshot
+        ? filteredProjects
+            .filter((p: any) => isProjectBudgetExceeded(p, spendSnapshot))
+            .map((p: any) => p.id)
+        : [],
+    );
+
     const slimTasks = filteredTasks.map((t: any) => {
       const inlineComments = Array.isArray(t.comments) ? t.comments : [];
       // Prefer the bulk-fetched comments list when available; fall back to
@@ -567,14 +588,8 @@ export async function GET(req: NextRequest) {
       // (Phase 2b / #1294 removes that). After #1294, this branch becomes
       // the only source.
       const count = stopCommentsByTask?.get(t.id)?.length ?? inlineComments.length;
-      return { ...rest, commentCount: count, heldByHuman };
-    });
-
-    const filteredProjects = filterByWorkspace(data.projects, workspace.id).map((project: any) => {
-      if (!project || project.budget === undefined) return project;
-      const normalizedBudget = validateBudget(project.budget, { allowUnknownKeys: true });
-      if (!normalizedBudget.ok) return project;
-      return { ...project, budget: normalizedBudget.value };
+      const budgetHold = budgetHeldProjects.has(t.projectId) && t.status === 'backlog' ? true : undefined;
+      return { ...rest, commentCount: count, heldByHuman, budgetHold };
     });
 
     const filteredData = {
