@@ -19,7 +19,7 @@ export interface Section {
 //
 // Design locks (from the arc ticket #1112):
 //  - `role` is DESCRIPTIVE free text. Never an enum. Schedulers never branch
-//    on it. Behaviour comes from the agent's skills + per-component context.
+//    on it. Behavior comes from the agent's skills + per-component context.
 //  - `waitsFor` references project versions, not component versions. Components
 //    inherit the project's version cycle.
 //  - No ACLs, no permissions, no component-level lifecycle. Keep it minimal.
