@@ -10,6 +10,8 @@
 import type { AgentRuntime, RuntimeAgent, RuntimeRegistry } from './types';
 import { OpenClawRuntime } from './openclaw';
 import { HermesRuntime } from './hermes';
+import { WorkerRuntime } from '../workers/worker-runtime';
+import { workersEnabled } from '../workers/config';
 
 let globalRegistry: RuntimeRegistryImpl | null = null;
 
@@ -35,6 +37,13 @@ class RuntimeRegistryImpl implements RuntimeRegistry {
     
     if (hermesUrl || hasLocalHermes) {
       this.runtimes.set('hermes', new HermesRuntime());
+    }
+
+    // Execution Workers (#1657): third runtime class — sandboxed headless
+    // engines. Registered ONLY behind WORKER_RUNTIME_ENABLED=true (default
+    // off; reversible). Design doc: docs/design/execution-workers.md.
+    if (workersEnabled()) {
+      this.runtimes.set('worker', new WorkerRuntime());
     }
   }
 
