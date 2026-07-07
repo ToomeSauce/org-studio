@@ -11,6 +11,7 @@ import { getStoreProviderAllWorkspaces } from "./store-provider";
 import { agentOwnedSections, agentHasTaskAccess, isDefaultMainSection } from './section-access';
 import { getEligibleBacklogFifo } from './dispatch-gate';
 import { getMonthlyProjectSpend } from './budget-spend';
+import { renderLeashBlock } from './leash-block';
 
 // Re-export for convenience
 export type { PromptSection };
@@ -812,6 +813,27 @@ export async function buildDispatchMessage(
     if (next.testPlan) lines.push(` Test plan: ${next.testPlan}`);
     lines.push(` (+${backlog.length - 1} more in backlog)`);
     lines.push('');
+  }
+
+  // #1654 Phase A-3 — leash block for the owning project of the dispatched
+  // work (in-progress first, else top-of-backlog). Live spend from the
+  // snapshot fetched above; renders nothing when the project has no leash.
+  {
+    const focusTask = inProgress[0] || (inProgress.length === 0 ? backlog[0] : undefined);
+    const focusProj = focusTask
+      ? projects.find((p: any) => p.id === focusTask.projectId)
+      : undefined;
+    if (focusProj) {
+      const spendUsd = spendSnapshot ? spendSnapshot[focusProj.id] : undefined;
+      const leash = renderLeashBlock(
+        focusProj as any,
+        typeof spendUsd === 'number' ? { spendUsd } : null,
+      );
+      if (leash) {
+        lines.push(leash);
+        lines.push('');
+      }
+    }
   }
 
   // #1100: Blocked tasks — visibility only. These are NOT part of the dispatch

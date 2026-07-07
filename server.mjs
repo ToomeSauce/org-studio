@@ -24,6 +24,7 @@ try {
   }
 } catch {} // best-effort
 import { getRuntimeRegistry } from './lib/runtimes.mjs';
+import { renderLeashBlock } from './lib/leash-block.mjs';
 import { ensureHeartbeatSchema, startLoopWatchdog, logIncident } from './lib/heartbeats.mjs';
 import { ensureOutboxSchema, startOutboxWorker } from './lib/outbox.mjs';
 import { ensureSkillInstallsSchema, runDriftCheck } from './lib/skill-installs.mjs';
@@ -435,6 +436,12 @@ function generateOrgMd(store, forAgentId) {
       const devStr = p.devOwner ? ` | Dev: ${p.devOwner}` : '';
       const qaStr = p.qaOwner ? ` | QA: ${p.qaOwner}` : '';
       lines.push(`- **${p.name}**${versionStr}${devStr}${qaStr}`);
+      // #1654 Phase A-3 — static leash block (budget ceiling + boundaries).
+      // Renders nothing for projects without either field.
+      const leash = renderLeashBlock(p);
+      if (leash) {
+        for (const l of leash.split('\n')) lines.push(`  ${l}`);
+      }
     }
     lines.push('');
     lines.push('Read full vision docs: `GET /api/vision/{projectId}/doc`');

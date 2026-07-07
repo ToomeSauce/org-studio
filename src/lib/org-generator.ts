@@ -6,6 +6,7 @@ import { Teammate } from './teammates';
 import { OperatingPrinciple } from './principles-generator';
 import { CoachingInsight } from './coaching-insights';
 import { agentOwnedSections } from './section-access';
+import { renderLeashBlock } from './leash-block';
 
 export interface AgentPerformance {
   totalCompleted: number;
@@ -207,6 +208,23 @@ export function generateOrgMd(ctx: OrgContext, forAgentId?: string): string {
           lines.push(`- **${project.name}** → ${section.name}${outcomes}`);
         }
         lines.push('');
+        // #1654 Phase A-3 — leash blocks for the projects this agent owns
+        // sections on. Static render (no live spend) — the dispatch prompt
+        // carries the live figure. Nothing renders for unconfigured projects.
+        const leashProjects = new Map<string, any>();
+        for (const { project } of owned) leashProjects.set(project.id, project);
+        const leashBlocks = [...leashProjects.values()]
+          .map((p) => renderLeashBlock(p))
+          .filter(Boolean);
+        if (leashBlocks.length > 0) {
+          lines.push('## Autonomy Leash');
+          lines.push('> Budget + boundaries per project (#1654). Enforced at dispatch (#1653) — this is your copy of the contract.');
+          lines.push('');
+          for (const block of leashBlocks) {
+            lines.push(block);
+            lines.push('');
+          }
+        }
       }
     }
   }
