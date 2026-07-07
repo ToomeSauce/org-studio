@@ -760,7 +760,7 @@ export class PostgresStoreProvider implements StoreProvider {
     const pool = await this.getPool();
     const client = await pool.connect();
     try {
-      // Routing-only typed columns. Statushistory stays in because the
+      // Routing-only typed columns. statusHistory stays in because the
       // sweep + stall detector both walk it for the last status-change
       // timestamp; per #1528 measurements, including it costs ~365 KB on
       // 1369 tasks (vs ~560 KB w/o), still well under the <200 ms budget.
