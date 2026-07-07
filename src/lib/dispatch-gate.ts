@@ -20,6 +20,7 @@ import {
 } from '@/lib/component-helpers';
 import { compareVersions } from '@/lib/version-utils';
 import { MAX_OPEN_EXPERIMENTS } from '@/lib/version-metric';
+import { isProjectBudgetExceeded, type ProjectSpendSnapshot } from '@/lib/budget-gate';
 
 interface TaskLike {
   id: string;
@@ -182,13 +183,22 @@ export function priorVersionsComplete(
  * Handy predicates the caller can use to distinguish "waiting" from "idle"
  * when deciding auto-stop: see `isTaskWaiting`.
  */
-export function isTaskDispatchEligible(store: StoreLike, task: TaskLike): boolean {
+export function isTaskDispatchEligible(
+  store: StoreLike,
+  task: TaskLike,
+  spendSnapshot?: ProjectSpendSnapshot | null,
+): boolean {
   // Skip paused/archived defensively (callers also filter, but keep the
   // predicate self-consistent so unit tests are sound in isolation).
   if (task?.isArchived || task?.loopPausedAt) return false;
   if (!task?.projectId || !task?.sectionId || !task?.version) return false;
   const proj = (store.projects || []).find((p) => p.id === task.projectId);
   if (!proj) return false;
+
+  // Rule 6 (#1653, Phase A-2): monthly budget ceiling. Only enforced when the
+  // caller supplies a spend snapshot — omitted snapshot means behavior is
+  // identical to pre-#1653 (fail-open by construction).
+  if (spendSnapshot && isProjectBudgetExceeded(proj as any, spendSnapshot)) return false;
 
   // Rule 1: project must be active. (#1185 rename: 'started' → 'active'.
   // Both literals accepted during transition.)
@@ -271,6 +281,7 @@ export function isTaskDispatchEligible(store: StoreLike, task: TaskLike): boolea
 export function isTaskAdhocDispatchEligible(
   store: StoreLike,
   task: TaskLike,
+  spendSnapshot?: ProjectSpendSnapshot | null,
 ): boolean {
   if (!task?.projectId || !task?.assignee) return false;
   if (task.isArchived || task.loopPausedAt) return false;
@@ -283,6 +294,9 @@ export function isTaskAdhocDispatchEligible(
   if ((task as any).version) return false;
   const proj = (store.projects || []).find((p) => p.id === task.projectId);
   if (!proj) return false;
+  // Rule 6 (#1653): monthly budget ceiling — same optional-snapshot contract
+  // as the versioned lane.
+  if (spendSnapshot && isProjectBudgetExceeded(proj as any, spendSnapshot)) return false;
   // #1185 rename: 'started' → 'active'. Both literals accepted during transition.
   const projState = (proj as any).state;
   if (projState !== 'active' && projState !== 'started') return false;
@@ -302,10 +316,11 @@ export function isTaskAdhocDispatchEligible(
 export function isTaskAnyDispatchEligible(
   store: StoreLike,
   task: TaskLike,
+  spendSnapshot?: ProjectSpendSnapshot | null,
 ): boolean {
   return (
-    isTaskDispatchEligible(store, task) ||
-    isTaskAdhocDispatchEligible(store, task)
+    isTaskDispatchEligible(store, task, spendSnapshot) ||
+    isTaskAdhocDispatchEligible(store, task, spendSnapshot)
   );
 }
 
@@ -339,6 +354,7 @@ export function isTaskAnyDispatchEligible(
 export function getEligibleBacklogFifo(
   store: StoreLike,
   agentMatchers: string[],
+  spendSnapshot?: ProjectSpendSnapshot | null,
 ): TaskLike[] {
   const matchers = new Set(agentMatchers.map((m) => (m || '').toLowerCase()).filter(Boolean));
   const eligible: TaskLike[] = [];
@@ -346,7 +362,7 @@ export function getEligibleBacklogFifo(
     if (t.status !== 'backlog') continue;
     const a = (t.assignee || '').toLowerCase();
     if (!matchers.has(a)) continue;
-    if (!isTaskAnyDispatchEligible(store, t)) continue;
+    if (!isTaskAnyDispatchEligible(store, t, spendSnapshot)) continue;
     // #1571: transitive-blocker gate. A backlog candidate is ineligible if any
     // ticket in its blockedBy chain is not yet `done` — including the common
     // case where the blocker itself sits in `blocked` (awaiting human action).

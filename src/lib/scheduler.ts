@@ -10,6 +10,7 @@ import type { PromptSection } from '@/lib/store';
 import { getStoreProviderAllWorkspaces } from "./store-provider";
 import { agentOwnedSections, agentHasTaskAccess, isDefaultMainSection } from './section-access';
 import { getEligibleBacklogFifo } from './dispatch-gate';
+import { getMonthlyProjectSpend } from './budget-spend';
 
 // Re-export for convenience
 export type { PromptSection };
@@ -709,7 +710,10 @@ export async function buildDispatchMessage(
   //   1. Finishing the in-progress task (move to done), OR
   //   2. Bouncing it back to backlog (move to backlog) with a focus comment.
   // Either action clears the gate on the next dispatch.
-  const rawBacklog = getEligibleBacklogFifo(store, [nameLower, agentId]) as any[];
+  // #1653 rule 6: month-to-date metered spend snapshot, fetched once per
+  // dispatch build (60s module cache inside; null on error = fail-open).
+  const spendSnapshot = await getMonthlyProjectSpend();
+  const rawBacklog = getEligibleBacklogFifo(store, [nameLower, agentId], spendSnapshot) as any[];
   const backlog = inProgress.length > 0 ? [] : rawBacklog;
   const backlogSuppressedCount = inProgress.length > 0 ? rawBacklog.length : 0;
   const inQA = agentTasks.filter((t: any) => t.status === 'qa');

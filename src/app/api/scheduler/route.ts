@@ -33,6 +33,9 @@ import {
   isTaskAnyDispatchEligible,
   isTaskWaiting,
 } from '@/lib/dispatch-gate';
+import { type ProjectSpendSnapshot } from '@/lib/budget-gate';
+import { getMonthlyProjectSpend } from '@/lib/budget-spend';
+import { checkBudgetAlerts } from '@/lib/budget-alerts';
 import {
   recordDispatchAttempt,
   diagnoseAgentBacklog,
@@ -760,8 +763,12 @@ async function pauseStalledTasks(store: StoreData, agentId: string, stalledTasks
 }
 
 /** Check if an agent has actionable work (backlog or in-progress tasks assigned to them). */
-function hasActionableWork(store: StoreData, agentId: string): boolean {
-  return getActionableWork(store, agentId).hasWork;
+function hasActionableWork(
+  store: StoreData,
+  agentId: string,
+  spendSnapshot?: ProjectSpendSnapshot | null,
+): boolean {
+  return getActionableWork(store, agentId, spendSnapshot).hasWork;
 }
 
 // #1112 PR 4 — pure dispatch gating lives in src/lib/dispatch-gate.ts.
@@ -782,7 +789,11 @@ function hasActionableWork(store: StoreData, agentId: string): boolean {
  * This distinction matters: an in-progress task means the agent is ALREADY working —
  * don't re-dispatch. Only backlog/QA tasks need a new dispatch.
  */
-function getActionableWork(store: StoreData, agentId: string): { hasWork: boolean; hasNewWork: boolean; hasInProgress: boolean } {
+function getActionableWork(
+  store: StoreData,
+  agentId: string,
+  spendSnapshot?: ProjectSpendSnapshot | null,
+): { hasWork: boolean; hasNewWork: boolean; hasInProgress: boolean } {
   const agentName = getAgentName(store, agentId);
   const nameLower = agentName.toLowerCase();
   const agentRole = getAgentRole(store, agentId);
@@ -811,7 +822,7 @@ function getActionableWork(store: StoreData, agentId: string): { hasWork: boolea
     // #1183 — adhoc tickets (bug/chore/spike/followup) take the parallel
     // lane via isTaskAdhocDispatchEligible. Umbrella ORs both.
     if (isAssigned && status === 'backlog') {
-      if (isTaskAnyDispatchEligible(store, t as any)) hasNewWork = true;
+      if (isTaskAnyDispatchEligible(store, t as any, spendSnapshot)) hasNewWork = true;
     }
 
     // #862: QA-column routing removed — QA tickets are ordinary tickets owned by the QA component owner (assignee).
@@ -1484,8 +1495,15 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        // Pre-flight: confirm there's actually work
-        if (!hasActionableWork(store, agentId)) {
+        // Pre-flight: confirm there's actually work.
+        // #1653 rule 6: fetch the month-to-date spend snapshot once per trigger
+        // (60s module cache; null on error = fail-open) and run the alert-once
+        // threshold check fire-and-forget — neither may break dispatch.
+        const spendSnapshot = await getMonthlyProjectSpend();
+        checkBudgetAlerts((store.projects || []) as any[], spendSnapshot).catch((e) =>
+          console.warn('[budget-alerts] non-fatal:', e?.message || e),
+        );
+        if (!hasActionableWork(store, agentId, spendSnapshot)) {
           return recordAndReturn(
             { ok: true, skipped: true, reason: 'No actionable work' },
             { outcome: 'skipped', reason: 'no-actionable-work' },
@@ -1637,6 +1655,11 @@ export async function POST(request: NextRequest) {
         // Safety net for event-driven triggers. Users call this via cron or manually.
         const sweepStartedAt = Date.now();
         const store = await readStore();
+        // #1653 rule 6: same snapshot contract as the trigger path.
+        const sweepSpendSnapshot = await getMonthlyProjectSpend();
+        checkBudgetAlerts((store.projects || []) as any[], sweepSpendSnapshot).catch((e) =>
+          console.warn('[budget-alerts] non-fatal:', e?.message || e),
+        );
         const loops: AgentLoop[] = store.settings?.loops || [];
         const enabledLoops = loops.filter(l => l.enabled);
         const swept: { agentId: string; reason: string; triggered: boolean }[] = [];
@@ -1652,7 +1675,7 @@ export async function POST(request: NextRequest) {
             const a = (t.assignee || '').toLowerCase();
             if (!(a === nameLower || a === agentId)) return false;
             if (t.status !== 'backlog') return false;
-            return isTaskAnyDispatchEligible(store, t as any);
+            return isTaskAnyDispatchEligible(store, t as any, sweepSpendSnapshot);
           });
 
           if (backlogTasks.length > 0) {
