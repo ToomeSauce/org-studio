@@ -23,6 +23,7 @@ import {
   type WorkspaceContext,
 } from '@/lib/workspace-auth';
 import { validateUpdateTaskPayload } from '@/lib/update-task-validation';
+import { DEFAULT_BOUNDARIES, validateBoundaries, validateBudget } from '@/lib/autonomy-budget';
 import { canonicalizeTeammate } from '@/lib/canonicalize-teammate';
 import { resolveWakeTrigger } from '@/lib/wake-trigger';
 import { getRuntimeRegistry } from '@/lib/runtimes/registry';
@@ -569,9 +570,16 @@ export async function GET(req: NextRequest) {
       return { ...rest, commentCount: count, heldByHuman };
     });
 
+    const filteredProjects = filterByWorkspace(data.projects, workspace.id).map((project: any) => {
+      if (!project || project.budget === undefined) return project;
+      const normalizedBudget = validateBudget(project.budget, { allowUnknownKeys: true });
+      if (!normalizedBudget.ok) return project;
+      return { ...project, budget: normalizedBudget.value };
+    });
+
     const filteredData = {
       ...data,
-      projects: filterByWorkspace(data.projects, workspace.id),
+      projects: filteredProjects,
       tasks: slimTasks,
     };
 
@@ -1717,6 +1725,15 @@ export async function POST(req: NextRequest) {
         const id = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
         const project = { id, createdAt: Date.now(), ...payload.project, workspace_id: payload.project?.workspace_id || workspace.id };
 
+        // #1652 Phase A-1 — seed decision boundaries on project creation.
+        // Existing projects are untouched (no backfill).
+        if (!project.boundaries) {
+          project.boundaries = {
+            freeToDecide: [...DEFAULT_BOUNDARIES.freeToDecide],
+            mustAsk: [...DEFAULT_BOUNDARIES.mustAsk],
+          };
+        }
+
         // #1112 PR 1: Stop writing `devOwner` / `qaOwner` on new projects. These
         // fields hardcode a 2-role worldview that the Components model replaces.
         // Existing projects keep their values (nothing strips them). New projects
@@ -1744,6 +1761,26 @@ export async function POST(req: NextRequest) {
       case 'updateProject': {
         console.log('[API:store:updateProject]', { id: payload.id, updates: JSON.stringify(payload.updates).slice(0, 500) });
 
+        if (!payload?.updates || typeof payload.updates !== 'object' || Array.isArray(payload.updates)) {
+          return NextResponse.json({ error: 'updateProject requires `updates` (object)' }, { status: 400 });
+        }
+
+        if ('budget' in payload.updates && payload.updates.budget !== undefined) {
+          const validated = validateBudget(payload.updates.budget);
+          if (!validated.ok) {
+            return NextResponse.json({ error: validated.error }, { status: 400 });
+          }
+          payload.updates.budget = validated.value;
+        }
+
+        if ('boundaries' in payload.updates && payload.updates.boundaries !== undefined) {
+          const validated = validateBoundaries(payload.updates.boundaries);
+          if (!validated.ok) {
+            return NextResponse.json({ error: validated.error }, { status: 400 });
+          }
+          payload.updates.boundaries = validated.value;
+        }
+
         // #1645: full behavior lives in the shared service layer so internal
         // callers (roadmap route currentVersion sync) fire the exact same
         // side-effects without an HTTP self-fetch. See src/lib/store-service.ts.
@@ -1755,7 +1792,7 @@ export async function POST(req: NextRequest) {
         // Note: Vision cron management has been replaced by the Launch model
         // No auto-create/update/delete cron logic needed here anymore
 
-        return NextResponse.json({ ok: true });
+        return NextResponse.json({ ok: true, project: result.project });
       }
 
       case 'updateComponent': {
