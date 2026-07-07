@@ -1392,6 +1392,7 @@ function ProjectDashboardPageInner() {
           visionOwner: (project as any)?.visionOwner,
           repoUrl: (project as any)?.repoUrl,
         }}
+        fullProject={project}
         teammates={teammates}
         onClose={() => setShowSettings(false)}
         onSaved={(patch) => {

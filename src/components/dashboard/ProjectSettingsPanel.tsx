@@ -15,6 +15,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { X, Loader2 } from 'lucide-react';
 import clsx from 'clsx';
+import AutonomyPanel from '@/components/dashboard/AutonomyPanel';
 
 interface ProjectMeta {
   id: string;
@@ -28,6 +29,10 @@ interface ProjectMeta {
 interface Props {
   open: boolean;
   project: ProjectMeta;
+  /** Full project object from the store snapshot — powers the #1655
+   *  Autonomy panel (horizon/budget/boundaries/kill switch). Optional so
+   *  meta-only callers keep working. */
+  fullProject?: any;
   teammates: string[];
   onClose: () => void;
   /** Called with the patch object on successful save. Lets the parent
@@ -35,7 +40,7 @@ interface Props {
   onSaved?: (patch: Partial<ProjectMeta>) => void;
 }
 
-export default function ProjectSettingsPanel({ open, project, teammates, onClose, onSaved }: Props) {
+export default function ProjectSettingsPanel({ open, project, fullProject, teammates, onClose, onSaved }: Props) {
   const [name, setName] = useState(project.name || '');
   const [description, setDescription] = useState(project.description || '');
   const [devOwner, setDevOwner] = useState(project.devOwner || '');
@@ -213,6 +218,17 @@ export default function ProjectSettingsPanel({ open, project, teammates, onClose
             <div className="px-3 py-2 rounded bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800/50 text-sm text-red-700 dark:text-red-300">
               {error}
             </div>
+          )}
+
+          {/* #1655 — Autonomy panel: horizon, budget, boundaries, kill switch
+           * in one glance. Own save buttons per dial; writes go through the
+           * existing APIs (updateComponent approvedVersions / updateProject
+           * budget+boundaries / roadmap upsert loopPaused). */}
+          {fullProject && (
+            <>
+              <div className="pt-2 border-t border-[var(--border-color)]" />
+              <AutonomyPanel project={fullProject} />
+            </>
           )}
         </div>
 
