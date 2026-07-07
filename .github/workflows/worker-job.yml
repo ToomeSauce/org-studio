@@ -141,16 +141,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          BODY="Automated worker job for Org Studio ticket #${{ inputs.ticket }} (marker \`${{ inputs.marker }}\`, run ${{ github.run_id }})."
+          BODY="$BODY"$'\n\n'"**Workers never merge - this PR awaits human review.**"
+          BODY="$BODY"$'\n\n'"- Lane: gh-actions ephemeral runner"
+          BODY="$BODY"$'\n'"- Smoke mode: ${{ inputs.smoke }}"
+          BODY="$BODY"$'\n'"- Teardown: runner destroyed + token auto-revoked at job end; only this branch/PR persist (both reversible)."
           PR_URL=$(gh pr create \
             --repo "${{ inputs.target_repo }}" \
             --head "${{ steps.branch.outputs.branch }}" \
             --title "worker(#${{ inputs.ticket }}): ${{ inputs.title }}" \
-            --body "Automated worker job for Org Studio ticket #${{ inputs.ticket }} (marker \`${{ inputs.marker }}\`, run ${{ github.run_id }}).
-
-**Workers never merge — this PR awaits human review.**
-
-- Lane: gh-actions ephemeral runner
-- Smoke mode: ${{ inputs.smoke }}
-- Teardown: runner destroyed + token auto-revoked at job end; only this branch/PR persist (both reversible).")
-          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+            --body "$BODY")
           echo "### Worker PR: $PR_URL" >> "$GITHUB_STEP_SUMMARY"
