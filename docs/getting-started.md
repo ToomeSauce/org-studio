@@ -158,13 +158,15 @@ Click **Home** to see:
 
 ## Remote Access (PostgreSQL)
 
-By default, Org Studio stores data in `data/store.json` (local file). To access from multiple devices:
+Org Studio is Postgres-first. Set `DATABASE_URL` to use the primary storage path for multi-device access:
 
 ```env
 DATABASE_URL=postgresql://user:pass@host:5432/org_studio_db
 ```
 
 Org Studio will auto-create the schema. Now your org is accessible from anywhere.
+
+If `DATABASE_URL` is unset, Org Studio falls back to local file mode for offline/dev-only use.
 
 ## Connecting Agent Runtimes
 
@@ -236,7 +238,7 @@ The key shift: you're not assigning every micro-task. You're setting direction a
 ## Troubleshooting
 
 **Q: Where's my data stored?**  
-By default: `data/store.json`. Optional: set `DATABASE_URL` for PostgreSQL.
+Primary: PostgreSQL via `DATABASE_URL`. If `DATABASE_URL` is unset, Org Studio uses local file mode for offline/dev-only runs.
 
 **Q: Can I use this without agents?**  
 Yes! Org Studio is a standalone org design tool. Agents are optional.
@@ -245,10 +247,10 @@ Yes! Org Studio is a standalone org design tool. Agents are optional.
 Set `GATEWAY_URL` and `GATEWAY_TOKEN` in `.env.local`. Any framework with HTTP/WebSocket support works.
 
 **Q: Can I export my data?**  
-Yes. `GET /api/store` returns the full JSON. You can also download `data/store.json` directly.
+Yes. `GET /api/store` returns the full JSON. In offline/dev file mode, you can also copy your local `data/store.json` if present.
 
 **Q: Does this require a database?**  
-No. File-backed by default. PostgreSQL is optional for multi-device access.
+PostgreSQL (`DATABASE_URL`) is the primary/supported path. For offline/dev-only use, you can run without it in local file mode.
 
 ## Questions?
 
