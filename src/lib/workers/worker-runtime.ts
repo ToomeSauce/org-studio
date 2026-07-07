@@ -320,10 +320,18 @@ export class WorkerRuntime implements AgentRuntime {
     // against the store — same claim-from-board contract agents follow.)
     const store = await this.deps.fetchStore();
     if (!store) throw new Error('Worker dispatch aborted: store unreachable');
+    // Assignee may be the agentId ('worker-codex') OR the scaffolded teammate
+    // display name ('Worker (Codex)') — the store normalizes to the latter.
+    // Match both, mirroring the scheduler's name-or-agentId contract.
+    const aliases = new Set<string>([agentId.toLowerCase()]);
+    const teammate = (store.settings?.teammates || []).find(
+      (t: any) => (t.agentId || '').toLowerCase() === agentId.toLowerCase(),
+    );
+    if (teammate?.name) aliases.add(String(teammate.name).toLowerCase());
     const candidates = (store.tasks || [])
       .filter(
         (t: any) =>
-          (t.assignee || '').toLowerCase() === agentId.toLowerCase() &&
+          aliases.has((t.assignee || '').toLowerCase()) &&
           ['backlog', 'in-progress'].includes(t.status) &&
           !t.isArchived,
       )

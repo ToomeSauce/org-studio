@@ -112,7 +112,9 @@ function parseTicketNumber(raw: unknown): number | null {
 
 function assigneeLane(assignee: unknown): LaneKey {
   const who = typeof assignee === 'string' ? assignee.toLowerCase() : '';
-  return who.startsWith('worker-') ? 'worker' : 'runtime';
+  // Matches both the agentId form ('worker-codex') and the scaffolded
+  // teammate display-name form ('Worker (Codex)').
+  return /^worker[-\s(]/.test(who) ? 'worker' : 'runtime';
 }
 
 function asLane(raw: unknown): LaneKey | null {
