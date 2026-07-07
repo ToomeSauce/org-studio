@@ -242,7 +242,7 @@ export async function getWorkerScorecard(
         `SELECT ticket_number, assignee, status_history
          FROM org_studio_tasks
          WHERE workspace_id = $1
-           AND is_archived IS DISTINCT FROM TRUE
+           AND (data->>'isArchived')::boolean IS DISTINCT FROM TRUE
            AND status_history IS NOT NULL`,
         [workspaceId],
       ),
