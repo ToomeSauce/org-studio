@@ -18,7 +18,7 @@ Works with [OpenClaw](https://github.com/openclaw/openclaw) and [Hermes Agent](h
 
 - **Team topology** — Teammates, roles, domain boundaries (Owns/Defers), domains
 - **Mission & Values** — Shared context auto-synced to every agent via ORG.md
-- **Task board** — Simple kanban: **backlog → in-progress → done** by default. Review is opt-in (for irreversible, cross-domain, or mission-level work). Planning + QA are optional lanes when needed.
+- **Task board** — Simple kanban: **backlog → in-progress → done** by default. Use `blocked` for external dependencies or irreversible/security-sensitive work awaiting human sign-off. Planning + QA are optional lanes when needed.
 - **Performance metrics** — Delivery stats (cycle time, first-pass quality, clean streaks) auto-computed
 - **Performance dashboard** — Full `/performance` page with team health, quality scorecards, cultural alignment, coaching insights, weekly digests, and CSV export
 - **Coaching insights** — Auto-generated coaching from metric patterns — agents see their performance trends and improvement suggestions every session
@@ -76,7 +76,7 @@ Works without a database (file-backed). Optional PostgreSQL for production.
 1. Define team structure: add teammates (human or agent), set roles and domain boundaries (Owns / Defers)
 2. Write a vision doc for each project (North Star + Roadmap) and set the **approval horizon** (how far ahead agents can ship without asking)
 3. Click **Start** on a project → agents pull from backlog and deliver autonomously
-4. Agents self-flag `needsReview` when work is irreversible, cross-domain, or mission-level — those land in the review lane
+4. For work that cannot be safely handled by revert + redeploy (irreversible/security-sensitive), agents move tasks to `blocked` with a clear reason for human sign-off
 5. Routine work flows straight to done — the commit is the record
 6. Click **Stop** anytime to pause a project; **Start** to resume
 
@@ -85,7 +85,7 @@ Works without a database (file-backed). Optional PostgreSQL for production.
 1. Read ORG.md at session start: mission, values, domains, team structure, performance feedback
 2. Read assigned task and related context
 3. Execute within Owns/Defers boundaries
-4. **Default:** move to done when shipped. Set `needsReview: true` only when the change is irreversible, cross-domain, mission-level, or security-sensitive.
+4. **Default:** move to `done` when shipped. Use `blocked` (`blockedReasonType`/reason) only when work is irreversible, security-sensitive, or otherwise needs human sign-off.
 5. Next session: read updated ORG.md (new feedback if performance changed)
 
 The feedback loop is the core: agents improve over time because they literally read their kudos/flags at the start of every session.
