@@ -201,6 +201,7 @@ describe('#1657: WorkerRuntime send() = enqueue semantics', () => {
       writeAgentsMd: vi.fn(async () => vi.fn(async () => undefined)),
       runEngine: vi.fn(async () => OK_RESULT),
       runRemote: vi.fn(async () => ({ ok: false, mode: 'gh-actions', detail: 'not configured' })),
+      updateTask: vi.fn(async () => undefined),
       recordDispatch: vi.fn(),
       recordModelCall: vi.fn(),
       ...overrides,
@@ -345,6 +346,42 @@ describe('#1657: WorkerRuntime send() = enqueue semantics', () => {
       const closeout = (deps.postComment as any).mock.calls[0][2] as string;
       expect(closeout).toContain('gh-actions runner');
       expect(closeout).toContain('https://github.com/x/y/pull/1');
+      // #1661 results loop: success + PR → ticket moves to done (PR = merge gate)
+      expect(deps.updateTask).toHaveBeenCalledWith(
+        'task-1',
+        expect.objectContaining({ status: 'done', reviewNotes: expect.stringContaining('pull/1') }),
+      );
+    });
+
+    it('#1661: failed run below attempt cap leaves ticket alone (sweep retries)', async () => {
+      enableGhActionsWorkers();
+      vi.stubEnv('WORKER_REPO_SLUGS', JSON.stringify({ 'proj-oss': 'x/y' }));
+      const runRemote = vi.fn(async () => ({ ok: false, mode: 'gh-actions', detail: 'run failure' }));
+      const { rt, deps } = makeRuntime({ runRemote }); // 0 prior attempts in thread
+      await rt.send('worker-codex', 'brief', { idempotencyKey: 'd-fail1' });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(deps.updateTask).not.toHaveBeenCalled();
+    });
+
+    it('#1661: failure at attempt cap escalates to blocked/needs-human-judgment', async () => {
+      enableGhActionsWorkers();
+      vi.stubEnv('WORKER_REPO_SLUGS', JSON.stringify({ 'proj-oss': 'x/y' }));
+      const runRemote = vi.fn(async () => ({ ok: false, mode: 'gh-actions', detail: 'run failure' }));
+      const priorFailures = [
+        { author: 'worker-codex', content: '🤖 **Worker run** `a` — ❌ failed on gh-actions runner', createdAt: 1 },
+        { author: 'worker-codex', content: '🤖 **Worker run** `b` — ❌ failed on gh-actions runner', createdAt: 2 },
+      ];
+      const { rt, deps } = makeRuntime({
+        runRemote,
+        fetchComments: vi.fn(async () => priorFailures),
+      });
+      await rt.send('worker-codex', 'brief', { idempotencyKey: 'd-fail3' });
+      await new Promise((r) => setTimeout(r, 0));
+      // 2 prior + this one = 3 = default WORKER_MAX_ATTEMPTS
+      expect(deps.updateTask).toHaveBeenCalledWith(
+        'task-1',
+        expect.objectContaining({ status: 'blocked', blockedReasonType: 'needs-human-judgment' }),
+      );
     });
 
     it('missing WORKER_REPO_SLUGS entry posts ⛔ and throws', async () => {

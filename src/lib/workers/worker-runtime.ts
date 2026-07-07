@@ -137,6 +137,30 @@ async function defaultPostComment(taskId: string, author: string, content: strin
   }
 }
 
+/** Results-loop status move (#1661 W-6): success → done (PR is the human
+ *  merge gate), repeated failure → blocked for human judgment. Best-effort:
+ *  a failed status move must not crash the job — but it DOES get logged
+ *  loudly because a missed move causes infinite re-dispatch. */
+async function defaultUpdateTask(taskId: string, updates: Record<string, unknown>): Promise<void> {
+  try {
+    const r = await fetch(`${ORG_STUDIO_BASE()}/api/store`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(process.env.ORG_STUDIO_API_KEY
+          ? { Authorization: `Bearer ${process.env.ORG_STUDIO_API_KEY}` }
+          : {}),
+      },
+      body: JSON.stringify({ action: 'updateTask', id: taskId, updates }),
+    });
+    if (!r.ok) {
+      console.error(`[worker] status move FAILED (HTTP ${r.status}) for task ${taskId} — ticket will re-dispatch`);
+    }
+  } catch (e: any) {
+    console.error(`[worker] status move FAILED for task ${taskId} — ticket will re-dispatch:`, e?.message);
+  }
+}
+
 /** Full comment thread via the canonical listComments action (#1658).
  *  Best-effort: [] on any failure — the brief degrades, the job still runs. */
 async function defaultFetchComments(taskId: string): Promise<BriefComment[]> {
@@ -220,6 +244,7 @@ export interface WorkerRuntimeDeps {
   writeAgentsMd: (repoRoot: string, content: string) => Promise<() => Promise<void>>;
   runEngine: (opts: EngineRunOpts) => Promise<WorkerRunResult>;
   runRemote: (spec: ProvisionJobSpec, worker: WorkerConfig) => Promise<ProvisionResult>;
+  updateTask: (taskId: string, updates: Record<string, unknown>) => Promise<void>;
   recordDispatch: typeof recordDispatch;
   recordModelCall: typeof recordModelCall;
   /** #1659 — OS-backstop availability probe (systemd-run). */
@@ -235,6 +260,7 @@ const DEFAULT_DEPS: WorkerRuntimeDeps = {
   writeAgentsMd: defaultWriteAgentsMd,
   runEngine: runCodexEngine,
   runRemote: defaultRunRemote,
+  updateTask: defaultUpdateTask,
   recordDispatch,
   recordModelCall,
   systemdRunAvailable: defaultSystemdRunAvailable,
@@ -481,6 +507,33 @@ export class WorkerRuntime implements AgentRuntime {
             lines.push(`Usage: in ${res.usage.inputTokens ?? '?'} / out ${res.usage.outputTokens ?? '?'}`);
           }
           await this.deps.postComment(task.id, worker.id, lines.join('\n'));
+        }
+
+        // --- Results-loop status move (#1661 W-6) ---
+        // Success = PR opened. The PR itself is the human merge gate, so the
+        // ticket moves to done; without this move the sweep re-dispatches the
+        // same ticket forever (observed live: 3 duplicate runs on #1666).
+        if (res.ok && res.prUrl) {
+          await this.deps.updateTask(task.id, {
+            status: 'done',
+            reviewNotes: `Worker PR opened: ${res.prUrl} — human merge gate applies (workers never merge).`,
+          });
+        } else {
+          // Attempt counting: every worker closeout comment on this ticket is
+          // one prior attempt (the current run's comment isn't in `comments`).
+          const priorAttempts = comments.filter(
+            (c) => typeof c.content === 'string' && c.content.includes('**Worker run**'),
+          ).length;
+          const maxAttempts = Math.max(1, Number(process.env.WORKER_MAX_ATTEMPTS || 3));
+          if (priorAttempts + 1 >= maxAttempts) {
+            await this.deps.updateTask(task.id, {
+              status: 'blocked',
+              blockedReasonType: 'needs-human-judgment',
+              reviewNotes: `Worker lane failed ${priorAttempts + 1} attempt(s) without opening a PR (last: ${res.detail}). Escalated for human judgment — see run closeout comments.`,
+            });
+          }
+          // Below the cap: leave in backlog; the sweep retries with the failure
+          // closeout now in the brief (prior-attempts-first, #1658).
         }
       } catch (e: any) {
         await this.deps.postComment(
