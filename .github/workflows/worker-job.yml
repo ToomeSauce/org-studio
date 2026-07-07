@@ -1,0 +1,156 @@
+name: worker-job
+
+# Execution Worker job runner (#1660, W-5 of Execution Workers).
+#
+# Fired by the GhActionsAdapter via workflow_dispatch. Runs a worker job on
+# an EPHEMERAL Actions runner (never hanktank): checkout target repo → run
+# engine (or smoke stub) → push worker/<ticket> branch → open PR.
+#
+# SECURITY INVARIANTS:
+#   - Workers NEVER merge. There is no merge step here and never will be.
+#     Humans own the merge gate on every worker PR.
+#   - Teardown is structural: the runner is destroyed at job end and
+#     GITHUB_TOKEN (itself a GitHub App installation token — the
+#     github-actions app) auto-revokes. Only the branch + PR persist, and
+#     both are reversible (close PR, delete branch).
+#   - No secrets in logs: engine/API keys come from repo secrets, GitHub
+#     masks them in log output; the job never echoes token material.
+#   - Cross-repo checkout uses a custom GitHub App installation token
+#     minted in-job from ORG_WORKER_APP_* secrets (registration of that App
+#     is a one-time human step; see docs/design/execution-workers.md).
+#     Same-repo dogfood needs none of that — GITHUB_TOKEN suffices.
+
+run-name: "worker-job ${{ inputs.marker }} — #${{ inputs.ticket }} on ${{ inputs.target_repo }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_repo:
+        description: "owner/name of the repo to work on"
+        required: true
+        type: string
+      ticket:
+        description: "Org Studio ticket number"
+        required: true
+        type: string
+      title:
+        description: "Ticket title (for the PR)"
+        required: true
+        type: string
+      brief:
+        description: "Job brief (assembled by ContextAssembler)"
+        required: true
+        type: string
+      marker:
+        description: "Dispatch correlation marker"
+        required: true
+        type: string
+      smoke:
+        description: "true = prove provision→branch→PR→teardown without an engine"
+        required: false
+        type: string
+        default: "false"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: worker-job-${{ inputs.target_repo }}-${{ inputs.ticket }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Resolve checkout token
+        id: auth
+        env:
+          SAME_REPO: ${{ inputs.target_repo == github.repository }}
+        run: |
+          # Same-repo: the built-in GITHUB_TOKEN is enough (it IS an ephemeral
+          # GitHub App installation token). Cross-repo: a custom-App token must
+          # be minted by a preceding step (not yet wired — dogfood is same-repo).
+          if [ "$SAME_REPO" != "true" ]; then
+            echo "::error::cross-repo checkout requires the custom GitHub App (ORG_WORKER_APP_*) — not configured in the dogfood lane yet"
+            exit 1
+          fi
+          echo "same_repo=true >> $GITHUB_OUTPUT" > /dev/null
+          echo "ok"
+
+      - name: Checkout target repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.target_repo }}
+          token: ${{ github.token }}
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "org-studio-worker"
+          git config user.email "worker@toomesauce.com"
+
+      - name: Create work branch
+        id: branch
+        run: |
+          BRANCH="worker/${{ inputs.ticket }}-${{ github.run_id }}"
+          git checkout -b "$BRANCH"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Run job (smoke mode)
+        if: ${{ inputs.smoke == 'true' }}
+        run: |
+          # Smoke proof: a deterministic, obviously-safe change that exercises
+          # the full provision→commit→push→PR path without any engine/model.
+          mkdir -p .worker-smoke
+          {
+            echo "# Worker smoke run"
+            echo "ticket: #${{ inputs.ticket }}"
+            echo "marker: ${{ inputs.marker }}"
+            echo "runner: ephemeral gh-actions (run ${{ github.run_id }})"
+            echo "date: $(date -u +%FT%TZ)"
+          } > .worker-smoke/RUN.md
+          git add .worker-smoke/RUN.md
+          git commit -m "chore(worker-smoke): provisioning proof for #${{ inputs.ticket }} (${{ inputs.marker }})"
+
+      - name: Run job (engine mode)
+        if: ${{ inputs.smoke != 'true' }}
+        env:
+          BRIEF: ${{ inputs.brief }}
+          # Engine credentials come from repo secrets; GitHub masks them in
+          # logs. Absent secrets fail this step cleanly.
+          OPENAI_API_KEY: ${{ secrets.WORKER_OPENAI_API_KEY }}
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "::error::WORKER_OPENAI_API_KEY secret not configured — engine mode unavailable"
+            exit 1
+          fi
+          npm i -g @openai/codex@0.42.0
+          printf '%s' "$BRIEF" > /tmp/brief.txt
+          codex exec --json --skip-git-repo-check --sandbox workspace-write "$(cat /tmp/brief.txt)" | tee /tmp/engine-events.jsonl
+          # Commit whatever the engine changed (it is instructed to commit
+          # itself; this is the safety net for uncommitted work).
+          git add -A ':!/tmp' || true
+          git diff --cached --quiet || git commit -m "worker(#${{ inputs.ticket }}): engine output (${{ inputs.marker }})"
+
+      - name: Push branch
+        run: git push origin "${{ steps.branch.outputs.branch }}"
+
+      - name: Open PR (never merge)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_URL=$(gh pr create \
+            --repo "${{ inputs.target_repo }}" \
+            --head "${{ steps.branch.outputs.branch }}" \
+            --title "worker(#${{ inputs.ticket }}): ${{ inputs.title }}" \
+            --body "Automated worker job for Org Studio ticket #${{ inputs.ticket }} (marker \`${{ inputs.marker }}\`, run ${{ github.run_id }}).
+
+**Workers never merge — this PR awaits human review.**
+
+- Lane: gh-actions ephemeral runner
+- Smoke mode: ${{ inputs.smoke }}
+- Teardown: runner destroyed + token auto-revoked at job end; only this branch/PR persist (both reversible).")
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+          echo "### Worker PR: $PR_URL" >> "$GITHUB_STEP_SUMMARY"
