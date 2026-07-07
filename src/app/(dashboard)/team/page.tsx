@@ -19,6 +19,11 @@ import { KudosBoard } from '@/components/KudosBoard';
 import { KudosLeaderboard } from '@/components/KudosLeaderboard';
 import { CURRENT_USER_ID } from '@/lib/dm';
 
+const TeamPerformanceSection = dynamic(() => import('@/components/TeamPerformanceSection'), {
+  ssr: false,
+  loading: () => <div className="h-32 animate-pulse bg-[var(--bg-secondary)] rounded-[var(--radius-md)]" />,
+});
+
 function PersonCard({ person, isActive, activityStatus, overrides, onSave, onUpdateTeammate, onRemove, taskCount, projectCount, isDisconnected, isGatewayAgent, onClick }: {
   person: Teammate;
   isActive: boolean;
@@ -685,6 +690,13 @@ export default function TeamPage() {
           onUpdateTeammate={updateTeammate}
         />
       )}
+
+      {/* Performance — delivery metrics, folded in from /performance (#1651) */}
+      <div>
+        <h2 className="text-[var(--text-lg)] font-bold tracking-tight text-[var(--text-primary)]">Performance</h2>
+        <p className="text-[var(--text-base)] text-[var(--text-tertiary)] mt-1 mb-4">Delivery metrics · Weekly digest · Quality & coaching</p>
+        <TeamPerformanceSection />
+      </div>
 
       {/* Kudos Board Section */}
       <div>

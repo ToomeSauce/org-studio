@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation';
 import { clsx } from 'clsx';
 import {
   LayoutDashboard, FolderKanban, Layers, ChevronLeft, ChevronRight, Atom,
-  X, Users, BarChart3, Activity,
+  X, Users, Activity, Radio, CircleDollarSign,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useMobileMenu } from '@/lib/mobile-menu-context';
@@ -16,10 +16,11 @@ const mainNav = [
   { name: 'Projects', href: '/projects', icon: FolderKanban, emoji: '📋' },
   { name: 'Context', href: '/context', icon: Layers, emoji: '📊' },
   { name: 'Team', href: '/team', icon: Users, emoji: '👥' },
-  { name: 'Performance', href: '/performance', icon: BarChart3, emoji: '📊' },
 ];
 
 const bottomNav = [
+  { name: 'System', href: '/system', icon: Radio, emoji: '📡' },
+  { name: 'Usage', href: '/usage', icon: CircleDollarSign, emoji: '💰' },
   { name: 'Health', href: '/health', icon: Activity, emoji: '🩺' },
 ];
 
