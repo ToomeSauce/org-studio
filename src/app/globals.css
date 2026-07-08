@@ -148,12 +148,12 @@ html.light {
    blue #1f76b4 — all deepened for AA contrast on the paler canvas.
    ─────────────────────────────────────────────────────────────────────── */
 html.solarized {
-  --bg-primary: #fdfaf1;    /* bg-0 — main canvas */
-  --bg-secondary: #f7f2e3;  /* bg-1 — panels, sidebar, cards */
-  --bg-tertiary: #f1ebd8;   /* bg-2 — wells, inset rows */
-  --bg-hover: #eae3cb;
+  --bg-primary: #f6f1e2;    /* canvas — deeper cream, recedes */
+  --bg-secondary: #fdfbf4;  /* panels, sidebar, cards — LIGHTER than canvas, pops forward */
+  --bg-tertiary: #f3edda;   /* wells, inset rows — reads inset vs card */
+  --bg-hover: #ece5cf;
   --bg-active: #e2dabf;
-  --bg-elevated: #fdfaf1;
+  --bg-elevated: #fffefa;   /* popovers/modals — lightest surface */
 
   --border-default: #ded6bd;
   --border-subtle: #e8e1cb;
@@ -184,7 +184,7 @@ html.solarized {
   --info: #1f76b4;           /* blue */
   --info-subtle: rgba(38, 139, 210, 0.11);
 
-  --card: #f7f2e3;
+  --card: #fdfbf4;
   --card-highlight: rgba(0, 0, 0, 0.02);
 
   --edge-default: rgba(35, 50, 59, 0.13);
@@ -199,8 +199,8 @@ html.solarized {
   --shadow-glow: 0 0 30px var(--accent-glow);
 
   /* Force graph label shadows — pale warm bg wants a light halo. */
-  --force-graph-text-shadow: 0 1px 3px rgba(253, 250, 241, 0.85);
-  --force-graph-text-shadow-strong: 0 1px 4px rgba(253, 250, 241, 0.95), 0 0 2px rgba(35, 50, 59, 0.16);
+  --force-graph-text-shadow: 0 1px 3px rgba(246, 241, 226, 0.85);
+  --force-graph-text-shadow-strong: 0 1px 4px rgba(246, 241, 226, 0.95), 0 0 2px rgba(35, 50, 59, 0.16);
   --force-graph-bg-dots: rgba(35, 50, 59, 0.05);
 }
 
