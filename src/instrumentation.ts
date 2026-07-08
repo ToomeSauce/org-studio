@@ -28,4 +28,20 @@ export async function register() {
     // Never block app start on warmup failure.
     console.warn('[boot] store-provider prewarm failed (non-fatal):', e?.message || e);
   }
+
+  // M-2 (#1663): start native messaging adapters. No token = no adapter =
+  // registry stays empty and every notify() is a no-op. Never blocks boot.
+  try {
+    const { telegramAdapterFromEnv } = await import('./lib/messaging/telegram');
+    const tg = telegramAdapterFromEnv();
+    if (tg) {
+      const { getMessagingRegistry } = await import('./lib/messaging/registry');
+      const registry = getMessagingRegistry();
+      registry.register(tg);
+      await registry.start();
+      console.log('[boot] native messaging started (telegram)');
+    }
+  } catch (e: any) {
+    console.warn('[boot] native messaging start failed (non-fatal):', e?.message || e);
+  }
 }

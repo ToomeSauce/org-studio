@@ -25,6 +25,7 @@ import {
 import { validateUpdateTaskPayload } from '@/lib/update-task-validation';
 import { DEFAULT_BOUNDARIES, validateBoundaries, validateBudget } from '@/lib/autonomy-budget';
 import { getMessagingRegistry } from '@/lib/messaging/registry';
+import { isLegacyChannelDisabled } from '@/lib/messaging/config';
 import { isProjectBudgetExceeded } from '@/lib/budget-gate';
 import { getMonthlyProjectSpend } from '@/lib/budget-spend';
 import { canonicalizeTeammate } from '@/lib/canonicalize-teammate';
@@ -364,6 +365,9 @@ function notifyTaskStatusChange(task: any, newStatus: string, store: StoreData) 
 
   // Telegram only for high-signal events
   if (!TELEGRAM_STATUSES.includes(newStatus)) return;
+  // M-2 (#1663): when the native telegram adapter is authoritative, skip the
+  // legacy direct send so the message never lands twice.
+  if (isLegacyChannelDisabled('telegram')) return;
 
   fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: 'POST',

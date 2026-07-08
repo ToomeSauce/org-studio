@@ -20,6 +20,7 @@ import {
 } from '@/lib/budget-gate';
 import { getStoreProvider } from '@/lib/store-provider';
 import { DEFAULT_WORKSPACE_ID } from '@/lib/workspace-auth';
+import { isLegacyChannelDisabled } from '@/lib/messaging/config';
 
 interface AlertableProject {
   id: string;
@@ -36,6 +37,9 @@ function pace(spend: number, now: Date = new Date()): number {
 }
 
 async function sendHuman(text: string): Promise<boolean> {
+  // M-2 (#1663): native adapter authoritative for telegram → skip legacy
+  // direct send (the registry emission below this call handles delivery).
+  if (isLegacyChannelDisabled('telegram')) return false;
   const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
   const TG_CHAT = process.env.TELEGRAM_CHAT_ID || process.env.NOTIFY_CHAT_ID || '';
   if (!TG_TOKEN || !TG_CHAT) {
