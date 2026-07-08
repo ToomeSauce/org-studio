@@ -1,0 +1,870 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Idea → Fruition · Org Studio prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    /* Customized Solarized Light: lighter background, darker text than stock */
+    --bg-0: #fdfaf1; --bg-1: #f7f2e3; --bg-2: #f1ebd8; --bg-hover: #eae3cb;
+    --border: #ded6bd; --border-subtle: #e8e1cb; --border-strong: #c4bba0;
+    --t-1: #23323b; --t-2: #46565f; --t-3: #68767e; --t-4: #8d989c;
+    --accent: #d13430; --accent-hover: #b82c28; --accent-soft: rgba(220,50,47,0.10);
+    --teal: #1f877f; --teal-soft: rgba(42,161,152,0.13);
+    --green: #6d7f00; --green-soft: rgba(133,153,0,0.13);
+    --amber: #9a7400; --amber-soft: rgba(181,137,0,0.13);
+    --red: #c8302d; --red-soft: rgba(220,50,47,0.08);
+    --blue: #1f76b4; --blue-soft: rgba(38,139,210,0.11);
+    --sans: 'Geist', -apple-system, sans-serif;
+    --mono: 'Geist Mono', 'JetBrains Mono', monospace;
+    --r-sm: 6px; --r-md: 8px; --r-lg: 12px;
+    --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  body.dark {
+    --bg-0: #13151c; --bg-1: #1a1d26; --bg-2: #1e2129; --bg-hover: #282c38;
+    --border: #2a2d36; --border-subtle: #22252d; --border-strong: #3d4150;
+    --t-1: #f5f5f7; --t-2: #b4b4bc; --t-3: #8a8a96; --t-4: #64647a;
+    --accent: #ff5c5c; --accent-hover: #ff7070; --accent-soft: rgba(255,92,92,0.13);
+    --teal: #14b8a6; --teal-soft: rgba(20,184,166,0.13);
+    --green: #34d399; --green-soft: rgba(52,211,153,0.12);
+    --amber: #fbbf24; --amber-soft: rgba(251,191,36,0.12);
+    --red: #f87171; --red-soft: rgba(248,113,113,0.10);
+    --blue: #60a5fa; --blue-soft: rgba(96,165,250,0.12);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { color-scheme: light; }
+  body.dark { color-scheme: dark; }
+  body { background: var(--bg-0); color: var(--t-1); font-family: var(--sans); font-size: 14px; line-height: 1.55; }
+  ::selection { background: var(--accent-soft); }
+
+  .app { display: flex; min-height: 100vh; }
+
+  /* ---------- sidebar (grounding chrome) ---------- */
+  .side { width: 196px; flex-shrink: 0; background: var(--bg-1); border-right: 1px solid var(--border-subtle); padding: 18px 10px; position: sticky; top: 0; height: 100vh; }
+  .side .logo { font-weight: 700; font-size: 15px; padding: 4px 10px 18px; letter-spacing: -0.01em; }
+  .side .logo span { color: var(--accent); }
+  .snav { display: flex; flex-direction: column; gap: 1px; }
+  .snav a { color: var(--t-3); text-decoration: none; padding: 7px 10px; border-radius: var(--r-sm); font-size: 13px; }
+  .snav a:hover { background: var(--bg-hover); color: var(--t-2); }
+  .snav a.on { background: var(--bg-2); color: var(--t-1); font-weight: 500; }
+  .side .foot { position: absolute; bottom: 16px; left: 10px; right: 10px; font-size: 11px; color: var(--t-4); padding: 8px 10px; border-top: 1px solid var(--border-subtle); }
+
+  /* ---------- main ---------- */
+  .main { flex: 1; min-width: 0; }
+  .topbar { display: flex; align-items: center; gap: 14px; padding: 14px 28px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-0); position: sticky; top: 0; z-index: 5; }
+  .topbar h1 { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+  .crumb { color: var(--t-4); font-size: 13px; }
+  .proto-tag { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--amber); background: var(--amber-soft); padding: 3px 9px; border-radius: 99px; letter-spacing: 0.04em; }
+
+  /* pipeline rail */
+  .rail { display: flex; gap: 4px; padding: 12px 28px; border-bottom: 1px solid var(--border-subtle); overflow-x: auto; background: var(--bg-0); }
+  .rail button { background: none; border: 1px solid transparent; color: var(--t-4); font-family: var(--mono); font-size: 11px; padding: 5px 11px; border-radius: 99px; cursor: pointer; white-space: nowrap; transition: color .15s var(--ease); }
+  .rail button:hover { color: var(--t-2); }
+  .rail button.on { color: var(--t-1); border-color: var(--border-strong); background: var(--bg-1); }
+  .rail .sep { color: var(--t-4); font-size: 11px; align-self: center; opacity: .5; }
+
+  .screen { display: none; padding: 30px 28px 80px; max-width: 1060px; }
+  .screen.on { display: block; animation: fade .25s var(--ease); }
+  @keyframes fade { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+
+  h2.st { font-size: 21px; font-weight: 650; letter-spacing: -0.015em; margin-bottom: 6px; }
+  p.sub { color: var(--t-3); font-size: 13.5px; max-width: 68ch; margin-bottom: 26px; }
+  p.sub b { color: var(--t-2); font-weight: 500; }
+
+  /* buttons */
+  .btn { display: inline-flex; align-items: center; gap: 7px; font-family: var(--sans); font-size: 13px; font-weight: 550; padding: 8px 16px; border-radius: var(--r-md); border: 1px solid var(--border-strong); background: var(--bg-2); color: var(--t-1); cursor: pointer; transition: all .15s var(--ease); }
+  .btn:hover { background: var(--bg-hover); border-color: var(--border-hover, #555a68); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  .btn.ghost { background: transparent; border-color: transparent; color: var(--t-3); }
+  .btn.ghost:hover { color: var(--t-1); background: var(--bg-hover); }
+  .btn.danger { background: transparent; border-color: var(--border); color: var(--red); }
+  .btn.danger:hover { background: var(--red-soft); border-color: var(--red); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn:disabled:hover { background: var(--accent); }
+
+  /* chips */
+  .chip { display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 10.5px; padding: 2.5px 9px; border-radius: 99px; letter-spacing: .03em; }
+  .chip.exploring { color: var(--amber); background: var(--amber-soft); }
+  .chip.assessed  { color: var(--blue); background: var(--blue-soft); }
+  .chip.promoted  { color: var(--green); background: var(--green-soft); }
+  .chip.shelved   { color: var(--t-3); background: var(--bg-hover); }
+  .chip.killed    { color: var(--red); background: var(--red-soft); }
+  .chip.draft     { color: var(--amber); background: var(--amber-soft); border: 1px dashed rgba(251,191,36,.45); }
+
+  /* provenance badges */
+  .prov { display: inline-flex; align-items: center; gap: 4px; font-family: var(--mono); font-size: 9.5px; padding: 1.5px 7px; border-radius: 4px; vertical-align: 2px; margin-left: 6px; letter-spacing: .05em; cursor: default; }
+  .prov.sourced { color: var(--teal); background: var(--teal-soft); }
+  .prov.modeled { color: var(--blue); background: var(--blue-soft); cursor: pointer; }
+  .prov.guessed { color: var(--amber); background: var(--amber-soft); }
+  .num { font-family: var(--mono); font-weight: 500; color: var(--t-1); }
+
+  /* ---------- SCREEN 0: ideas tab ---------- */
+  .tabs { display: flex; gap: 20px; border-bottom: 1px solid var(--border); margin-bottom: 0; }
+  .tabs span { padding: 9px 2px; font-size: 13.5px; color: var(--t-3); cursor: pointer; border-bottom: 2px solid transparent; }
+  .tabs span.on { color: var(--t-1); border-bottom-color: var(--accent); font-weight: 550; }
+  .idea-head { display: flex; align-items: center; justify-content: space-between; margin: 22px 0 14px; }
+  .idea-head .count { color: var(--t-4); font-size: 12.5px; font-family: var(--mono); }
+  .irow { display: grid; grid-template-columns: 1fr 130px 110px 90px; gap: 14px; align-items: center; padding: 14px 16px; border: 1px solid var(--border-subtle); border-bottom: none; background: var(--bg-1); cursor: pointer; transition: background .12s var(--ease); }
+  .irow:first-of-type { border-radius: var(--r-lg) var(--r-lg) 0 0; }
+  .irow:last-of-type { border-radius: 0 0 var(--r-lg) var(--r-lg); border-bottom: 1px solid var(--border-subtle); }
+  .irow:hover { background: var(--bg-2); }
+  .irow .iname { font-weight: 550; font-size: 13.5px; }
+  .irow .idesc { color: var(--t-3); font-size: 12.5px; margin-top: 2px; }
+  .irow .iscore { font-family: var(--mono); font-size: 12.5px; color: var(--t-2); }
+  .irow .iscore small { color: var(--t-4); }
+  .irow .iwhen { color: var(--t-4); font-size: 12px; text-align: right; font-family: var(--mono); }
+  .killed-reason { grid-column: 1 / -1; font-size: 12px; color: var(--t-3); background: var(--red-soft); border-radius: var(--r-sm); padding: 7px 11px; }
+  .killed-reason b { color: var(--red); font-weight: 550; }
+
+  /* ---------- SCREEN 1: pitch ---------- */
+  .pitch-wrap { max-width: 640px; }
+  .pitch-wrap label { display: block; font-size: 12.5px; font-weight: 550; color: var(--t-2); margin: 22px 0 7px; }
+  .pitch-wrap label small { color: var(--t-4); font-weight: 400; margin-left: 6px; }
+  textarea, input[type=text] { width: 100%; background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--r-md); color: var(--t-1); font-family: var(--sans); font-size: 14px; padding: 12px 14px; resize: vertical; }
+  textarea:focus, input:focus { outline: none; border-color: var(--border-strong); }
+  textarea.big { min-height: 150px; font-size: 15px; line-height: 1.6; }
+  .pitch-foot { display: flex; align-items: center; gap: 14px; margin-top: 26px; }
+  .pitch-foot .hint { color: var(--t-4); font-size: 12px; }
+
+  /* ---------- SCREEN 2: interview ---------- */
+  .split { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 4fr); gap: 22px; align-items: start; }
+  .conv { display: flex; flex-direction: column; gap: 14px; }
+  .qcount { font-family: var(--mono); font-size: 11px; color: var(--t-4); display: flex; justify-content: space-between; align-items: center; }
+  .msg { max-width: 92%; padding: 11px 15px; border-radius: var(--r-lg); font-size: 13.5px; line-height: 1.6; }
+  .msg.studio { background: var(--bg-1); border: 1px solid var(--border-subtle); color: var(--t-1); align-self: flex-start; border-top-left-radius: 4px; }
+  .msg.studio .tag { display: block; font-family: var(--mono); font-size: 9.5px; color: var(--t-4); letter-spacing: .08em; margin-bottom: 5px; }
+  .msg.me { background: var(--bg-hover); color: var(--t-1); align-self: flex-end; border-top-right-radius: 4px; }
+  .msg .cite { display: inline-flex; align-items: center; gap: 4px; color: var(--teal); font-size: 12px; text-decoration: none; }
+  .conv .composer { display: flex; gap: 8px; margin-top: 4px; }
+  .conv .composer input { flex: 1; }
+  .doc-panel { background: var(--bg-1); border: 1px solid var(--border-subtle); border-radius: var(--r-lg); padding: 18px 20px; position: sticky; top: 118px; }
+  .doc-panel h3 { font-size: 12px; font-family: var(--mono); font-weight: 500; color: var(--t-4); letter-spacing: .08em; text-transform: uppercase; margin-bottom: 14px; }
+  .doc-sec { padding: 10px 0; border-top: 1px solid var(--border-subtle); }
+  .doc-sec .dname { font-size: 12.5px; font-weight: 550; display: flex; justify-content: space-between; align-items: center; }
+  .doc-sec .dstate { font-family: var(--mono); font-size: 9.5px; letter-spacing: .06em; }
+  .doc-sec.filled .dstate { color: var(--green); }
+  .doc-sec.live .dstate { color: var(--amber); }
+  .doc-sec.pending .dstate { color: var(--t-4); }
+  .doc-sec .dpeek { font-size: 12px; color: var(--t-3); margin-top: 4px; }
+  .doc-sec.pending .dname { color: var(--t-4); font-weight: 400; }
+  .doc-sec.live { background: var(--amber-soft); margin: 0 -20px; padding: 10px 20px; border-top-color: transparent; border-radius: var(--r-sm); }
+
+  /* ---------- SCREEN 3: assessment ---------- */
+  .ass-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 4px; flex-wrap: wrap; }
+  .ass-head h2 { font-size: 21px; font-weight: 650; letter-spacing: -0.015em; }
+  .conf { font-family: var(--mono); font-size: 11.5px; color: var(--t-3); }
+  .conf b { color: var(--amber); font-weight: 500; }
+  .rev { color: var(--t-4); font-size: 12px; font-family: var(--mono); margin-bottom: 22px; }
+  .rev a { color: var(--t-3); }
+
+  .killcase { border: 1px solid rgba(248,113,113,.35); background: var(--red-soft); border-radius: var(--r-lg); padding: 18px 22px; margin-bottom: 26px; }
+  .killcase h3 { font-size: 13px; color: var(--red); font-weight: 650; letter-spacing: .01em; display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+  .killcase h3 .lock { font-family: var(--mono); font-size: 9.5px; color: var(--t-4); font-weight: 400; letter-spacing: .06em; margin-left: auto; }
+  .killcase p { font-size: 13.5px; color: var(--t-2); max-width: 75ch; }
+  .killcase p + p { margin-top: 8px; }
+
+  .rubric { border: 1px solid var(--border-subtle); border-radius: var(--r-lg); overflow: hidden; margin-bottom: 26px; }
+  .rubric-row { display: grid; grid-template-columns: 190px 120px 1fr auto; gap: 16px; align-items: center; padding: 13px 18px; background: var(--bg-1); border-bottom: 1px solid var(--border-subtle); }
+  .rubric-row:last-child { border-bottom: none; }
+  .rubric-row .rname { font-size: 13px; font-weight: 550; }
+  .rscore { display: flex; align-items: center; gap: 9px; }
+  .rscore .bar { width: 64px; height: 4px; background: var(--bg-hover); border-radius: 99px; overflow: hidden; }
+  .rscore .bar i { display: block; height: 100%; border-radius: 99px; background: var(--t-3); }
+  .rscore .bar i.hi { background: var(--green); } .rscore .bar i.mid { background: var(--amber); } .rscore .bar i.lo { background: var(--red); }
+  .theme-btn { background: none; border: 1px solid var(--border); color: var(--t-3); border-radius: 99px; font-family: var(--mono); font-size: 10.5px; padding: 3px 10px; cursor: pointer; }
+  .theme-btn:hover { color: var(--t-1); border-color: var(--border-strong); }
+  .runtime-bar { display: flex; gap: 10px; align-items: center; background: var(--bg-1); border: 1px solid var(--border-subtle); border-radius: var(--r-md); padding: 9px 13px; margin-bottom: 14px; flex-wrap: wrap; }
+  .runtime-bar label { font-family: var(--mono); font-size: 9.5px; letter-spacing: .07em; color: var(--t-4); text-transform: uppercase; }
+  .runtime-bar select { background: var(--bg-2); border: 1px solid var(--border); color: var(--t-1); font-family: var(--mono); font-size: 12px; padding: 5px 8px; border-radius: var(--r-sm); }
+  .runtime-bar .iso { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--teal); background: var(--teal-soft); padding: 2.5px 9px; border-radius: 99px; }
+  .rscore .val { font-family: var(--mono); font-size: 12.5px; color: var(--t-2); }
+  .rubric-row .rwhy { font-size: 12.5px; color: var(--t-3); }
+  .challenge { font-size: 11.5px; color: var(--t-4); background: none; border: none; cursor: pointer; font-family: var(--mono); padding: 3px 6px; border-radius: 4px; }
+  .challenge:hover { color: var(--accent); background: var(--accent-soft); }
+  .challenge-box { grid-column: 1 / -1; display: flex; gap: 8px; }
+  .challenge-box input { font-size: 13px; }
+
+  .assump { background: var(--bg-1); border: 1px solid var(--border-subtle); border-radius: var(--r-md); padding: 12px 16px; margin: -16px 0 26px; font-size: 12.5px; color: var(--t-3); display: none; }
+  .assump.open { display: block; }
+  .assump ol { margin: 6px 0 0 18px; display: flex; flex-direction: column; gap: 3px; }
+  .assump .num { font-size: 12.5px; }
+
+  h3.grp { font-size: 13px; font-weight: 650; color: var(--t-2); letter-spacing: .01em; margin: 0 0 12px; }
+  .paths { display: flex; flex-direction: column; gap: 10px; margin-bottom: 30px; }
+  .path { display: grid; grid-template-columns: 22px 1fr; gap: 14px; border: 1px solid var(--border-subtle); background: var(--bg-1); border-radius: var(--r-lg); padding: 16px 18px; cursor: pointer; transition: border-color .15s var(--ease); }
+  .path:hover { border-color: var(--border-strong); }
+  .path.sel { border-color: var(--accent); background: linear-gradient(0deg, var(--accent-soft), var(--accent-soft)), var(--bg-1); }
+  .path .radio { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--border-strong); margin-top: 2px; }
+  .path.sel .radio { border-color: var(--accent); background: radial-gradient(circle at center, var(--accent) 0 45%, transparent 50%); }
+  .path h4 { font-size: 13.5px; font-weight: 600; margin-bottom: 4px; }
+  .path .pdesc { font-size: 13px; color: var(--t-2); margin-bottom: 9px; max-width: 72ch; }
+  .path .pmeta { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12px; color: var(--t-3); }
+  .path .pmeta b { color: var(--t-2); font-weight: 550; }
+  .path .falsi { margin-top: 9px; font-size: 12px; color: var(--t-3); border-top: 1px dashed var(--border); padding-top: 8px; }
+  .path .falsi b { color: var(--amber); font-weight: 550; }
+
+  .ass-actions { display: flex; gap: 10px; align-items: center; }
+  .ass-actions .spacer { flex: 1; }
+
+  /* ---------- SCREEN 4: promote ---------- */
+  .promote-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 26px; }
+  .pcard { background: var(--bg-1); border: 1px solid var(--border-subtle); border-radius: var(--r-lg); padding: 18px 20px; }
+  .pcard h3 { font-size: 11px; font-family: var(--mono); color: var(--t-4); letter-spacing: .08em; text-transform: uppercase; margin-bottom: 12px; }
+  .pcard .big { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+  .pcard .dim { color: var(--t-3); font-size: 12.5px; }
+  .pcard ul { list-style: none; display: flex; flex-direction: column; gap: 7px; }
+  .pcard ul li { font-size: 13px; color: var(--t-2); padding-left: 16px; position: relative; }
+  .pcard ul li::before { content: ''; position: absolute; left: 0; top: 8px; width: 5px; height: 5px; border-radius: 50%; background: var(--t-4); }
+  .pcard ul li.risk::before { background: var(--amber); }
+  .pcard ul li.kill::before { background: var(--red); }
+  .pcard ul li b { color: var(--t-1); font-weight: 550; }
+  .hyp-note { font-size: 12px; color: var(--t-4); margin-top: 10px; font-style: italic; }
+
+  /* ---------- SCREEN 5: draft roadmap ---------- */
+  .draft-banner { display: flex; align-items: center; gap: 12px; background: var(--amber-soft); border: 1px dashed rgba(251,191,36,.4); border-radius: var(--r-md); padding: 11px 16px; font-size: 13px; color: var(--t-2); margin-bottom: 22px; }
+  .draft-banner b { color: var(--amber); font-weight: 600; }
+  .vcard { border: 1px dashed var(--border-strong); background: var(--bg-1); border-radius: var(--r-lg); padding: 18px 22px; margin-bottom: 14px; }
+  .vcard.approved-style { border-style: solid; }
+  .vhead { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+  .vhead .vnum { font-family: var(--mono); font-size: 13.5px; font-weight: 600; }
+  .vhead .vtitle { font-size: 13.5px; font-weight: 550; color: var(--t-2); }
+  .vhead .edit { margin-left: auto; }
+  .outc { display: flex; flex-direction: column; gap: 8px; }
+  .outc .o { display: flex; align-items: baseline; gap: 10px; font-size: 13px; color: var(--t-2); }
+  .outc .o .odot { width: 5px; height: 5px; border-radius: 50%; background: var(--t-4); flex-shrink: 0; position: relative; top: -2px; }
+  .outc .o .metric { font-family: var(--mono); font-size: 11.5px; color: var(--teal); background: var(--teal-soft); padding: 1px 8px; border-radius: 4px; white-space: nowrap; }
+  .roadmap-actions { display: flex; gap: 10px; margin-top: 24px; align-items: center; }
+  .roadmap-actions .note { color: var(--t-4); font-size: 12px; margin-left: 6px; }
+
+  /* ---------- SCREEN 6: autonomy ---------- */
+  .dials { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 20px; }
+  .dial { background: var(--bg-1); border: 1px solid var(--border-subtle); border-radius: var(--r-lg); padding: 18px 20px; }
+  .dial h3 { font-size: 13px; font-weight: 650; margin-bottom: 2px; display: flex; align-items: center; gap: 8px; }
+  .dial .dsub { font-size: 12px; color: var(--t-4); margin-bottom: 14px; }
+  .dial select { width: 100%; background: var(--bg-2); border: 1px solid var(--border); color: var(--t-1); font-family: var(--mono); font-size: 13px; padding: 8px 10px; border-radius: var(--r-sm); }
+  .budget-val { font-family: var(--mono); font-size: 22px; font-weight: 600; margin-bottom: 2px; }
+  .budget-val small { font-size: 12px; color: var(--t-4); font-weight: 400; }
+  .slider { -webkit-appearance: none; width: 100%; height: 4px; background: var(--bg-hover); border-radius: 99px; margin: 12px 0 4px; }
+  .slider::-webkit-slider-thumb { -webkit-appearance: none; width: 15px; height: 15px; border-radius: 50%; background: var(--accent); cursor: pointer; }
+  .dial .burn { font-size: 11.5px; color: var(--t-4); font-family: var(--mono); }
+  .blist { display: flex; flex-direction: column; gap: 8px; }
+  .blist label.b { display: flex; gap: 9px; align-items: flex-start; font-size: 12.5px; color: var(--t-2); cursor: pointer; margin: 0; font-weight: 400; }
+  .blist input[type=checkbox] { accent-color: var(--accent); margin-top: 2.5px; width: auto; }
+  .blist .must { color: var(--t-3); }
+  .blist .must b { color: var(--amber); font-weight: 550; }
+  .blist .grp-label { font-family: var(--mono); font-size: 9.5px; letter-spacing: .08em; color: var(--t-4); text-transform: uppercase; margin-top: 8px; }
+  .killswitch { display: flex; align-items: center; justify-content: space-between; background: var(--bg-1); border: 1px solid var(--border-subtle); border-radius: var(--r-lg); padding: 14px 20px; margin-bottom: 24px; }
+  .killswitch .ks-l { font-size: 13px; }
+  .killswitch .ks-l b { font-weight: 600; }
+  .killswitch .ks-l .dim { color: var(--t-4); font-size: 12px; margin-top: 1px; }
+  .toggle { width: 40px; height: 22px; border-radius: 99px; background: var(--bg-hover); border: 1px solid var(--border-strong); position: relative; cursor: pointer; transition: background .15s var(--ease); }
+  .toggle i { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--t-3); transition: all .15s var(--ease); }
+  .toggle.on { background: var(--green-soft); border-color: var(--green); }
+  .toggle.on i { left: 20px; background: var(--green); }
+
+  /* ---------- SCREEN 7: sit back ---------- */
+  .hyp-banner { background: var(--bg-1); border: 1px solid var(--border-subtle); border-radius: var(--r-lg); padding: 20px 24px; margin-bottom: 18px; }
+  .hyp-banner .hlabel { font-family: var(--mono); font-size: 10px; letter-spacing: .08em; color: var(--t-4); text-transform: uppercase; margin-bottom: 8px; }
+  .hyp-banner p { font-size: 14.5px; color: var(--t-1); max-width: 75ch; }
+  .hyp-banner p b { color: var(--teal); font-weight: 550; }
+  .sit-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 18px; }
+  .sit-card { background: var(--bg-1); border: 1px solid var(--border-subtle); border-radius: var(--r-lg); padding: 18px 22px; }
+  .sit-card h3 { font-size: 11px; font-family: var(--mono); color: var(--t-4); letter-spacing: .08em; text-transform: uppercase; margin-bottom: 12px; }
+  .metric-line { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+  .metric-line .cur { font-family: var(--mono); font-size: 26px; font-weight: 600; }
+  .metric-line .tgt { font-family: var(--mono); font-size: 13px; color: var(--t-4); }
+  .pbar { height: 5px; background: var(--bg-hover); border-radius: 99px; overflow: hidden; margin-bottom: 8px; }
+  .pbar i { display: block; height: 100%; border-radius: 99px; }
+  .pbar i.teal { background: var(--teal); width: 58%; }
+  .pbar i.amber { background: var(--amber); width: 34%; }
+  .sit-card .fine { font-size: 12px; color: var(--t-4); font-family: var(--mono); }
+  .digest { display: flex; flex-direction: column; gap: 0; }
+  .dig-item { display: grid; grid-template-columns: 92px 1fr; gap: 14px; padding: 13px 0; border-top: 1px solid var(--border-subtle); font-size: 13px; }
+  .dig-item:first-child { border-top: none; }
+  .dig-item .dwhen { font-family: var(--mono); font-size: 11.5px; color: var(--t-4); padding-top: 2px; }
+  .dig-item .dtext { color: var(--t-2); }
+  .dig-item .dtext b { color: var(--t-1); font-weight: 550; }
+  .decision { border: 1px solid rgba(251,191,36,.35); background: var(--amber-soft); border-radius: var(--r-lg); padding: 16px 22px; display: flex; align-items: center; gap: 16px; margin-bottom: 18px; }
+  .decision .dl { flex: 1; }
+  .decision .dl h4 { font-size: 13.5px; font-weight: 600; margin-bottom: 3px; }
+  .decision .dl p { font-size: 12.5px; color: var(--t-3); }
+  .decision .dl p b { color: var(--t-2); font-weight: 550; }
+  .sit-foot { color: var(--t-4); font-size: 12px; text-align: center; margin-top: 34px; font-style: italic; }
+
+  .next-cta { margin-top: 30px; display: flex; gap: 10px; }
+
+  @media (max-width: 900px) {
+    .side { display: none; }
+    .split, .dials, .promote-grid, .sit-grid { grid-template-columns: 1fr; }
+    .doc-panel { position: static; }
+    .rubric-row { grid-template-columns: 1fr auto; }
+    .rubric-row .rwhy { grid-column: 1 / -1; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <nav class="side">
+    <div class="logo">Org <span>Studio</span></div>
+    <div class="snav">
+      <a href="#">Dashboard</a>
+      <a href="#" class="on">Projects</a>
+      <a href="#">Tasks</a>
+      <a href="#">Agents</a>
+      <a href="#">Vision</a>
+      <a href="#">Team</a>
+      <a href="#">Performance</a>
+      <a href="#">Activity</a>
+      <a href="#">Settings</a>
+    </div>
+    <div class="foot">proto · idea → fruition<br>not wired to the store</div>
+  </nav>
+
+  <main class="main">
+    <div class="topbar">
+      <h1 id="tb-title">Projects</h1>
+      <span class="crumb" id="tb-crumb">Ideas</span>
+      <span class="proto-tag">PROTOTYPE</span>
+      <button class="theme-btn" onclick="document.body.classList.toggle('dark'); this.textContent = document.body.classList.contains('dark') ? 'light mode' : 'dark mode';">dark mode</button>
+    </div>
+
+    <div class="rail" id="rail">
+      <button data-s="0" class="on">ideas</button><span class="sep">›</span>
+      <button data-s="1">pitch</button><span class="sep">›</span>
+      <button data-s="2">interview</button><span class="sep">›</span>
+      <button data-s="3">assessment</button><span class="sep">›</span>
+      <button data-s="4">promote</button><span class="sep">›</span>
+      <button data-s="5">draft roadmap</button><span class="sep">›</span>
+      <button data-s="6">autonomy</button><span class="sep">›</span>
+      <button data-s="7">sit back</button>
+    </div>
+
+    <!-- ============ SCREEN 0 : IDEAS TAB ============ -->
+    <section class="screen on" id="s0">
+      <div class="tabs">
+        <span>Active</span>
+        <span class="on">Ideas</span>
+        <span>Archived</span>
+      </div>
+      <div class="idea-head">
+        <span class="count">6 ideas · 1 promoted · 2 killed</span>
+        <button class="btn primary" onclick="go(1)">+ New Idea</button>
+      </div>
+
+      <div class="irow" onclick="go(3)">
+        <div>
+          <div class="iname">InvoiceRadar</div>
+          <div class="idesc">Watches a freelancer's inbox and chases overdue invoices automatically</div>
+        </div>
+        <span class="chip assessed">assessed</span>
+        <span class="iscore">5.8<small>/10 · med conf</small></span>
+        <span class="iwhen">2h ago</span>
+      </div>
+      <div class="irow" onclick="go(2)">
+        <div>
+          <div class="iname">Crew persona marketplace</div>
+          <div class="idesc">Community-built teammate archetypes, ratings, one-click install</div>
+        </div>
+        <span class="chip exploring">exploring</span>
+        <span class="iscore"><small>interview 3/8</small></span>
+        <span class="iwhen">yesterday</span>
+      </div>
+      <div class="irow">
+        <div>
+          <div class="iname">Podcast API</div>
+          <div class="idesc">Text in, produced audio out, for agent teams that publish</div>
+        </div>
+        <span class="chip promoted">promoted</span>
+        <span class="iscore">7.2<small>/10</small></span>
+        <span class="iwhen">Jun 12</span>
+      </div>
+      <div class="irow">
+        <div>
+          <div class="iname">Local-first CRM</div>
+          <div class="idesc">CRM that lives in the founder's filesystem, syncs when it must</div>
+        </div>
+        <span class="chip shelved">shelved</span>
+        <span class="iscore">6.4<small>/10</small></span>
+        <span class="iwhen">May 30</span>
+      </div>
+      <div class="irow">
+        <div>
+          <div class="iname">LinkedIn horoscope bot</div>
+          <div class="idesc">Daily AI career horoscopes, virality-first</div>
+          <div class="killed-reason" style="margin-top:9px"><b>Killed:</b> kill case confirmed. Zero willingness to pay found in 14 comparable launches; novelty curve measured in days. Owner concurred after challenge round 2.</div>
+        </div>
+        <span class="chip killed">killed</span>
+        <span class="iscore">2.1<small>/10</small></span>
+        <span class="iwhen">May 18</span>
+      </div>
+      <div class="irow">
+        <div>
+          <div class="iname">Agent expense cards</div>
+          <div class="idesc">Virtual cards with per-agent spend limits, receipts auto-filed</div>
+          <div class="killed-reason" style="margin-top:9px"><b>Killed:</b> regulatory LOE dwarfs the wedge. Money transmission licensing alone is a 12 to 18 month path (sourced). Revisit if a BaaS partner absorbs compliance.</div>
+        </div>
+        <span class="chip killed">killed</span>
+        <span class="iscore">3.9<small>/10</small></span>
+        <span class="iwhen">Apr 29</span>
+      </div>
+
+      <p class="sub" style="margin-top:22px">Killed ideas stay on the board with their reasons. The graveyard is the org remembering <b>why not</b>.</p>
+    </section>
+
+    <!-- ============ SCREEN 1 : PITCH ============ -->
+    <section class="screen" id="s1">
+      <h2 class="st">What's the idea?</h2>
+      <p class="sub">A paragraph is enough. The studio's job is to extract structure from a conversation, not to demand it up front.</p>
+      <div class="pitch-wrap">
+        <textarea class="big">Freelancers hate chasing overdue invoices. InvoiceRadar connects to their inbox and accounting tool, detects when an invoice goes unpaid past terms, and runs a polite escalation sequence automatically: reminder, follow-up, firm notice, then flags for human action. Charges a flat monthly fee, not a cut of collections.</textarea>
+        <label>Who is it for? <small>optional</small></label>
+        <input type="text" value="Solo freelancers and studios under 10 people, invoicing 5 to 50 clients">
+        <label>What does success look like to you? <small>optional</small></label>
+        <input type="text" value="1,000 paying users inside a year without hiring anyone">
+        <div class="pitch-foot">
+          <button class="btn primary" onclick="go(2)">Start the interview →</button>
+          <span class="hint">~6 to 10 questions · skip to assessment anytime</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ SCREEN 2 : INTERVIEW ============ -->
+    <section class="screen" id="s2">
+      <h2 class="st">Interview</h2>
+      <p class="sub">The left side is scaffolding, the right side is the artifact. You watch the assessment assemble from your own answers.</p>
+      <div class="runtime-bar">
+        <label>Runtime</label>
+        <select id="rt" onchange="rtModels()">
+          <option value="openclaw" selected>OpenClaw · gateway</option>
+          <option value="hermes">Hermes Agent · http</option>
+        </select>
+        <label>Model</label>
+        <select id="mdl">
+          <option selected>claude-opus-4.8</option>
+          <option>claude-sonnet-4.6</option>
+          <option>gpt-5.5</option>
+          <option>gpt-5.4-pro</option>
+        </select>
+        <span class="iso">isolated session · no persona loaded</span>
+      </div>
+      <div class="split">
+        <div class="conv">
+          <div class="qcount">
+            <span>QUESTION 4 OF ~8</span>
+            <button class="btn ghost" onclick="go(3)">Assess with what you have →</button>
+          </div>
+          <div class="msg studio">
+            <span class="tag">THE STUDIO</span>
+            Who pays for this today, and what does their current workaround cost them? Not the pain, the workaround: what do they actually do right now when an invoice is 30 days late?
+          </div>
+          <div class="msg me">
+            Mostly nothing, honestly. They send one awkward email and then let it slide. Some use bookkeeper time for it, maybe an hour a month.
+          </div>
+          <div class="msg studio">
+            <span class="tag">THE STUDIO</span>
+            That's the answer that matters most so far, and it cuts both ways. "They do nothing" means the pain is real but the <b>felt</b> cost is low, which historically depresses willingness to pay in this segment. FreshBooks and Bonsai both bundle late-invoice chasing as a feature, not a product <a class="cite" href="#">↗ sourced</a>. I'm marking monetization as the weakest dimension so far. Next: what happens to your product when the client simply doesn't reply to any of the four escalation steps?
+          </div>
+          <div class="msg me">
+            Then we flag it for the freelancer with a suggested next action, like small claims templates or a collections referral.
+          </div>
+          <div class="msg studio">
+            <span class="tag">THE STUDIO</span>
+            Understood, logging that as scope: you stop at the referral line, you never touch the money. That keeps you out of collections licensing entirely, which materially lowers LOE. Question 5: why does this need to exist as a standalone product rather than a feature you sell to FreshBooks?
+          </div>
+          <div class="composer">
+            <input type="text" placeholder="Answer…">
+            <button class="btn">Send</button>
+          </div>
+        </div>
+
+        <aside class="doc-panel">
+          <h3>Assessment · building</h3>
+          <div class="doc-sec filled" style="border-top:none">
+            <div class="dname">Problem &amp; wedge <span class="dstate">FILLED</span></div>
+            <div class="dpeek">Real pain, weak felt cost. Wedge: escalation autonomy, not detection.</div>
+          </div>
+          <div class="doc-sec filled">
+            <div class="dname">TAM <span class="dstate">FILLED</span></div>
+            <div class="dpeek">~76M freelancers US+EU, serviceable slice pending pricing answer.</div>
+          </div>
+          <div class="doc-sec live">
+            <div class="dname">Monetization <span class="dstate">REVISING NOW</span></div>
+            <div class="dpeek">Flat fee vs. bundled-feature threat. Weakest dimension so far.</div>
+          </div>
+          <div class="doc-sec filled">
+            <div class="dname">Scope boundary <span class="dstate">FILLED</span></div>
+            <div class="dpeek">Stops at referral, never touches money. Collections licensing avoided.</div>
+          </div>
+          <div class="doc-sec pending">
+            <div class="dname">Moat <span class="dstate">PENDING</span></div>
+          </div>
+          <div class="doc-sec pending">
+            <div class="dname">LOE &amp; ROI <span class="dstate">PENDING</span></div>
+          </div>
+          <div class="doc-sec pending">
+            <div class="dname">Kill case <span class="dstate">PENDING</span></div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ============ SCREEN 3 : ASSESSMENT ============ -->
+    <section class="screen" id="s3">
+      <div class="ass-head">
+        <h2>InvoiceRadar</h2>
+        <span class="chip assessed">assessed</span>
+        <span class="conf">confidence: <b>medium</b> · 2 of 11 figures guessed</span>
+      </div>
+      <div class="rev">revision 3 · <a href="#">view how this assessment changed under challenge</a></div>
+
+      <div class="killcase">
+        <h3>⚠ The kill case <span class="lock">ALWAYS FIRST · CANNOT COLLAPSE</span></h3>
+        <p>The strongest argument this fails: <b>the pain is real but the felt cost is near zero.</b> Freelancers tolerate late invoices; they send one email and move on. Products that monetize tolerated pain need either a moment of acute crisis (none here) or bundling into a tool already owned (FreshBooks and Bonsai already do this as a feature<span class="prov sourced">SOURCED ↗</span>). A standalone subscription asks users to pay monthly for a problem they feel quarterly.</p>
+        <p>What would prove this wrong: 25+ interviews where freelancers describe a lost client or cashflow crisis from a late invoice in the past 6 months, or a waitlist conversion above 8%<span class="prov modeled" onclick="tg('a1')">MODELED ⌄</span> from a fake-door test.</p>
+      </div>
+      <div class="assump" id="a1"><b>Assumption chain (modeled):</b><ol>
+        <li>Fake-door landing conversion baseline for B2B SaaS tools: 2 to 5%<span class="prov sourced">SOURCED ↗</span></li>
+        <li>Willingness-to-pay signal requires ~2x baseline to overcome novelty inflation<span class="prov guessed">GUESSED</span></li>
+        <li>Threshold set at 8% = midpoint of 2x range, rounded conservative</li>
+      </ol></div>
+
+      <h3 class="grp">Rubric</h3>
+      <div class="rubric">
+        <div class="rubric-row">
+          <span class="rname">TAM defensibility</span>
+          <span class="rscore"><span class="bar"><i class="mid" style="width:62%"></i></span><span class="val">6.2</span></span>
+          <span class="rwhy">76M freelancers US+EU<span class="prov sourced">SOURCED ↗</span>, but serviceable slice collapses to ~4M<span class="prov modeled" onclick="tg('a2')">MODELED ⌄</span> once you require 5+ recurring clients and accounting-tool usage.</span>
+          <button class="challenge" onclick="tg('c1')">challenge</button>
+          <div class="challenge-box assump" id="c1" style="margin:0"><input type="text" placeholder="I disagree with this read because…"><button class="btn">Send</button></div>
+        </div>
+        <div class="rubric-row">
+          <span class="rname">Wedge</span>
+          <span class="rscore"><span class="bar"><i class="hi" style="width:71%"></i></span><span class="val">7.1</span></span>
+          <span class="rwhy">Escalation autonomy is a genuine gap: incumbents detect lateness but make the human do the chasing. Clear single-sentence pitch.</span>
+          <button class="challenge" onclick="tg('c2')">challenge</button>
+          <div class="challenge-box assump" id="c2" style="margin:0"><input type="text" placeholder="I disagree with this read because…"><button class="btn">Send</button></div>
+        </div>
+        <div class="rubric-row">
+          <span class="rname">Moat</span>
+          <span class="rscore"><span class="bar"><i class="lo" style="width:34%"></i></span><span class="val">3.4</span></span>
+          <span class="rwhy">Thin. Escalation sequences are copyable in a quarter. Durable version requires proprietary repayment-behavior data, which needs scale you won't have early.</span>
+          <button class="challenge" onclick="tg('c3')">challenge</button>
+          <div class="challenge-box assump" id="c3" style="margin:0"><input type="text" placeholder="I disagree with this read because…"><button class="btn">Send</button></div>
+        </div>
+        <div class="rubric-row">
+          <span class="rname">LOE</span>
+          <span class="rscore"><span class="bar"><i class="hi" style="width:78%"></i></span><span class="val">7.8</span></span>
+          <span class="rwhy">Favorable. Inbox + accounting integrations are commodity APIs; stopping at the referral line avoids collections licensing entirely. MVP ≈ 6 agent-weeks<span class="prov guessed">GUESSED</span>.</span>
+          <button class="challenge" onclick="tg('c4')">challenge</button>
+          <div class="challenge-box assump" id="c4" style="margin:0"><input type="text" placeholder="I disagree with this read because…"><button class="btn">Send</button></div>
+        </div>
+        <div class="rubric-row">
+          <span class="rname">Monetization path</span>
+          <span class="rscore"><span class="bar"><i class="lo" style="width:41%"></i></span><span class="val">4.1</span></span>
+          <span class="rwhy">Weakest dimension. Flat fee fights the felt-cost problem; success-fee pricing fights your own scope boundary. Under flawless execution: ~$29/mo × 4M serviceable × 0.5% capture ≈ $7M ARR ceiling<span class="prov modeled" onclick="tg('a3')">MODELED ⌄</span>.</span>
+          <button class="challenge" onclick="tg('c5')">challenge</button>
+          <div class="challenge-box assump" id="c5" style="margin:0"><input type="text" placeholder="I disagree with this read because…"><button class="btn">Send</button></div>
+        </div>
+      </div>
+      <div class="assump" id="a2"><b>Assumption chain (modeled):</b><ol>
+        <li>76M freelancers US+EU<span class="prov sourced">SOURCED ↗</span></li>
+        <li>~22% invoice 5+ recurring clients<span class="prov sourced">SOURCED ↗</span></li>
+        <li>~25% of those use a connectable accounting tool<span class="prov guessed">GUESSED</span></li>
+      </ol></div>
+      <div class="assump" id="a3"><b>Assumption chain (modeled):</b><ol>
+        <li>Price point $29/mo: mid-range of comparable single-purpose freelancer tools<span class="prov sourced">SOURCED ↗</span></li>
+        <li>Serviceable market 4M (see TAM chain)</li>
+        <li>Capture 0.5% under flawless execution: top-decile for single-feature tools<span class="prov modeled">MODELED</span></li>
+      </ol></div>
+
+      <h3 class="grp">Paths forward · pick one, the studio doesn't rank them</h3>
+      <div class="paths">
+        <div class="path" onclick="pick(this)">
+          <span class="radio"></span>
+          <div>
+            <h4>Fake-door validation first</h4>
+            <p class="pdesc">Landing page + waitlist + 25 interviews before any code. Two weeks, near-zero spend. Attacks the kill case directly before committing build effort.</p>
+            <div class="pmeta"><span>LOE <b>~2 wks</b></span><span>Spend <b>&lt;$500</b><span class="prov guessed">GUESSED</span></span><span>ROI if validated <b>de-risks the $7M path</b></span></div>
+            <div class="falsi"><b>Falsified when:</b> waitlist conversion &lt;8% or fewer than 5 of 25 interviews surface acute cashflow pain.</div>
+          </div>
+        </div>
+        <div class="path" onclick="pick(this)">
+          <span class="radio"></span>
+          <div>
+            <h4>Build the MVP, sell to studios not solos</h4>
+            <p class="pdesc">Skip solo freelancers (weak felt cost), target 5-to-10-person studios where late invoices hit payroll. Smaller market, sharper pain, higher price point tolerance.</p>
+            <div class="pmeta"><span>LOE <b>~6 agent-wks</b><span class="prov guessed">GUESSED</span></span><span>Price <b>$99/mo</b><span class="prov modeled">MODELED</span></span><span>Ceiling <b>~$4M ARR</b><span class="prov modeled">MODELED</span></span></div>
+            <div class="falsi"><b>Falsified when:</b> studios churn &gt;6%/mo or report the bookkeeper already covers this.</div>
+          </div>
+        </div>
+        <div class="path" onclick="pick(this)">
+          <span class="radio"></span>
+          <div>
+            <h4>Feature, not company: build to sell the integration</h4>
+            <p class="pdesc">Accept the moat verdict. Build the best escalation engine as an integration for FreshBooks/Bonsai marketplaces, aim for acquisition or rev-share rather than standalone scale.</p>
+            <div class="pmeta"><span>LOE <b>~4 agent-wks</b><span class="prov guessed">GUESSED</span></span><span>Upside <b>capped, faster</b></span><span>Risk <b>platform dependency</b></span></div>
+            <div class="falsi"><b>Falsified when:</b> marketplace terms cap rev-share below sustainability or either platform ships native escalation.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="ass-actions">
+        <button class="btn primary" id="promoteBtn" disabled onclick="go(4)">Promote to Project</button>
+        <button class="btn">Shelve</button>
+        <button class="btn danger">Kill (with reason)</button>
+        <span class="spacer"></span>
+        <button class="btn ghost" onclick="go(2)">← Reopen interview</button>
+      </div>
+    </section>
+
+    <!-- ============ SCREEN 4 : PROMOTE ============ -->
+    <section class="screen" id="s4">
+      <h2 class="st">Promote to Project</h2>
+      <p class="sub">An explicit human act. Here is exactly what gets created, pre-populated from the assessment. Nothing dispatches to agents yet.</p>
+
+      <div class="promote-grid">
+        <div class="pcard">
+          <h3>New project</h3>
+          <div class="big">InvoiceRadar</div>
+          <div class="dim">Owner: Basil · Dev owner: unassigned · Lifecycle: exploring</div>
+          <div style="margin-top:14px">
+            <h3>Vision doc · seeded sections</h3>
+            <ul>
+              <li><b>North Star</b>: from your pitch, edited during interview</li>
+              <li><b>Forward arc</b>: from the chosen path (fake-door validation first)</li>
+              <li><b>Boundaries</b>: scope line carried in (stops at referral, never touches money)</li>
+            </ul>
+          </div>
+        </div>
+        <div class="pcard">
+          <h3>Hypothesis block · carried from assessment</h3>
+          <ul>
+            <li><b>Assumption:</b> acute cashflow pain exists in ≥20% of target segment</li>
+            <li><b>Assumption:</b> $29/mo clears willingness-to-pay for solos</li>
+            <li class="risk"><b>Risk:</b> incumbents bundle escalation as a feature</li>
+            <li class="risk"><b>Risk:</b> moat is thin until repayment-behavior data accrues</li>
+            <li class="kill"><b>Kill criterion:</b> waitlist conversion &lt;8% on fake-door test</li>
+            <li class="kill"><b>Kill criterion:</b> &lt;5 of 25 interviews surface acute pain</li>
+          </ul>
+          <div class="hyp-note">Kill criteria travel: they become outcome metrics on the roadmap, not shelf decoration.</div>
+        </div>
+      </div>
+
+      <div class="next-cta">
+        <button class="btn primary" onclick="go(5)">Create project + vision doc →</button>
+        <button class="btn ghost" onclick="go(3)">← Back to assessment</button>
+      </div>
+    </section>
+
+    <!-- ============ SCREEN 5 : DRAFT ROADMAP ============ -->
+    <section class="screen" id="s5">
+      <h2 class="st">Draft roadmap</h2>
+      <p class="sub">Generated from the vision doc and the chosen path. <b>Everything here is a draft:</b> dashed borders, nothing dispatchable, the board stays empty until you approve.</p>
+
+      <div class="draft-banner">
+        <b>DRAFT</b> Generated 09:41 · edit anything inline · agents cannot see this until approved
+      </div>
+
+      <div class="vcard">
+        <div class="vhead">
+          <span class="vnum">2026.08</span>
+          <span class="vtitle">Validate the kill case</span>
+          <span class="chip draft">DRAFT</span>
+          <button class="btn ghost edit">✎ edit</button>
+        </div>
+        <div class="outc">
+          <div class="o"><span class="odot"></span>Fake-door landing page live with pricing shown <span class="metric">waitlist conv ≥ 8%</span></div>
+          <div class="o"><span class="odot"></span>25 problem interviews completed and coded <span class="metric">acute-pain rate ≥ 20%</span></div>
+          <div class="o"><span class="odot"></span>Go / no-go memo written against both kill criteria</div>
+        </div>
+      </div>
+
+      <div class="vcard">
+        <div class="vhead">
+          <span class="vnum">2026.09</span>
+          <span class="vtitle">MVP: detection + escalation engine</span>
+          <span class="chip draft">DRAFT</span>
+          <button class="btn ghost edit">✎ edit</button>
+        </div>
+        <div class="outc">
+          <div class="o"><span class="odot"></span>Inbox + accounting-tool connect (2 providers) <span class="metric">detect rate ≥ 95%</span></div>
+          <div class="o"><span class="odot"></span>4-step escalation sequence, tone-configurable <span class="metric">0 complaints / 100 sends</span></div>
+          <div class="o"><span class="odot"></span>Referral-line handoff (small claims templates, collections referral)</div>
+        </div>
+      </div>
+
+      <div class="vcard">
+        <div class="vhead">
+          <span class="vnum">2026.10</span>
+          <span class="vtitle">First 50 paying users</span>
+          <span class="chip draft">DRAFT</span>
+          <button class="btn ghost edit">✎ edit</button>
+        </div>
+        <div class="outc">
+          <div class="o"><span class="odot"></span>Self-serve onboarding, card up front <span class="metric">50 paying</span></div>
+          <div class="o"><span class="odot"></span>Retention instrumented from day one <span class="metric">m1 churn ≤ 6%</span></div>
+        </div>
+      </div>
+
+      <div class="roadmap-actions">
+        <button class="btn primary" onclick="go(6)">Approve roadmap →</button>
+        <button class="btn">↻ Regenerate</button>
+        <span class="note">Approving does not dispatch work. The leash comes first.</span>
+      </div>
+    </section>
+
+    <!-- ============ SCREEN 6 : AUTONOMY ============ -->
+    <section class="screen" id="s6">
+      <h2 class="st">Set the leash</h2>
+      <p class="sub">Three dials, one glance. Agents run autonomously inside all three: <b>any reversible decision is theirs by default.</b> You only hear about what crosses a line.</p>
+
+      <div class="dials">
+        <div class="dial">
+          <h3>Horizon</h3>
+          <div class="dsub">approvedThrough · agents execute ≤ this version, never above</div>
+          <select>
+            <option>2026.08 · validate only</option>
+            <option selected>2026.09 · through MVP</option>
+            <option>2026.10 · through first revenue</option>
+          </select>
+          <div class="burn" style="margin-top:12px">auto-advance within horizon: on</div>
+        </div>
+        <div class="dial">
+          <h3>Budget</h3>
+          <div class="dsub">hard ceiling · scheduler refuses dispatch beyond it</div>
+          <div class="budget-val">$120 <small>/ month</small></div>
+          <input type="range" class="slider" min="20" max="500" value="120">
+          <div class="burn">est. burn at current model mix: ~$85/mo · alert at 80%</div>
+        </div>
+        <div class="dial">
+          <h3>Boundaries</h3>
+          <div class="dsub">structured contract, enforced · not prose</div>
+          <div class="blist">
+            <div class="grp-label">Free to decide</div>
+            <label class="b"><input type="checkbox" checked> Any reversible decision <i style="color:var(--t-4);font-style:normal">(default)</i></label>
+            <label class="b"><input type="checkbox" checked> Tech stack &amp; architecture</label>
+            <label class="b"><input type="checkbox" checked> Copy, design, experiment details</label>
+            <div class="grp-label">Must ask</div>
+            <div class="must">· <b>Spending real money</b> beyond budget line<br>· <b>Anything user-visible</b> going public<br>· <b>Irreversible ops</b>: data deletion, legal, outreach</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="killswitch">
+        <div class="ks-l">
+          <b>Loop active</b>
+          <div class="dim">loopPaused kill switch, always visible, never buried in state</div>
+        </div>
+        <div class="toggle on" onclick="this.classList.toggle('on')"><i></i></div>
+      </div>
+
+      <div class="next-cta">
+        <button class="btn primary" onclick="go(7)">Approve &amp; hand off →</button>
+        <button class="btn ghost" onclick="go(5)">← Back to roadmap</button>
+      </div>
+    </section>
+
+    <!-- ============ SCREEN 7 : SIT BACK ============ -->
+    <section class="screen" id="s7">
+      <h2 class="st">InvoiceRadar</h2>
+      <p class="sub">The owner's home is the hypothesis view, not the board. Interrupts arrive only through the irreversible lane.</p>
+
+      <div class="hyp-banner">
+        <div class="hlabel">Hypothesis under test · 2026.08</div>
+        <p>Freelancers feel late-invoice pain acutely enough to pay for autonomous chasing. <b>Falsified when</b> waitlist conversion &lt;8% or fewer than 5 of 25 interviews surface acute cashflow pain.</p>
+      </div>
+
+      <div class="decision">
+        <div class="dl">
+          <h4>1 decision waiting on you</h4>
+          <p>Interview panel vendor requires a <b>$240 one-time payment</b>, above budget line. Everything else is proceeding without you.</p>
+        </div>
+        <button class="btn primary">Review</button>
+        <button class="btn ghost">Later</button>
+      </div>
+
+      <div class="sit-grid">
+        <div class="sit-card">
+          <h3>Metric · waitlist conversion</h3>
+          <div class="metric-line"><span class="cur">4.6%</span><span class="tgt">target ≥ 8% · 11 days left</span></div>
+          <div class="pbar"><i class="teal"></i></div>
+          <span class="fine">312 visitors · 14 signups · trend +0.4pp/wk</span>
+        </div>
+        <div class="sit-card">
+          <h3>Budget · July</h3>
+          <div class="metric-line"><span class="cur">$41</span><span class="tgt">of $120 ceiling</span></div>
+          <div class="pbar"><i class="amber"></i></div>
+          <span class="fine">on pace: $89 · alert at $96 (80%)</span>
+        </div>
+      </div>
+
+      <div class="sit-card">
+        <h3>Digest · once per milestone, not a firehose</h3>
+        <div class="digest">
+          <div class="dig-item">
+            <span class="dwhen">Jul 7</span>
+            <span class="dtext"><b>Landing page live.</b> 3 headline variants under test. First 48h conversion 3.1%, within modeled range for cold traffic.</span>
+          </div>
+          <div class="dig-item">
+            <span class="dwhen">Jul 5</span>
+            <span class="dtext"><b>Interview pipeline built.</b> 25-slot panel sourced, screening for 5+ recurring clients. First 6 booked. 1 decision escalated (vendor payment, above).</span>
+          </div>
+          <div class="dig-item">
+            <span class="dwhen">Jul 3</span>
+            <span class="dtext"><b>2026.08 kicked off.</b> Roadmap approved through 2026.09, budget $120/mo, boundaries contract active. 7 tickets drafted to backlog.</span>
+          </div>
+        </div>
+      </div>
+
+      <p class="sit-foot">If you're reading the board every day, this screen has failed at its job.</p>
+
+      <div class="next-cta">
+        <button class="btn ghost" onclick="go(0)">↺ Start over at Ideas</button>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+  const titles = [
+    ['Projects','Ideas'],
+    ['New Idea','the pitch'],
+    ['InvoiceRadar','interview'],
+    ['InvoiceRadar','assessment · rev 3'],
+    ['InvoiceRadar','promote'],
+    ['InvoiceRadar','draft roadmap'],
+    ['InvoiceRadar','autonomy'],
+    ['InvoiceRadar','2026.08 · running'],
+  ];
+  function go(n) {
+    document.querySelectorAll('.screen').forEach((s,i)=>s.classList.toggle('on', i===n));
+    document.querySelectorAll('#rail button').forEach(b=>b.classList.toggle('on', +b.dataset.s===n));
+    document.getElementById('tb-title').textContent = titles[n][0];
+    document.getElementById('tb-crumb').textContent = titles[n][1];
+    window.scrollTo({top:0});
+  }
+  document.querySelectorAll('#rail button').forEach(b=>b.onclick=()=>go(+b.dataset.s));
+  function tg(id){ document.getElementById(id).classList.toggle('open'); }
+  function pick(el){
+    document.querySelectorAll('.path').forEach(p=>p.classList.remove('sel'));
+    el.classList.add('sel');
+    document.getElementById('promoteBtn').disabled = false;
+  }
+  const rtModelSets = {
+    openclaw: ['claude-opus-4.8','claude-sonnet-4.6','gpt-5.5','gpt-5.4-pro'],
+    hermes:   ['hermes-4-405b','hermes-4-70b','deepseek-v3.2','qwen3-235b']
+  };
+  function rtModels(){
+    const rt = document.getElementById('rt').value;
+    const mdl = document.getElementById('mdl');
+    mdl.innerHTML = rtModelSets[rt].map((m,i)=>`<option${i===0?' selected':''}>${m}</option>`).join('');
+  }
+</script>
+</body>
+</html>
