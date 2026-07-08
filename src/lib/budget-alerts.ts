@@ -83,6 +83,27 @@ export async function checkBudgetAlerts(
 
       await sendHuman(text);
 
+      // M-1 (#1662): additive emission via the messaging registry — no-op
+      // until adapters register (M-2+). Budget alerts are exactly the class
+      // of outbound the native layer exists for.
+      try {
+        const { getMessagingRegistry } = await import('./messaging/registry');
+        getMessagingRegistry()
+          .notify({
+            kind: 'budget-alert',
+            title: state === 'exceeded' ? `Budget exceeded — ${name}` : `Budget warning — ${name}`,
+            body: text,
+            projectId: project.id,
+            actions: [
+              { label: '⏸️ Pause loop', command: `pause ${project.id}` },
+              { label: '📊 Status', command: `status ${project.id}` },
+            ],
+          })
+          .catch(() => {});
+      } catch {
+        /* messaging must never break the alert path */
+      }
+
       const marker: BudgetAlertsMarker = { ...(project.budgetAlerts || {}) };
       const month = { ...(marker[monthKey] || {}) };
       if (state === 'exceeded') month.exceededAt = Date.now();

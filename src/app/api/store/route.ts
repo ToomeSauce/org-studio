@@ -24,6 +24,7 @@ import {
 } from '@/lib/workspace-auth';
 import { validateUpdateTaskPayload } from '@/lib/update-task-validation';
 import { DEFAULT_BOUNDARIES, validateBoundaries, validateBudget } from '@/lib/autonomy-budget';
+import { getMessagingRegistry } from '@/lib/messaging/registry';
 import { isProjectBudgetExceeded } from '@/lib/budget-gate';
 import { getMonthlyProjectSpend } from '@/lib/budget-spend';
 import { canonicalizeTeammate } from '@/lib/canonicalize-teammate';
@@ -297,6 +298,26 @@ function triggerAgentLoop(assignee: string, store: StoreData) {
 
 /** Send task status notification via Telegram. Best-effort, non-blocking. */
 function notifyTaskStatusChange(task: any, newStatus: string, store: StoreData) {
+  // M-1 (#1662): additive emission through the native messaging registry.
+  // No adapters registered (current state) → notify() is a 0-cost no-op.
+  // Existing Telegram/feed paths below are unchanged until adapters replace
+  // them per-channel (M-2+).
+  try {
+    const proj = store.projects.find((p: any) => p.id === task.projectId);
+    getMessagingRegistry()
+      .notify({
+        kind: 'task-transition',
+        title: `${task.title}`,
+        body: `${task.assignee || 'Unassigned'} moved to ${newStatus}${proj?.name ? ` · ${proj.name}` : ''}`,
+        projectId: task.projectId,
+        taskId: task.id,
+        recipients: task.assignee ? [task.assignee] : undefined,
+      })
+      .catch(() => {});
+  } catch {
+    /* never let messaging break a status write */
+  }
+
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
   if (!isTelegramCommsEnabled()) return; // v0.15: comms relay disabled by default
   
