@@ -11,7 +11,7 @@ type WorkspaceOption = { id: string; name: string; role?: string };
 // (solarized → light → dark) so the login toggle behaves identically to the
 // in-app TopBar toggle.
 const THEME_META: Record<Theme, { icon: typeof Sun; label: string }> = {
-  solarized: { icon: SunMedium, label: 'Solarized theme' },
+  solarized: { icon: SunMedium, label: 'Solarized 2.0 theme' },
   light: { icon: Sun, label: 'Light theme' },
   dark: { icon: Moon, label: 'Dark theme' },
 };

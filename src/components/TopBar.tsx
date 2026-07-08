@@ -24,7 +24,7 @@ export function TopBar() {
   const [showSettings, setShowSettings] = useState(false);
   const { theme, toggle: toggleTheme } = useTheme();
   const themeLabels: Record<typeof theme, string> = {
-    solarized: 'Solarized Light',
+    solarized: 'Solarized 2.0',
     light: 'Light',
     dark: 'Dark',
   };
