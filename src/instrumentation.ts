@@ -29,17 +29,31 @@ export async function register() {
     console.warn('[boot] store-provider prewarm failed (non-fatal):', e?.message || e);
   }
 
-  // M-2 (#1663): start native messaging adapters. No token = no adapter =
-  // registry stays empty and every notify() is a no-op. Never blocks boot.
+  // M-2 (#1663) / M-3 (#1664): start native messaging adapters. No tokens =
+  // no adapters = registry stays empty and every notify() is a no-op. Never
+  // blocks boot.
   try {
+    const { getMessagingRegistry } = await import('./lib/messaging/registry');
+    const registry = getMessagingRegistry();
+    const started: string[] = [];
+
     const { telegramAdapterFromEnv } = await import('./lib/messaging/telegram');
     const tg = telegramAdapterFromEnv();
     if (tg) {
-      const { getMessagingRegistry } = await import('./lib/messaging/registry');
-      const registry = getMessagingRegistry();
       registry.register(tg);
+      started.push('telegram');
+    }
+
+    const { slackAdapterFromEnv } = await import('./lib/messaging/slack');
+    const slack = slackAdapterFromEnv();
+    if (slack) {
+      registry.register(slack);
+      started.push('slack');
+    }
+
+    if (started.length > 0) {
       await registry.start();
-      console.log('[boot] native messaging started (telegram)');
+      console.log(`[boot] native messaging started (${started.join(', ')})`);
     }
   } catch (e: any) {
     console.warn('[boot] native messaging start failed (non-fatal):', e?.message || e);
