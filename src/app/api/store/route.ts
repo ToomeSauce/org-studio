@@ -9,6 +9,7 @@ import { resolveTaskComponent, resolveTaskVersion } from '@/lib/notification-con
 import { syncRoadmapItemForTask } from '@/lib/roadmap-sync';
 import { buildStatusTransition } from '@/lib/task-status';
 import { evaluateBlockedGate } from '@/lib/blocked-gate';
+import { validateModelTier } from '@/lib/model-tier';
 import { fireReindexTask } from '@/lib/embedding/indexer';
 import { checkArchivedProject } from '@/lib/archived-project-compat';
 import { getEffectiveOwner } from '@/lib/component-helpers';
@@ -685,6 +686,19 @@ export async function POST(req: NextRequest) {
         if (payload?.task && 'priority' in payload.task) {
           delete payload.task.priority;
         }
+        // #1689 — validate modelTier tag (trivial|standard|complex). Reject
+        // unknown values loudly instead of silently persisting garbage into
+        // the data overflow. Absent field = no-op (unrouted).
+        {
+          const tierCheck = validateModelTier(payload?.task?.modelTier);
+          if (!tierCheck.ok) {
+            return NextResponse.json({ error: tierCheck.error }, { status: 400 });
+          }
+          if (payload?.task && 'modelTier' in payload.task) {
+            if (tierCheck.value) payload.task.modelTier = tierCheck.value;
+            else delete payload.task.modelTier; // null/'' on create = just omit
+          }
+        }
         // 410 compat: reject tasks targeting archived qa-fold projects
         const addTaskProjectId = payload.task?.projectId;
         if (addTaskProjectId) {
@@ -1116,6 +1130,15 @@ export async function POST(req: NextRequest) {
         // from `updates` so stale templates cannot reintroduce the field.
         if (payload?.updates && 'priority' in payload.updates) {
           delete payload.updates.priority;
+        }
+        // #1689 — validate modelTier on update. Unknown value → 400.
+        // Explicit null/'' normalizes to null (clears the tag).
+        if (payload?.updates && 'modelTier' in payload.updates) {
+          const tierCheck = validateModelTier(payload.updates.modelTier);
+          if (!tierCheck.ok) {
+            return NextResponse.json({ error: tierCheck.error }, { status: 400 });
+          }
+          payload.updates.modelTier = tierCheck.value ?? null;
         }
         // #1195: validate payload shape up front so silent no-ops (missing
         // `updates`, `patch` typo, empty updates, missing id) become loud

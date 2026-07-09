@@ -195,6 +195,8 @@ export function TaskDetailPanel({
   const [testType, setTestType] = useState<'self' | 'qa'>(task.testType || 'self');
   const [testAssignee, setTestAssignee] = useState(task.testAssignee || '');
   const [outcomeIds, setOutcomeIds] = useState<string[]>(task.outcomeIds || []);
+  // #1689 — modelTier tag (trivial|standard|complex). '' = unrouted.
+  const [modelTier, setModelTier] = useState<string>((task as any).modelTier || '');
   const [criteriaOpen, setCriteriaOpen] = useState(
     !!(task.doneWhen?.trim() || task.constraints?.trim() || task.context?.trim())
   );
@@ -231,6 +233,7 @@ export function TaskDetailPanel({
     setTestType(task.testType || 'self');
     setTestAssignee(task.testAssignee || '');
     setOutcomeIds(task.outcomeIds || []);
+    setModelTier((task as any).modelTier || '');
   }, [task]);
 
   const handleClose = useCallback(() => {
@@ -769,6 +772,26 @@ export function TaskDetailPanel({
               );
             })()}
             {/* Test type row — only shown when QA lead is set */}
+            {/* #1689 — modelTier tag. Mono chip styling; substrate only (P-4 consumes). */}
+            <div>
+              <label className="text-[10px] font-semibold text-[var(--text-muted)] uppercase tracking-wider mb-1.5 block">Model Tier</label>
+              <select
+                value={modelTier}
+                onChange={e => {
+                  const v = e.target.value;
+                  setModelTier(v);
+                  // Explicit null clears the tag (saveField's `|| undefined`
+                  // would drop the key and no-op the update).
+                  onUpdate(task.id, { modelTier: (v || null) as Task['modelTier'] });
+                }}
+                className="w-full text-[var(--text-sm)] font-mono bg-[var(--bg-secondary)] border border-[var(--border-default)] rounded-[var(--radius-sm)] px-2.5 py-1.5 text-[var(--text-secondary)] outline-none focus:border-[var(--accent-primary)] transition-colors"
+              >
+                <option value="">— unrouted —</option>
+                <option value="trivial">trivial</option>
+                <option value="standard">standard</option>
+                <option value="complex">complex</option>
+              </select>
+            </div>
             {qaLead && (
             <div className="col-span-2 flex items-center gap-4 pt-1">
               <label className="text-[var(--text-xs)] text-[var(--text-muted)]">Test Type</label>

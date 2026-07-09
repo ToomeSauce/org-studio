@@ -214,6 +214,12 @@ export interface Task {
   // UNLESS blockedBy[] is set (a dependency block — case-a — passes untouched).
   blockedReasonType?: 'irreversible-decision' | 'external-dependency' | 'needs-human-judgment' | 'awaiting-review';
 
+  // #1689 — modelTier tagging substrate. Optional complexity tag used by
+  // future model routing (P-4). Absent = unrouted; dispatch behaves exactly
+  // as today. Validated in addTask/updateTask via src/lib/model-tier.ts.
+  // Persists via the `data` JSONB overflow (no column, no migration).
+  modelTier?: 'trivial' | 'standard' | 'complex' | null;
+
   // #1589 Domain Steward — last time the active-stewardship sweep nudged the
   // owner about this ticket. Idempotency stamp (no duplicate nudges within
   // NUDGE_COOLDOWN_MS). Persists via the `data` JSONB overflow (no column).

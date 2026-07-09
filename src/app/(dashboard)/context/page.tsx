@@ -113,6 +113,15 @@ function TaskCard({ task, projects, onDelete, onSelect, agents, nameColors }: {
               {task.taskType === 'bug' ? '\ud83d\udc1b bug' : task.taskType === 'chore' ? '\ud83d\udd27 chore' : task.taskType === 'followup' ? '\ud83d\udd01 followup' : task.taskType === 'spike' ? '\ud83d\udd2c spike' : task.taskType}
             </span>
           ) : null}
+          {/* #1689 — modelTier chip (mono). Tag substrate only; absent = unrouted. */}
+          {(task as any).modelTier && (
+            <span
+              className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--bg-tertiary)] text-[var(--text-muted)] font-mono"
+              title={`Model tier: ${(task as any).modelTier}`}
+            >
+              {(task as any).modelTier}
+            </span>
+          )}
         </div>
       )}
       <div className="flex items-start gap-1.5 mb-2 min-w-0">
