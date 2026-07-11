@@ -32,6 +32,8 @@ export interface WorkerConfig {
   timeoutMs: number;
   /** Targeted verification commands copied into RepoContextPack (#1690). */
   verificationCommands: string[];
+  /** #1691 — only explicitly FRONTIER-tier workers may execute plan jobs. */
+  frontier: boolean;
   /** HostProfile id (#1659) — resolves against settings.hostProfiles, then
    *  presets. Unset = no host constraints (W-2 behavior). */
   hostId?: string;
@@ -53,6 +55,7 @@ export const DEFAULT_WORKERS: WorkerConfig[] = [
       'npx vitest run <target-test-file>',
       'npx eslint <changed-files>',
     ],
+    frontier: false,
   },
 ];
 
@@ -91,6 +94,7 @@ export function getWorkerConfigs(): WorkerConfig[] {
               .map((c: string) => c.trim())
               .slice(0, 10)
           : [...DEFAULT_WORKERS[0].verificationCommands],
+        frontier: w.frontier === true,
         hostId: typeof w.hostId === 'string' && w.hostId ? w.hostId : undefined,
       }));
   } catch {

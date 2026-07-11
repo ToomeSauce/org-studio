@@ -59,6 +59,15 @@ import { existsSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { readFile, writeFile, unlink } from 'fs/promises';
 import { join } from 'path';
+import {
+  buildPlannerInstructions,
+  extractVisionForPlanner,
+  parsePlannerResult,
+  renderPlannerSummary,
+  type CreatedPlannerChunk,
+  type PlannerOutput,
+  type PlannerRoadmapContext,
+} from './planner';
 
 /** Where a project's working checkout lives for local-process mode.
  *  v1: explicit map via WORKER_REPO_PATHS env (JSON: {projectId: absPath}).
@@ -185,6 +194,51 @@ async function defaultFetchComments(taskId: string): Promise<BriefComment[]> {
   }
 }
 
+async function defaultFetchVision(projectId: string): Promise<string> {
+  try {
+    const r = await fetch(
+      `${ORG_STUDIO_BASE()}/api/vision/${encodeURIComponent(projectId)}/doc`,
+      {
+        headers: process.env.ORG_STUDIO_API_KEY
+          ? { Authorization: `Bearer ${process.env.ORG_STUDIO_API_KEY}` }
+          : {},
+      },
+    );
+    if (!r.ok) return '';
+    const data = await r.json();
+    return typeof data?.content === 'string' ? data.content : '';
+  } catch {
+    return '';
+  }
+}
+
+async function defaultMaterializePlan(
+  sourceTaskId: string,
+  output: PlannerOutput,
+  assignee: string,
+): Promise<CreatedPlannerChunk[]> {
+  const r = await fetch(`${ORG_STUDIO_BASE()}/api/store`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(process.env.ORG_STUDIO_API_KEY
+        ? { Authorization: `Bearer ${process.env.ORG_STUDIO_API_KEY}` }
+        : {}),
+    },
+    body: JSON.stringify({
+      action: 'materializePlannerChunks',
+      sourceTaskId,
+      output,
+      assignee,
+    }),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || !data?.ok || !Array.isArray(data?.chunks)) {
+    throw new Error(data?.error || `planner materialization failed: HTTP ${r.status}`);
+  }
+  return data.chunks;
+}
+
 async function defaultRunRemote(spec: ProvisionJobSpec, _worker: WorkerConfig): Promise<ProvisionResult> {
   const token = process.env.WORKER_GH_TOKEN;
   if (!token) {
@@ -241,6 +295,12 @@ export interface WorkerRuntimeDeps {
   fetchStore: () => Promise<any | null>;
   postComment: (taskId: string, author: string, content: string) => Promise<void>;
   fetchComments: (taskId: string) => Promise<BriefComment[]>;
+  fetchVision: (projectId: string) => Promise<string>;
+  materializePlan: (
+    sourceTaskId: string,
+    output: PlannerOutput,
+    assignee: string,
+  ) => Promise<CreatedPlannerChunk[]>;
   writeAgentsMd: (repoRoot: string, content: string) => Promise<() => Promise<void>>;
   runEngine: (opts: EngineRunOpts) => Promise<WorkerRunResult>;
   runRemote: (spec: ProvisionJobSpec, worker: WorkerConfig) => Promise<ProvisionResult>;
@@ -257,6 +317,8 @@ const DEFAULT_DEPS: WorkerRuntimeDeps = {
   fetchStore: defaultFetchStore,
   postComment: defaultPostComment,
   fetchComments: defaultFetchComments,
+  fetchVision: defaultFetchVision,
+  materializePlan: defaultMaterializePlan,
   writeAgentsMd: defaultWriteAgentsMd,
   runEngine: runCodexEngine,
   runRemote: defaultRunRemote,
@@ -365,6 +427,14 @@ export class WorkerRuntime implements AgentRuntime {
     const task = candidates[0];
     if (!task) return { ok: true, skipped: 'no actionable work' };
 
+    if (task.jobKind === 'plan' && !worker.frontier) {
+      const reason =
+        `Task #${task.ticketNumber ?? '?'} is a plan job and requires a FRONTIER-tier worker. ` +
+        `Set frontier=true on the selected worker config.`;
+      await this.deps.postComment(task.id, worker.id, `⛔ Lane refusal: ${reason}`);
+      throw new Error(reason);
+    }
+
     const laneCheck = checkLane(worker, task);
     if (!laneCheck.ok) {
       await this.deps.postComment(task.id, worker.id, `⛔ Lane refusal: ${laneCheck.reason}`);
@@ -372,13 +442,20 @@ export class WorkerRuntime implements AgentRuntime {
     }
 
     const repo =
-      worker.mode === 'gh-actions' ? resolveRepoSlug(task.projectId) : resolveRepoPath(task.projectId);
+      task.jobKind === 'plan'
+        ? resolveRepoPath(task.projectId)
+        : worker.mode === 'gh-actions'
+          ? resolveRepoSlug(task.projectId)
+          : resolveRepoPath(task.projectId);
     if (!repo) {
       const reason =
-        worker.mode === 'gh-actions'
-          ? `No repo slug configured for project ${task.projectId} (set WORKER_REPO_SLUGS={"${task.projectId}":"owner/name"}).`
-          : `No repo checkout configured for project ${task.projectId} ` +
-            `(set WORKER_REPO_PATHS={"${task.projectId}":"/abs/path"}). W-5 adds real provisioning.`;
+        task.jobKind === 'plan'
+          ? `No local read-only checkout configured for planner project ${task.projectId} ` +
+            `(set WORKER_REPO_PATHS={"${task.projectId}":"/abs/path"}).`
+          : worker.mode === 'gh-actions'
+            ? `No repo slug configured for project ${task.projectId} (set WORKER_REPO_SLUGS={"${task.projectId}":"owner/name"}).`
+            : `No repo checkout configured for project ${task.projectId} ` +
+              `(set WORKER_REPO_PATHS={"${task.projectId}":"/abs/path"}). W-5 adds real provisioning.`;
       await this.deps.postComment(task.id, worker.id, `⛔ ${reason}`);
       throw new Error(reason);
     }
@@ -444,15 +521,46 @@ export class WorkerRuntime implements AgentRuntime {
     const { worker, task, project, profile, repo, message, dispatchId } = job;
     console.log(`[worker] job ${dispatchId} started (mode=${worker.mode}, repo=${repo}, ticket=${task.ticketNumber})`);
 
-    // --- ContextAssembler forward path (#1658) ---
+    // --- ContextAssembler forward path (#1658 + planner context #1691) ---
     const comments = await this.deps.fetchComments(task.id);
+    let dispatchMessage = message;
+    if (task.jobKind === 'plan') {
+      const version = (project?.sections || [])
+        .flatMap((section: any) => section.versions || [])
+        .find((candidate: any) => candidate.version === task.version);
+      const item = (version?.items || []).find(
+        (candidate: any) => candidate.id === task.roadmapItemId,
+      );
+      if (!version || !item) {
+        throw new Error(
+          `Planner context missing roadmap item ${task.roadmapItemId || '(unset)'} in version ${task.version || '(unset)'}`,
+        );
+      }
+      const vision = await this.deps.fetchVision(task.projectId);
+      const plannerContext: PlannerRoadmapContext = {
+        projectId: task.projectId,
+        projectName: project?.name,
+        version: version.version,
+        versionTitle: version.title,
+        versionSuccessCriteria: version.successCriteria,
+        itemId: item.id,
+        itemTitle: item.title,
+        visionExtract: extractVisionForPlanner(vision),
+      };
+      dispatchMessage = `${message.trim()}\n\n${buildPlannerInstructions(plannerContext)}`;
+    }
     const brief = assembleBrief({
-      dispatchMessage: message,
+      dispatchMessage,
       task,
       comments,
       project,
+      operatingMode: task.jobKind === 'plan' ? 'plan' : 'code',
     });
     console.log(`[worker] job ${dispatchId} brief assembled (${brief.length} chars, ${comments.length} comments)`);
+    if (task.jobKind === 'plan') {
+      await this.runPlannerJob({ worker, task, profile, repo, brief, comments, dispatchId });
+      return;
+    }
     if (worker.mode === 'gh-actions') {
       try {
         const ticketNumber = Number(task.ticketNumber || 0);
@@ -609,6 +717,78 @@ export class WorkerRuntime implements AgentRuntime {
     } finally {
       // Never leave the generated AGENTS.md in a shared checkout.
       if (restoreAgentsMd) await restoreAgentsMd();
+    }
+  }
+
+  private async runPlannerJob(job: {
+    worker: WorkerConfig;
+    task: any;
+    profile: HostProfile | null;
+    repo: string;
+    brief: string;
+    comments: BriefComment[];
+    dispatchId: string;
+  }): Promise<void> {
+    const { worker, task, profile, repo, brief, comments, dispatchId } = job;
+    const wrapper = buildOsWrapper(profile, worker.timeoutMs, this.deps.systemdRunAvailable());
+    try {
+      // Planner jobs deliberately use the local read-only engine path even
+      // when code jobs use gh-actions: the remote workflow is structurally a
+      // branch/PR producer. No AGENTS.md write, no branch, no PR, no repo edit.
+      const res = await this.deps.runEngine({
+        cwd: resolveRepoPath(task.projectId) || repo,
+        brief,
+        model: worker.model,
+        timeoutMs: wrapper.timeoutMs,
+        sandboxMode: 'read-only',
+        argvPrefix: wrapper.argvPrefix,
+      });
+      this.deps.recordModelCall({
+        dispatchId,
+        agentId: worker.id,
+        modelRequested: worker.model,
+        modelServed: worker.model,
+        provider: `worker:${worker.engine}`,
+        tokensIn: res.usage?.inputTokens ?? null,
+        tokensOut: res.usage?.outputTokens ?? null,
+        cacheReadTokens: res.usage?.cachedInputTokens ?? null,
+      });
+
+      const output = parsePlannerResult(res);
+      const chunks = await this.deps.materializePlan(
+        task.id,
+        output,
+        task.plannerChunkAssignee || task.assignee,
+      );
+      await this.deps.postComment(task.id, worker.id, renderPlannerSummary(task, chunks));
+      await this.deps.updateTask(task.id, {
+        status: 'done',
+        reviewNotes:
+          `Planner created ${chunks.length} planning chunks: ` +
+          chunks.map((chunk) => `#${chunk.ticketNumber}`).join(', '),
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      await this.deps.postComment(
+        task.id,
+        worker.id,
+        `🧭 **Planner run** \`${dispatchId.slice(0, 12)}\` — ❌ invalid/failed output\n\n${detail.slice(0, 1_500)}`,
+      );
+      const priorAttempts = comments.filter(
+        (comment) =>
+          typeof comment.content === 'string' && comment.content.includes('**Planner run**'),
+      ).length;
+      const maxAttempts = Math.max(1, Number(process.env.WORKER_MAX_ATTEMPTS || 3));
+      if (priorAttempts + 1 >= maxAttempts) {
+        await this.deps.updateTask(task.id, {
+          status: 'blocked',
+          blockedReasonType: 'needs-human-judgment',
+          blockedReason: `Planner failed ${priorAttempts + 1} validated attempt(s): ${detail.slice(0, 400)}`,
+          reviewNotes:
+            `Planner output rejected after ${priorAttempts + 1} attempt(s). Last error: ${detail.slice(0, 800)}`,
+        });
+      }
+      throw error;
     }
   }
 
