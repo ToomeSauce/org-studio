@@ -145,6 +145,81 @@ function defaultExtractZipEntry(zipBuf: Buffer, entry: string): string {
   }
 }
 
+type UnknownRecord = Record<string, unknown>;
+
+function isRecord(value: unknown): value is UnknownRecord {
+  return value !== null && typeof value === 'object';
+}
+
+function normalizeUsage(raw: unknown): ProvisionResult['usage'] | undefined {
+  if (raw === null) return null;
+  if (!isRecord(raw)) return undefined;
+  return {
+    inputTokens:
+      typeof raw.input_tokens === 'number'
+        ? raw.input_tokens
+        : typeof raw.inputTokens === 'number'
+          ? raw.inputTokens
+          : null,
+    cachedInputTokens:
+      typeof raw.cached_input_tokens === 'number'
+        ? raw.cached_input_tokens
+        : typeof raw.cachedInputTokens === 'number'
+          ? raw.cachedInputTokens
+          : null,
+    outputTokens:
+      typeof raw.output_tokens === 'number'
+        ? raw.output_tokens
+        : typeof raw.outputTokens === 'number'
+          ? raw.outputTokens
+          : null,
+    reasoningOutputTokens:
+      typeof raw.reasoning_output_tokens === 'number'
+        ? raw.reasoning_output_tokens
+        : typeof raw.reasoningOutputTokens === 'number'
+          ? raw.reasoningOutputTokens
+          : null,
+  };
+}
+
+function normalizeEngineResult(raw: unknown): WorkerRunResult | null {
+  if (!isRecord(raw)) return null;
+  const commands = Array.isArray(raw.commands)
+    ? raw.commands.flatMap((candidate) => {
+        if (!isRecord(candidate) || typeof candidate.command !== 'string') return [];
+        return [{
+          command: candidate.command,
+          exitCode: typeof candidate.exitCode === 'number' ? candidate.exitCode : null,
+        }];
+      })
+    : [];
+  const fileChanges = Array.isArray(raw.fileChanges)
+    ? raw.fileChanges.flatMap((candidate) => {
+        if (!isRecord(candidate) || typeof candidate.path !== 'string') return [];
+        return [{
+          path: candidate.path,
+          kind: typeof candidate.kind === 'string' ? candidate.kind : 'update',
+        }];
+      })
+    : [];
+
+  return {
+    ok: raw.ok === true,
+    exitCode: typeof raw.exitCode === 'number' ? raw.exitCode : null,
+    durationMs: typeof raw.durationMs === 'number' ? raw.durationMs : 0,
+    commands,
+    fileChanges,
+    messages: Array.isArray(raw.messages)
+      ? raw.messages.filter((message): message is string => typeof message === 'string')
+      : [],
+    errors: Array.isArray(raw.errors)
+      ? raw.errors.filter((error): error is string => typeof error === 'string')
+      : [],
+    usage: normalizeUsage(raw.usage) ?? null,
+    rawEventCount: typeof raw.rawEventCount === 'number' ? raw.rawEventCount : 0,
+  };
+}
+
 export class GhActionsAdapter implements ProvisioningAdapter {
   mode = 'gh-actions' as const;
   private o: Required<
@@ -277,29 +352,31 @@ export class GhActionsAdapter implements ProvisioningAdapter {
             if (typeof parsed?.pr_url === 'string' && parsed.pr_url) {
               out.prUrl = parsed.pr_url;
             }
-            if (
-              Array.isArray(parsed?.messages) &&
-              parsed.messages.every((message: unknown) => typeof message === 'string')
-            ) {
-              out.messages = parsed.messages;
-            }
-            if (typeof parsed?.engine_exit === 'number' && parsed.engine_exit !== 0) {
-              out.ok = false;
-              out.detail = `engine exit ${parsed.engine_exit} — ${runUrl}`;
-            }
+            const engineResult = normalizeEngineResult(parsed?.engine_result);
+            if (engineResult) {
+              out.engineResult = engineResult;
+              out.messages = engineResult.messages;
+              out.usage = engineResult.usage;
+              if (!engineResult.ok) {
+                out.ok = false;
+                out.detail =
+                  engineResult.errors[0] ||
+                  `engine exit ${engineResult.exitCode ?? 'null'} — ${runUrl}`;
+              }
+            } else {
+              if (
+                Array.isArray(parsed?.messages) &&
+                parsed.messages.every((message: unknown) => typeof message === 'string')
+              ) {
+                out.messages = parsed.messages;
+              }
+              if (typeof parsed?.engine_exit === 'number' && parsed.engine_exit !== 0) {
+                out.ok = false;
+                out.detail = `engine exit ${parsed.engine_exit} — ${runUrl}`;
+              }
 
-            if (parsed?.usage === null) {
-              out.usage = null;
-            } else if (parsed?.usage && typeof parsed.usage === 'object') {
-              const u = parsed.usage;
-              out.usage = {
-                inputTokens: typeof u.input_tokens === 'number' ? u.input_tokens : null,
-                cachedInputTokens:
-                  typeof u.cached_input_tokens === 'number' ? u.cached_input_tokens : null,
-                outputTokens: typeof u.output_tokens === 'number' ? u.output_tokens : null,
-                reasoningOutputTokens:
-                  typeof u.reasoning_output_tokens === 'number' ? u.reasoning_output_tokens : null,
-              };
+              const usage = normalizeUsage(parsed?.usage);
+              if (usage !== undefined) out.usage = usage;
             }
           }
         } catch (e: any) {

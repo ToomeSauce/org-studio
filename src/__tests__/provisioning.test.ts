@@ -325,16 +325,26 @@ describe('#1660: GhActionsAdapter', () => {
 });
 
 describe('#1660: GhActionsAdapter artifact result parsing', () => {
-  it('maps worker-result artifact pr_url + usage into ProvisionResult', async () => {
+  it('maps normalized engine_result + pr_url into ProvisionResult', async () => {
     let marker = '';
     const extractZipEntry = vi.fn(() =>
       JSON.stringify({
         pr_url: 'https://github.com/x/y/pull/123',
-        usage: {
-          input_tokens: 100,
-          cached_input_tokens: 25,
-          output_tokens: 50,
-          reasoning_output_tokens: 10,
+        engine_result: {
+          ok: true,
+          exitCode: 0,
+          durationMs: 1234,
+          commands: [{ command: 'npm test', exitCode: 0 }],
+          fileChanges: [{ path: 'src/a.ts', kind: 'update' }],
+          messages: ['done'],
+          errors: [],
+          usage: {
+            inputTokens: 100,
+            cachedInputTokens: 25,
+            outputTokens: 50,
+            reasoningOutputTokens: 10,
+          },
+          rawEventCount: 1,
         },
       }),
     );
@@ -402,6 +412,12 @@ describe('#1660: GhActionsAdapter artifact result parsing', () => {
       cachedInputTokens: 25,
       outputTokens: 50,
       reasoningOutputTokens: 10,
+    });
+    expect(r.messages).toEqual(['done']);
+    expect(r.engineResult).toMatchObject({
+      ok: true,
+      exitCode: 0,
+      fileChanges: [{ path: 'src/a.ts', kind: 'update' }],
     });
     expect(extractZipEntry).toHaveBeenCalledWith(expect.any(Buffer), 'result.json');
   });

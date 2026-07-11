@@ -338,23 +338,25 @@ jobs:
           import { runOpenAiCompatEngine } from './src/lib/workers/engine-openai-compat.ts';
 
           const parseVerification = (raw) => {
-            try {
-              const parsed = JSON.parse(raw || '[]');
-              return Array.isArray(parsed) ? parsed.filter((entry) => typeof entry === 'string') : [];
-            } catch {
-              return [];
+            const parsed = JSON.parse(raw || '[]');
+            if (!Array.isArray(parsed) || parsed.some((entry) => typeof entry !== 'string')) {
+              throw new Error('verification_commands must be a JSON string array');
             }
+            return parsed;
           };
 
           let result;
           try {
+            const apiKeyEnv = (process.env.API_KEY_ENV || '').trim() || 'OPENAI_API_KEY';
+            const apiKey = process.env.WORKER_OPENAI_COMPAT_API_KEY || process.env.OPENAI_API_KEY || '';
             result = await runOpenAiCompatEngine({
               cwd: process.cwd(),
               brief: process.env.BRIEF || '',
               model: process.env.MODEL || 'gpt-4.1-mini',
               timeoutMs: Number(process.env.WORKER_TIMEOUT_MS || '1200000'),
               baseUrl: (process.env.BASE_URL || '').trim() || undefined,
-              apiKeyEnv: (process.env.API_KEY_ENV || '').trim() || undefined,
+              apiKeyEnv,
+              env: apiKey ? { [apiKeyEnv]: apiKey } : undefined,
               verificationCommands: parseVerification(process.env.VERIFICATION_COMMANDS_JSON || '[]'),
             });
           } catch (error) {

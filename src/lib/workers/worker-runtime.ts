@@ -37,6 +37,10 @@ import type { AgentRuntime, RuntimeAgent, AgentMetadata } from '../runtimes/type
 import { getWorkerConfigs, checkLane, workersEnabled, type WorkerConfig } from './config';
 import { runCodexEngine, type WorkerRunResult, type EngineRunOpts } from './engine-codex';
 import {
+  runOpenAiCompatEngine,
+  type OpenAiCompatRunOpts,
+} from './engine-openai-compat';
+import {
   assembleBrief,
   generateWorkerAgentsMd,
   extractAttemptSummary,
@@ -303,6 +307,7 @@ export interface WorkerRuntimeDeps {
   ) => Promise<CreatedPlannerChunk[]>;
   writeAgentsMd: (repoRoot: string, content: string) => Promise<() => Promise<void>>;
   runEngine: (opts: EngineRunOpts) => Promise<WorkerRunResult>;
+  runOpenAiCompatEngine: (opts: OpenAiCompatRunOpts) => Promise<WorkerRunResult>;
   runRemote: (spec: ProvisionJobSpec, worker: WorkerConfig) => Promise<ProvisionResult>;
   updateTask: (taskId: string, updates: Record<string, unknown>) => Promise<void>;
   recordDispatch: typeof recordDispatch;
@@ -321,6 +326,7 @@ const DEFAULT_DEPS: WorkerRuntimeDeps = {
   materializePlan: defaultMaterializePlan,
   writeAgentsMd: defaultWriteAgentsMd,
   runEngine: runCodexEngine,
+  runOpenAiCompatEngine,
   runRemote: defaultRunRemote,
   updateTask: defaultUpdateTask,
   recordDispatch,
@@ -381,6 +387,21 @@ export class WorkerRuntime implements AgentRuntime {
     return { model: w.model, provider: 'worker:' + w.engine, mode: w.mode };
   }
 
+  private runEngineForWorker(
+    worker: WorkerConfig,
+    opts: EngineRunOpts,
+  ): Promise<WorkerRunResult> {
+    if (worker.engine === 'openai-compat') {
+      return this.deps.runOpenAiCompatEngine({
+        ...opts,
+        baseUrl: worker.baseUrl,
+        apiKeyEnv: worker.apiKeyEnv,
+        verificationCommands: worker.verificationCommands,
+      });
+    }
+    return this.deps.runEngine(opts);
+  }
+
   /**
    * Dispatch = ENQUEUE one job (see header). Validates synchronously
    * (lane gate, repo, single flight — all fast), then kicks the engine
@@ -427,10 +448,10 @@ export class WorkerRuntime implements AgentRuntime {
     const task = candidates[0];
     if (!task) return { ok: true, skipped: 'no actionable work' };
 
-    if (task.jobKind === 'plan' && !worker.frontier) {
+    if (task.jobKind === 'plan' && (!worker.frontier || worker.engine !== 'codex')) {
       const reason =
-        `Task #${task.ticketNumber ?? '?'} is a plan job and requires a FRONTIER-tier worker. ` +
-        `Set frontier=true on the selected worker config.`;
+        `Task #${task.ticketNumber ?? '?'} is a plan job and requires a FRONTIER-tier codex worker. ` +
+        `Set frontier=true and engine=codex on the selected worker config.`;
       await this.deps.postComment(task.id, worker.id, `⛔ Lane refusal: ${reason}`);
       throw new Error(reason);
     }
@@ -575,8 +596,12 @@ export class WorkerRuntime implements AgentRuntime {
             ticketNumber,
             title: task.title,
             brief,
+            engine: worker.engine,
             model: worker.model,
+            baseUrl: worker.baseUrl,
+            apiKeyEnv: worker.apiKeyEnv,
             timeoutMs: worker.timeoutMs,
+            verificationCommands: worker.verificationCommands,
             smoke: process.env.WORKER_SMOKE_MODE === 'true',
           },
           worker,
@@ -677,7 +702,7 @@ export class WorkerRuntime implements AgentRuntime {
     try {
       restoreAgentsMd = await this.deps.writeAgentsMd(repo, agentsMd);
 
-      const res = await this.deps.runEngine({
+      const res = await this.runEngineForWorker(worker, {
         cwd: repo,
         brief,
         model: worker.model,
@@ -748,8 +773,12 @@ export class WorkerRuntime implements AgentRuntime {
             ticketNumber: Number(task.ticketNumber || 0),
             title: String(task.title || 'Planner job'),
             brief,
+            engine: worker.engine,
             model: worker.model,
+            baseUrl: worker.baseUrl,
+            apiKeyEnv: worker.apiKeyEnv,
             timeoutMs: worker.timeoutMs,
+            verificationCommands: [],
             jobKind: 'plan',
           },
           worker,
@@ -767,7 +796,7 @@ export class WorkerRuntime implements AgentRuntime {
           rawEventCount: 0,
         };
       } else {
-        res = await this.deps.runEngine({
+        res = await this.runEngineForWorker(worker, {
           cwd: resolveRepoPath(task.projectId) || repo,
           brief,
           model: worker.model,
