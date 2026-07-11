@@ -608,3 +608,28 @@ If `ORG_STUDIO_API_KEY` is set, all write (POST/PUT) requests must include eithe
 - Header: `X-API-Key: <key>`
 
 When not set, the API is open (suitable for local development).
+
+## Audit a worker pipeline receipt
+
+Fetch one workspace-scoped ticket receipt and use `jq` to inspect its planner provenance, model/token/cost attribution, and extracted worker-run/PR links without manual joins:
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer $ORG_STUDIO_API_KEY" \
+  "http://localhost:4501/api/observability/worker-receipts/1707" |
+jq '{
+  provenance: {
+    ticketNumber, taskId, plannerSourceTaskId, parentId, roadmapItemId,
+    projectId, version, statusPath, modelTierSnapshot
+  },
+  attribution: {
+    models: .modelHistory,
+    tokensIn: .attribution.tokensIn,
+    tokensOut: .attribution.tokensOut,
+    cacheReadTokens: .attribution.cacheReadTokens,
+    cacheWriteTokens: .attribution.cacheWriteTokens,
+    costUsd: .attribution.costUsd
+  },
+  evidence: .evidenceLinks
+}'
+```
