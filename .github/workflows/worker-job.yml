@@ -348,7 +348,11 @@ jobs:
           let result;
           try {
             const apiKeyEnv = (process.env.API_KEY_ENV || '').trim() || 'OPENAI_API_KEY';
-            const apiKey = process.env.WORKER_OPENAI_COMPAT_API_KEY || process.env.OPENAI_API_KEY || '';
+            const apiKey =
+              process.env.WORKER_OPENAI_COMPAT_API_KEY ||
+              process.env.OPENAI_API_KEY ||
+              process.env.FOUNDRY_API_KEY ||
+              '';
             result = await runOpenAiCompatEngine({
               cwd: process.cwd(),
               brief: process.env.BRIEF || '',
