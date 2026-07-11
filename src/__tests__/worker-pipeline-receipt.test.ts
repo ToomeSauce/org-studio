@@ -1,11 +1,20 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { StoreProvider } from '@/lib/store-provider';
 import {
+  __resetForTest,
+  __setPoolForTest,
+  __setStoreProviderGetterForTest,
   assembleWorkerPipelineReceipt,
   extractEvidenceLinks,
+  getWorkerPipelineReceipt,
   normalizeReceiptStatusHistory,
 } from '@/lib/worker-pipeline-receipt';
 
 describe('worker pipeline receipt helpers (#1704)', () => {
+  beforeEach(() => {
+    __resetForTest();
+  });
+
   it('extracts PR + worker run links from reviewNotes/comments with dedupe and stable ordering', () => {
     const links = extractEvidenceLinks(
       [
@@ -75,6 +84,14 @@ describe('worker pipeline receipt helpers (#1704)', () => {
       requested: 'complex',
       latestStatusModel: 'gpt-5.4',
     });
+    expect(receipt.attribution).toEqual({
+      tokensIn: 0,
+      tokensOut: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      costUsd: 0,
+      modelHistory: [],
+    });
   });
 
   it('returns stable empty/null shapes for missing inputs', () => {
@@ -107,6 +124,14 @@ describe('worker pipeline receipt helpers (#1704)', () => {
       modelHistory: [],
       modelTierSnapshot: { requested: null, latestStatusModel: null },
       evidenceLinks: { workerRuns: [], pullRequests: [] },
+      attribution: {
+        tokensIn: 0,
+        tokensOut: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        costUsd: 0,
+        modelHistory: [],
+      },
     });
   });
 
@@ -122,5 +147,105 @@ describe('worker pipeline receipt helpers (#1704)', () => {
       { status: 'in-progress', timestamp: 2, by: 'A', model: null },
       { status: 'done', timestamp: 3, by: 'A', model: null },
     ]);
+  });
+
+  it('reads a workspace-scoped receipt and aggregates multi-call attribution deterministically', async () => {
+    const provider: Pick<StoreProvider, 'read' | 'listComments'> = {
+      read: vi.fn(async () => ({
+        tasks: [{
+          id: 'task-1705',
+          ticketNumber: 1705,
+          projectId: 'proj-1',
+          statusHistory: [{ status: 'done', timestamp: 10, model: 'gpt-5.3-codex' }],
+          reviewNotes: 'done',
+        }],
+      })),
+      listComments: vi.fn(async () => [{ id: 'c1', author: 'Worker', content: 'ok', createdAt: 1 }]),
+    };
+    __setStoreProviderGetterForTest(() => provider);
+    __setPoolForTest({
+      query: vi.fn(async () => ({
+        rows: [
+          {
+            model_served: 'claude-opus-4.8',
+            tokens_in: '100',
+            tokens_out: 10,
+            cache_read_tokens: 50,
+            cache_write_tokens: 5,
+            cost_estimate: '0.1111114',
+          },
+          {
+            model_served: 'gpt-4.1-mini',
+            tokens_in: 200,
+            tokens_out: '20',
+            cache_read_tokens: '0',
+            cache_write_tokens: 2,
+            cost_estimate: '0.2222225',
+          },
+          {
+            model_served: 'claude-opus-4.8',
+            tokens_in: 3,
+            tokens_out: 4,
+            cache_read_tokens: 1,
+            cache_write_tokens: 0,
+            cost_estimate: '0.0000004',
+          },
+        ],
+      })),
+    });
+
+    const receipt = await getWorkerPipelineReceipt('ws-1', 1705);
+
+    expect(provider.listComments).toHaveBeenCalledWith({ kind: 'task', taskId: 'task-1705' }, { limit: 200 });
+    expect(receipt).not.toBeNull();
+    expect(receipt!.attribution).toEqual({
+      tokensIn: 303,
+      tokensOut: 34,
+      cacheReadTokens: 51,
+      cacheWriteTokens: 7,
+      costUsd: 0.333334,
+      modelHistory: ['claude-opus-4.8', 'gpt-4.1-mini'],
+    });
+    expect(receipt!.modelHistory).toEqual([
+      'gpt-5.3-codex',
+      'claude-opus-4.8',
+      'gpt-4.1-mini',
+    ]);
+  });
+
+  it('returns null when ticket is unknown and fails soft when comments/ledger are unavailable', async () => {
+    const provider: Pick<StoreProvider, 'read' | 'listComments'> = {
+      read: vi.fn(async () => ({
+        tasks: [{
+          id: 'task-1706',
+          ticketNumber: 1706,
+          comments: [{ id: 'inline', author: 'W', content: 'inline comment', createdAt: 1 }],
+          statusHistory: [],
+        }],
+      })),
+      listComments: vi.fn(async () => { throw new Error('comment read failed'); }),
+    };
+    __setStoreProviderGetterForTest(() => provider);
+    __setPoolForTest({
+      query: vi.fn(async () => {
+        const err: Error & { code?: string } = new Error('relation missing');
+        err.code = '42P01';
+        throw err;
+      }),
+    });
+
+    await expect(getWorkerPipelineReceipt('ws-1', 9999)).resolves.toBeNull();
+
+    const receipt = await getWorkerPipelineReceipt('ws-1', 1706);
+    expect(receipt).not.toBeNull();
+    expect(receipt!.evidenceLinks).toEqual({ workerRuns: [], pullRequests: [] });
+    expect(receipt!.attribution).toEqual({
+      tokensIn: 0,
+      tokensOut: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      costUsd: 0,
+      modelHistory: [],
+    });
   });
 });
