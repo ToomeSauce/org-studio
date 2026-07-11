@@ -44,6 +44,7 @@ describe('#1657: worker config gating', () => {
     expect(ws).toHaveLength(1);
     expect(ws[0].id).toBe('worker-codex');
     expect(ws[0].lane.taskTypes).toEqual(['chore', 'bug']);
+    expect(ws[0].tiers).toEqual(['trivial', 'standard', 'complex']);
   });
 
   it('invalid JSON config falls back to defaults', () => {
@@ -57,7 +58,12 @@ describe('#1657: worker config gating', () => {
     setEnv(
       'WORKER_RUNTIME_CONFIG',
       JSON.stringify([
-        { id: 'worker-x', model: 'm1', lane: { taskTypes: ['BUG'], projectIds: ['p1'] } },
+        {
+          id: 'worker-x',
+          model: 'm1',
+          lane: { taskTypes: ['BUG'], projectIds: ['p1'] },
+          tiers: ['standard', 'complex'],
+        },
         { id: 'mikey', model: 'nope' }, // must be filtered — not a worker- id
       ]),
     );
@@ -66,6 +72,21 @@ describe('#1657: worker config gating', () => {
     expect(ws[0].id).toBe('worker-x');
     expect(ws[0].lane.taskTypes).toEqual(['bug']); // lowercased
     expect(ws[0].lane.projectIds).toEqual(['p1']);
+    expect(ws[0].tiers).toEqual(['standard', 'complex']);
+  });
+
+  it('falls back to all tiers when custom tiers are missing/invalid', () => {
+    setEnv('WORKER_RUNTIME_ENABLED', 'true');
+    setEnv(
+      'WORKER_RUNTIME_CONFIG',
+      JSON.stringify([
+        { id: 'worker-a', model: 'm1', tiers: ['invalid'], lane: { taskTypes: [], projectIds: [] } },
+        { id: 'worker-b', model: 'm2', lane: { taskTypes: [], projectIds: [] } },
+      ]),
+    );
+    const ws = getWorkerConfigs();
+    expect(ws[0].tiers).toEqual([]);
+    expect(ws[1].tiers).toEqual(['trivial', 'standard', 'complex']);
   });
 });
 

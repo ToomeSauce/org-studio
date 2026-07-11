@@ -11,6 +11,7 @@
  * later — env-first keeps the surface reversible and cloud-friendly
  * (Container Apps env vars).
  */
+import { MODEL_TIERS, type ModelTier } from '@/lib/model-tier';
 
 export interface WorkerLane {
   /** Allowed taskTypes (lowercase). Empty = allow all types. */
@@ -34,6 +35,8 @@ export interface WorkerConfig {
   verificationCommands: string[];
   /** #1691 — only explicitly FRONTIER-tier workers may execute plan jobs. */
   frontier: boolean;
+  /** #1692 — model-tier routing allowlist for generic `worker` dispatch. */
+  tiers: ModelTier[];
   /** HostProfile id (#1659) — resolves against settings.hostProfiles, then
    *  presets. Unset = no host constraints (W-2 behavior). */
   hostId?: string;
@@ -56,6 +59,7 @@ export const DEFAULT_WORKERS: WorkerConfig[] = [
       'npx eslint <changed-files>',
     ],
     frontier: false,
+    tiers: [...MODEL_TIERS],
   },
 ];
 
@@ -71,32 +75,48 @@ export function getWorkerConfigs(): WorkerConfig[] {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return DEFAULT_WORKERS;
     return parsed
-      .filter((w: any) => w && typeof w.id === 'string' && w.id.startsWith('worker-'))
-      .map((w: any) => ({
-        id: w.id,
-        name: typeof w.name === 'string' ? w.name : w.id,
-        engine: w.engine === 'codex' ? 'codex' : 'codex',
-        model: typeof w.model === 'string' ? w.model : 'gpt-5.3-codex',
-        mode: ['local-process', 'local-container', 'gh-actions', 'vm'].includes(w.mode)
-          ? w.mode
-          : 'local-process',
-        lane: {
-          taskTypes: Array.isArray(w.lane?.taskTypes)
-            ? w.lane.taskTypes.map((t: any) => String(t).toLowerCase())
-            : [],
-          projectIds: Array.isArray(w.lane?.projectIds) ? w.lane.projectIds.map(String) : [],
-        },
-        timeoutMs:
-          Number.isFinite(w.timeoutMs) && w.timeoutMs > 0 ? w.timeoutMs : 15 * 60 * 1000,
-        verificationCommands: Array.isArray(w.verificationCommands)
-          ? w.verificationCommands
-              .filter((c: unknown): c is string => typeof c === 'string' && c.trim().length > 0)
-              .map((c: string) => c.trim())
-              .slice(0, 10)
-          : [...DEFAULT_WORKERS[0].verificationCommands],
-        frontier: w.frontier === true,
-        hostId: typeof w.hostId === 'string' && w.hostId ? w.hostId : undefined,
-      }));
+      .filter(
+        (w: unknown): w is Record<string, unknown> =>
+          !!w &&
+          typeof w === 'object' &&
+          typeof (w as { id?: unknown }).id === 'string' &&
+          String((w as { id: unknown }).id).startsWith('worker-'),
+      )
+      .map((w: Record<string, unknown>) => {
+        const lane = w.lane && typeof w.lane === 'object'
+          ? (w.lane as Record<string, unknown>)
+          : {};
+        return {
+          id: w.id,
+          name: typeof w.name === 'string' ? w.name : w.id,
+          engine: w.engine === 'codex' ? 'codex' : 'codex',
+          model: typeof w.model === 'string' ? w.model : 'gpt-5.3-codex',
+          mode: ['local-process', 'local-container', 'gh-actions', 'vm'].includes(w.mode)
+            ? w.mode
+            : 'local-process',
+          lane: {
+            taskTypes: Array.isArray(lane.taskTypes)
+              ? lane.taskTypes.map((t: unknown) => String(t).toLowerCase())
+              : [],
+            projectIds: Array.isArray(lane.projectIds) ? lane.projectIds.map(String) : [],
+          },
+          timeoutMs:
+            Number.isFinite(w.timeoutMs) && w.timeoutMs > 0 ? w.timeoutMs : 15 * 60 * 1000,
+          verificationCommands: Array.isArray(w.verificationCommands)
+            ? w.verificationCommands
+                .filter((c: unknown): c is string => typeof c === 'string' && c.trim().length > 0)
+                .map((c: string) => c.trim())
+                .slice(0, 10)
+            : [...DEFAULT_WORKERS[0].verificationCommands],
+          frontier: w.frontier === true,
+          tiers: Array.isArray(w.tiers)
+            ? w.tiers
+                .map((t: unknown) => String(t).toLowerCase())
+                .filter((t: string): t is ModelTier => (MODEL_TIERS as string[]).includes(t))
+            : [...MODEL_TIERS],
+          hostId: typeof w.hostId === 'string' && w.hostId ? w.hostId : undefined,
+        };
+      });
   } catch {
     console.warn('[workers] WORKER_RUNTIME_CONFIG is not valid JSON — using defaults');
     return DEFAULT_WORKERS;

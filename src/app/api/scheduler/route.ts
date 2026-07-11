@@ -91,6 +91,9 @@ import { searchMemory } from '@/lib/embedding/search';
 import { enrichStewardNudge, enrichProposePrompt, type MemoryHit } from '@/lib/embedding/precedent';
 // #1633 — push-based dispatch policy (enable/runNow/sync no longer create heavy crons).
 import { planEnable, planRunNow, planSync } from '@/lib/scheduler-dispatch-policy';
+import { getWorkerConfigs } from '@/lib/workers/config';
+import { routeTierTask } from '@/lib/workers/route-tier';
+import type { ModelTier } from '@/lib/model-tier';
 
 // Minimum seconds between event-driven triggers for the same agent (debounce)
 const TRIGGER_COOLDOWN_MS = 60_000; // 1 minute
@@ -906,6 +909,7 @@ async function fireOneShot(
   _staleStore: StoreData,
   loop: AgentLoop,
   source: FireOneShotSource = 'manual',
+  opts?: { tier?: ModelTier | null },
 ): Promise<string | undefined> {
   // #1521 — ALWAYS re-read the store right before composing the dispatch
   // message. The caller's `_staleStore` argument is intentionally ignored:
@@ -996,7 +1000,7 @@ async function fireOneShot(
     .join(',');
   console.info(
     `[dispatch #1515 src=${source}] agent=${loop.agentId} ` +
-      `readMs=${readMs} tickets=[${agentTicketStatuses}]`,
+      `tier=${opts?.tier ?? 'none'} readMs=${readMs} tickets=[${agentTicketStatuses}]`,
   );
 
   // #1641 — ledger writes are fire-and-forget; capture the shared fields
@@ -1419,7 +1423,10 @@ export async function POST(request: NextRequest) {
             ? body.triggerSource
             : 'manual'
         ) as TriggerSource;
-        const agentName = getAgentName(store, agentId);
+        const requestedAgentName = getAgentName(store, agentId);
+        let dispatchAgentId = agentId;
+        let dispatchAgentName = requestedAgentName;
+        let dispatchTier: ModelTier | null = null;
 
         // #1184: helper — record the attempt then return the response.
         // Computes diagnosis lazily so successful paths skip the cost.
@@ -1431,9 +1438,9 @@ export async function POST(request: NextRequest) {
           },
         ) => {
           try {
-            const diag = diagnoseAgentBacklog(store, agentId, agentName);
+            const diag = diagnoseAgentBacklog(store, dispatchAgentId, dispatchAgentName);
             await recordDispatchAttempt({
-              agentId,
+              agentId: dispatchAgentId,
               triggerSource,
               outcome: opts.outcome,
               reason: opts.reason,
@@ -1449,7 +1456,55 @@ export async function POST(request: NextRequest) {
           return NextResponse.json(response);
         };
 
-        const loop = getLoopByAgent(store, agentId);
+        // #1692 — generic worker tier routing.
+        // Resolve BEFORE loop lookup so all existing per-worker loop gates
+        // (single-flight, cooldown, stale-disable) run on the selected worker.
+        if (agentId.toLowerCase() === 'worker') {
+          try {
+            const genericNameLower = requestedAgentName.toLowerCase();
+            const tierTask = (store.tasks || [])
+              .filter((t: any) => {
+                const a = (t.assignee || '').toLowerCase();
+                return (
+                  (a === 'worker' || a === genericNameLower) &&
+                  t.status === 'backlog' &&
+                  !t.isArchived
+                );
+              })
+              .sort((a: any, b: any) => {
+                const sa = Number(a.sortOrder ?? Number.MAX_SAFE_INTEGER);
+                const sb = Number(b.sortOrder ?? Number.MAX_SAFE_INTEGER);
+                if (sa !== sb) return sa - sb;
+                return Number(a.createdAt || 0) - Number(b.createdAt || 0);
+              })[0];
+
+            if (tierTask) {
+              const decision = routeTierTask(
+                { assignee: tierTask.assignee, modelTier: tierTask.modelTier ?? null },
+                getWorkerConfigs().map((w) => ({ id: w.id, tiers: w.tiers })),
+              );
+              dispatchTier = decision.tier;
+              if (decision.reason === 'routed' && decision.workerId) {
+                const targetLoop = getLoopByAgent(store, decision.workerId);
+                if (targetLoop) {
+                  await getStoreProviderAllWorkspaces().updateTask(tierTask.id, {
+                    assignee: decision.workerId,
+                  });
+                  dispatchAgentId = decision.workerId;
+                  dispatchAgentName = getAgentName(store, dispatchAgentId);
+                } else {
+                  console.warn(
+                    `[dispatch #1692] routed worker ${decision.workerId} has no enabled loop; fail-open to generic worker`,
+                  );
+                }
+              }
+            }
+          } catch (e: any) {
+            console.warn(`[dispatch #1692] tier routing failed open: ${e?.message || e}`);
+          }
+        }
+
+        const loop = getLoopByAgent(store, dispatchAgentId);
         if (!loop) {
           return recordAndReturn(
             { ok: true, skipped: true, reason: 'No enabled loop for agent' },
@@ -1467,9 +1522,9 @@ export async function POST(request: NextRequest) {
         //       in server.mjs hits the /api/runtimes endpoint, which on
         //       agent re-discovery clears loopDisabledAt automatically.
         //       (Implemented below in this same slice.)
-                const teammates = store.settings?.teammates || [];
+        const teammates = store.settings?.teammates || [];
         const teammate = teammates.find(
-          (tm: any) => (tm?.agentId || '').toLowerCase() === agentId.toLowerCase(),
+          (tm: any) => (tm?.agentId || '').toLowerCase() === dispatchAgentId.toLowerCase(),
         );
         // #1352 slice 5: routed through claim-contract lib so the test suite
         // and the route agree on what 'blocked' means.
@@ -1487,7 +1542,7 @@ export async function POST(request: NextRequest) {
 
         // Cooldown — don't fire more than once per minute per agent
         const now = Date.now();
-        const lastTrigger = lastTriggerByAgent[agentId] || 0;
+        const lastTrigger = lastTriggerByAgent[dispatchAgentId] || 0;
         if (now - lastTrigger < TRIGGER_COOLDOWN_MS) {
           return recordAndReturn(
             { ok: true, skipped: true, reason: 'Cooldown — triggered recently' },
@@ -1503,7 +1558,7 @@ export async function POST(request: NextRequest) {
         checkBudgetAlerts((store.projects || []) as any[], spendSnapshot).catch((e) =>
           console.warn('[budget-alerts] non-fatal:', e?.message || e),
         );
-        if (!hasActionableWork(store, agentId, spendSnapshot)) {
+        if (!hasActionableWork(store, dispatchAgentId, spendSnapshot)) {
           return recordAndReturn(
             { ok: true, skipped: true, reason: 'No actionable work' },
             { outcome: 'skipped', reason: 'no-actionable-work' },
@@ -1540,20 +1595,20 @@ export async function POST(request: NextRequest) {
         // sees the post-sweep state. This is the original #1515 contract.
         reader.refresh();
         const freshStore = await reader.readSlim('trigger-post-sweep');
-        const { stalled, incremented } = await detectAndIncrementLoops(freshStore, agentId);
+        const { stalled, incremented } = await detectAndIncrementLoops(freshStore, dispatchAgentId);
 
         if (stalled.length > 0) {
           // Pause stalled tasks and send alerts instead of firing another loop
           // #1526: detectAndIncrementLoops wrote loopCount updates above;
           // refresh before pauseStalledTasks reads.
           reader.refresh();
-          await pauseStalledTasks(await reader.readSlim('trigger-pre-pause'), agentId, stalled);
+          await pauseStalledTasks(await reader.readSlim('trigger-pre-pause'), dispatchAgentId, stalled);
           
           // Check if there's still non-paused actionable work
           // #1526: pauseStalledTasks wrote loopPausedAt; refresh again.
           reader.refresh();
           const postPauseStore = await reader.readSlim('trigger-post-pause');
-          if (!hasActionableWork(postPauseStore, agentId)) {
+          if (!hasActionableWork(postPauseStore, dispatchAgentId)) {
             return recordAndReturn(
               { 
                 ok: true, skipped: true, 
@@ -1570,8 +1625,8 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        lastTriggerByAgent[agentId] = now;
-        recordTrigger(agentId, now);
+        lastTriggerByAgent[dispatchAgentId] = now;
+        recordTrigger(dispatchAgentId, now);
 
         // Dispatch task to agent's main persistent session.
         // fireOneShot returns the sessionKey iff it actually enqueued to the
@@ -1588,7 +1643,7 @@ export async function POST(request: NextRequest) {
         // call site instead of only this one, which is the whole point
         // of #1521. Keep `recordTrigger` outside (cooldown bookkeeping
         // only — doesn't need fresh task state).
-        const sessionKey = await fireOneShot(store, loop, 'primary');
+        const sessionKey = await fireOneShot(store, loop, 'primary', { tier: dispatchTier });
         if (!sessionKey) {
           return recordAndReturn(
             {
