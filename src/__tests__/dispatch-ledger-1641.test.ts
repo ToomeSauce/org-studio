@@ -55,6 +55,11 @@ describe('estimateCost', () => {
     expect(cached).toBeCloseTo(1.5, 3); // opus cacheReadPer1M
   });
 
+  it('prices the cheap OpenAI-compatible worker model used by tier routing', () => {
+    expect(estimateCost('gpt-4.1-mini', 1_000_000, 1_000_000)).toBe(2);
+    expect(estimateCost('gpt-4.1-mini', 1_000_000, 0, 1_000_000)).toBe(0.1);
+  });
+
   it('returns null for unknown models (unmetered, not zero)', () => {
     expect(estimateCost('mystery-model-9000', 1000, 1000)).toBeNull();
   });

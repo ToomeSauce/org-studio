@@ -8,6 +8,7 @@ const BASE_URL = 'http://localhost:4501';
 
 import { compareVersions } from './version-utils';
 import { internalAuthHeaders } from './read-gate';
+import type { TierModelMetrics, TierRecommendation } from './worker-scorecard';
 
 export interface WeeklyDigest {
   weekLabel: string;        // e.g. "Apr 7 – Apr 13, 2026"
@@ -30,6 +31,11 @@ export interface WeeklyDigest {
   versionProgress: { projectName: string; version: string; done: number; total: number }[];
   recentKudos: { agentId: string; note: string; type: 'kudos' | 'flag' }[];
   coachingHighlights: { agentId: string; insight: string }[];
+  workerRouting: {
+    windowDays: number;
+    tierModel: TierModelMetrics[];
+    recommendations: TierRecommendation[];
+  };
 }
 
 function getWeekLabel(): string {
@@ -121,7 +127,23 @@ export async function generateWeeklyDigest(): Promise<WeeklyDigest> {
     }
   }
 
-  // ── 6. Version progress ───────────────────────────────────────────────────
+  // ── 6. Worker routing feedback (#1694; advisory only) ─────────────────────
+  const workerRoutingData = await fetchJSON<{
+    windowDays: number;
+    tierModel: TierModelMetrics[];
+    recommendations: TierRecommendation[];
+  }>('/api/observability/worker-scorecard?windowDays=7').catch(() => ({
+    windowDays: 7,
+    tierModel: [],
+    recommendations: [],
+  }));
+  const workerRouting = {
+    windowDays: workerRoutingData.windowDays || 7,
+    tierModel: workerRoutingData.tierModel || [],
+    recommendations: workerRoutingData.recommendations || [],
+  };
+
+  // ── 7. Version progress ───────────────────────────────────────────────────
   const storeData = await fetchJSON<{ tasks: any[]; projects: any[] }>('/api/store')
     .catch(() => ({ tasks: [], projects: [] }));
 
@@ -234,6 +256,7 @@ export async function generateWeeklyDigest(): Promise<WeeklyDigest> {
     versionProgress,
     recentKudos,
     coachingHighlights,
+    workerRouting,
   };
 }
 
@@ -279,6 +302,28 @@ export function formatDigestMarkdown(digest: WeeklyDigest): string {
     lines.push('*⚠️ Attention Needed*');
     for (const item of digest.areasOfAttention) {
       lines.push(`• ${item}`);
+    }
+    lines.push('');
+  }
+
+  // Worker routing feedback (#1694)
+  if (digest.workerRouting.tierModel.length > 0) {
+    lines.push('*🧭 Worker Routing Feedback*');
+    for (const cell of digest.workerRouting.tierModel) {
+      const firstPass = cell.firstPassRate == null ? '—' : `${Math.round(cell.firstPassRate * 100)}%`;
+      const cost = cell.costPerDoneTicketUsd == null ? '—' : `$${cell.costPerDoneTicketUsd.toFixed(2)}`;
+      const attempts = cell.attemptsToDone == null ? '—' : cell.attemptsToDone.toFixed(2);
+      lines.push(
+        `• ${cell.tier} × ${cell.model}: ${firstPass} first-pass, ` +
+        `${attempts} attempts/done, ${cost}/done (${cell.ticketsDone} done)`,
+      );
+    }
+    if (digest.workerRouting.recommendations.length > 0) {
+      for (const recommendation of digest.workerRouting.recommendations) {
+        lines.push(`• ⚠️ ${recommendation.message} Advisory only; no routing changed.`);
+      }
+    } else {
+      lines.push('• No tier-routing changes recommended from the current sample.');
     }
     lines.push('');
   }

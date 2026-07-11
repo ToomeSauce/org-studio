@@ -5,11 +5,15 @@
  * Returns null when Postgres is unavailable (same fail-open shape as budget-spend).
  */
 
+import { MODEL_TIERS, type ModelTier } from '@/lib/model-tier';
+import { getWorkerConfigs } from '@/lib/workers/config';
+
 type LaneKey = 'worker' | 'runtime';
 
 type StatusHistoryEntry = {
   status?: string | null;
   timestamp?: number | string | null;
+  by?: string | null;
 };
 
 export interface LaneMetrics {
@@ -29,7 +33,85 @@ export interface WorkerScorecard {
   generatedAt: string;
   worker: LaneMetrics;
   runtime: LaneMetrics;
+  tierModel: TierModelMetrics[];
+  recommendations: TierRecommendation[];
+  recommendationPolicy: TierRecommendationPolicy;
 }
+
+export interface TierAttemptInput {
+  ticketNumber: number | string;
+  dispatchId: string | null;
+  workerId: string | null;
+  model: string | null;
+  costUsd: number | string | null;
+  dispatchedAt: number | string;
+  calledAt?: number | string | null;
+}
+
+export interface TierTaskInput {
+  ticketNumber: number | string;
+  modelTier: string | null;
+  status: string | null;
+  statusHistory: StatusHistoryEntry[] | string | null;
+}
+
+type TierAttemptDbRow = {
+  ticket_number: number | string;
+  dispatch_id: string | null;
+  worker_id: string | null;
+  model: string | null;
+  cost_estimate: number | string | null;
+  dispatched_at: number | string;
+  called_at: number | string | null;
+};
+
+type TierTaskDbRow = {
+  ticket_number: number | string;
+  model_tier: string | null;
+  status: string | null;
+  status_history: StatusHistoryEntry[] | string | null;
+};
+
+export interface TierModelWorker {
+  id: string;
+  model: string;
+  tiers: ModelTier[];
+}
+
+export interface TierModelMetrics {
+  tier: ModelTier;
+  /** Model used for the ticket's first worker attempt (the routing decision under evaluation). */
+  model: string;
+  workerIds: string[];
+  tickets: number;
+  ticketsDone: number;
+  firstPassTickets: number;
+  firstPassRate: number | null;
+  bounceCount: number;
+  attemptsToDone: number | null;
+  costTotalUsd: number | null;
+  costPerDoneTicketUsd: number | null;
+}
+
+export interface TierRecommendationPolicy {
+  minTickets: number;
+  firstPassThreshold: number;
+}
+
+export interface TierRecommendation {
+  tier: ModelTier;
+  model: string;
+  nextModel: string;
+  nextWorkerId: string;
+  tickets: number;
+  firstPassRate: number;
+  message: string;
+}
+
+export const DEFAULT_TIER_RECOMMENDATION_POLICY: TierRecommendationPolicy = {
+  minTickets: 5,
+  firstPassThreshold: 0.6,
+};
 
 let poolPromise: Promise<any> | null = null;
 
@@ -163,6 +245,235 @@ export function countBounces(historyRaw: StatusHistoryEntry[] | null | undefined
   return bounces;
 }
 
+function lastDoneBy(history: StatusHistoryEntry[]): string | null {
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (normalizeStatus(history[i]?.status) === 'done') {
+      return typeof history[i]?.by === 'string' ? history[i].by!.trim() : null;
+    }
+  }
+  return null;
+}
+
+function normalizeWorkerIdentity(raw: unknown): string {
+  return typeof raw === 'string' ? raw.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
+}
+
+function asModelTier(raw: unknown): ModelTier | null {
+  const value = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+  return (MODEL_TIERS as readonly string[]).includes(value) ? (value as ModelTier) : null;
+}
+
+function numericCost(raw: unknown): number | null {
+  if (raw == null || raw === '') return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+type FoldedAttempt = {
+  dispatchId: string;
+  workerId: string;
+  model: string | null;
+  dispatchedAt: number;
+  calledAt: number;
+  costUsd: number;
+  fullyMetered: boolean;
+};
+
+type MutableTierModelMetrics = TierModelMetrics & {
+  attemptsToDoneTotal: number;
+  workerIdSet: Set<string>;
+  costComplete: boolean;
+};
+
+/**
+ * Advisory v1 scorecard contract. A ticket belongs to the cell for its FIRST
+ * worker model: that is the routing decision we are evaluating. Retries on a
+ * stronger model remain charged to the original cell, so first-pass and cost
+ * expose the true consequence of the cheap-model choice instead of making the
+ * retry look like an unrelated success.
+ */
+export function computeTierModelScorecard(
+  attemptRows: TierAttemptInput[],
+  taskRows: TierTaskInput[],
+  workers: TierModelWorker[],
+  policy: TierRecommendationPolicy = DEFAULT_TIER_RECOMMENDATION_POLICY,
+): { tierModel: TierModelMetrics[]; recommendations: TierRecommendation[] } {
+  const workerModels = new Map(workers.map((worker) => [worker.id.toLowerCase(), worker.model]));
+  const attemptsByTicket = new Map<number, TierAttemptInput[]>();
+  for (const row of attemptRows) {
+    const ticket = parseTicketNumber(row.ticketNumber);
+    if (ticket == null) continue;
+    const list = attemptsByTicket.get(ticket) || [];
+    list.push(row);
+    attemptsByTicket.set(ticket, list);
+  }
+
+  const groups = new Map<string, MutableTierModelMetrics>();
+
+  for (const task of taskRows) {
+    const ticket = parseTicketNumber(task.ticketNumber);
+    const tier = asModelTier(task.modelTier);
+    if (ticket == null || !tier) continue;
+
+    const rawAttempts = attemptsByTicket.get(ticket) || [];
+    const foldedByDispatch = new Map<string, FoldedAttempt>();
+    for (let index = 0; index < rawAttempts.length; index++) {
+      const row = rawAttempts[index];
+      const dispatchedAt = toTimestampMs(row.dispatchedAt);
+      if (dispatchedAt == null) continue;
+      const dispatchId = row.dispatchId || `unkeyed-${ticket}-${index}`;
+      const calledAt = toTimestampMs(row.calledAt) ?? dispatchedAt;
+      const cost = numericCost(row.costUsd);
+      const existing = foldedByDispatch.get(dispatchId);
+      if (!existing) {
+        foldedByDispatch.set(dispatchId, {
+          dispatchId,
+          workerId: row.workerId || '',
+          model: row.model || null,
+          dispatchedAt,
+          calledAt,
+          costUsd: cost ?? 0,
+          fullyMetered: cost != null,
+        });
+      } else {
+        if ((!existing.model || calledAt < existing.calledAt) && row.model) {
+          existing.model = row.model;
+          existing.calledAt = calledAt;
+        }
+        if (!existing.workerId && row.workerId) existing.workerId = row.workerId;
+        if (cost != null) {
+          existing.costUsd += cost;
+        } else {
+          existing.fullyMetered = false;
+        }
+      }
+    }
+
+    const history = parseStatusHistory(task.statusHistory);
+    const doneAt = normalizeStatus(task.status) === 'done'
+      ? lastTimestampForStatus(history, 'done')
+      : null;
+    const attempts = [...foldedByDispatch.values()]
+      .filter((attempt) => doneAt == null || attempt.dispatchedAt <= doneAt)
+      .sort((a, b) => a.dispatchedAt - b.dispatchedAt || a.calledAt - b.calledAt);
+    if (attempts.length === 0) continue;
+
+    const first = attempts[0];
+    const model = first.model || workerModels.get(first.workerId.toLowerCase()) || '(unreported)';
+    const key = `${tier}\u0000${model}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = {
+        tier,
+        model,
+        workerIds: [],
+        tickets: 0,
+        ticketsDone: 0,
+        firstPassTickets: 0,
+        firstPassRate: null,
+        bounceCount: 0,
+        attemptsToDone: null,
+        costTotalUsd: null,
+        costPerDoneTicketUsd: null,
+        attemptsToDoneTotal: 0,
+        workerIdSet: new Set<string>(),
+        costComplete: true,
+      };
+      groups.set(key, group);
+    }
+
+    group.tickets += 1;
+    if (first.workerId) group.workerIdSet.add(first.workerId);
+    if (doneAt == null) continue;
+
+    const bounces = countBounces(history);
+    const completedByInitialWorker =
+      normalizeWorkerIdentity(lastDoneBy(history)) === normalizeWorkerIdentity(first.workerId);
+    group.ticketsDone += 1;
+    group.bounceCount += bounces;
+    group.attemptsToDoneTotal += attempts.length;
+    if (attempts.length === 1 && bounces === 0 && completedByInitialWorker) {
+      group.firstPassTickets += 1;
+    }
+    for (const attempt of attempts) {
+      group.costTotalUsd = (group.costTotalUsd ?? 0) + attempt.costUsd;
+      if (!attempt.fullyMetered) group.costComplete = false;
+    }
+  }
+
+  const tierOrder = new Map(MODEL_TIERS.map((tier, index) => [tier, index]));
+  const tierModel = [...groups.values()]
+    .map((group): TierModelMetrics => ({
+      tier: group.tier,
+      model: group.model,
+      workerIds: [...group.workerIdSet].sort(),
+      tickets: group.tickets,
+      ticketsDone: group.ticketsDone,
+      firstPassTickets: group.firstPassTickets,
+      firstPassRate: group.ticketsDone > 0
+        ? round4(group.firstPassTickets / group.ticketsDone)
+        : null,
+      bounceCount: group.bounceCount,
+      attemptsToDone: group.ticketsDone > 0
+        ? round4(group.attemptsToDoneTotal / group.ticketsDone)
+        : null,
+      costTotalUsd: group.costComplete && group.ticketsDone > 0
+        ? round6(group.costTotalUsd ?? 0)
+        : null,
+      costPerDoneTicketUsd: group.costComplete && group.ticketsDone > 0
+        ? round6((group.costTotalUsd ?? 0) / group.ticketsDone)
+        : null,
+    }))
+    .sort((a, b) =>
+      (tierOrder.get(a.tier) ?? 99) - (tierOrder.get(b.tier) ?? 99) ||
+      a.model.localeCompare(b.model),
+    );
+
+  return {
+    tierModel,
+    recommendations: computeTierRecommendations(tierModel, workers, policy),
+  };
+}
+
+export function computeTierRecommendations(
+  tierModel: TierModelMetrics[],
+  workers: TierModelWorker[],
+  policy: TierRecommendationPolicy = DEFAULT_TIER_RECOMMENDATION_POLICY,
+): TierRecommendation[] {
+  const recommendations: TierRecommendation[] = [];
+  for (const cell of tierModel) {
+    if (
+      cell.ticketsDone < policy.minTickets ||
+      cell.firstPassRate == null ||
+      cell.firstPassRate >= policy.firstPassThreshold
+    ) continue;
+
+    const currentIndex = workers.findIndex((worker) =>
+      cell.workerIds.some((id) => id.toLowerCase() === worker.id.toLowerCase()) ||
+      worker.model === cell.model,
+    );
+    if (currentIndex < 0) continue;
+    const next = workers
+      .slice(currentIndex + 1)
+      .find((worker) => worker.tiers.includes(cell.tier) && worker.model !== cell.model);
+    if (!next) continue; // already the strongest configured option for this tier
+
+    const pct = Math.round(cell.firstPassRate * 100);
+    recommendations.push({
+      tier: cell.tier,
+      model: cell.model,
+      nextModel: next.model,
+      nextWorkerId: next.id,
+      tickets: cell.ticketsDone,
+      firstPassRate: cell.firstPassRate,
+      message:
+        `${cell.tier} on ${cell.model} is ${pct}% first-pass over ${cell.ticketsDone} done tickets; ` +
+        `consider moving the tier to ${next.model} (${next.id}).`,
+    });
+  }
+  return recommendations;
+}
+
 export async function getWorkerScorecard(
   workspaceId: string,
   windowDays: number,
@@ -175,7 +486,7 @@ export async function getWorkerScorecard(
     const since = `NOW() - INTERVAL '${days} days'`;
     const sinceMs = Date.now() - days * 24 * 60 * 60 * 1000;
 
-    const [dispatchRes, costRes, attributedTicketRes, taskRes] = await Promise.all([
+    const [dispatchRes, costRes, attributedTicketRes, taskRes, tierAttemptRes] = await Promise.all([
       pool.query(
         `SELECT
            CASE
@@ -241,11 +552,34 @@ export async function getWorkerScorecard(
         [workspaceId],
       ),
       pool.query(
-        `SELECT ticket_number, assignee, status_history
+        `SELECT ticket_number, assignee, status, status_history, data->>'modelTier' AS model_tier
          FROM org_studio_tasks
          WHERE workspace_id = $1
            AND (data->>'isArchived')::boolean IS DISTINCT FROM TRUE
            AND status_history IS NOT NULL`,
+        [workspaceId],
+      ),
+      pool.query(
+        `SELECT
+           NULLIF(split_part(split_part(l.ticket_fingerprint, ',', 1), ':', 1), '')::bigint AS ticket_number,
+           l.dispatch_id,
+           l.agent_id AS worker_id,
+           COALESCE(mc.model_served, mc.model_requested) AS model,
+           mc.cost_estimate,
+           (EXTRACT(EPOCH FROM l.dispatched_at) * 1000)::bigint AS dispatched_at,
+           (EXTRACT(EPOCH FROM mc.called_at) * 1000)::bigint AS called_at
+         FROM org_studio_dispatch_ledger l
+         LEFT JOIN org_studio_dispatch_model_calls mc
+           ON mc.dispatch_id = l.dispatch_id AND mc.workspace_id = $1
+         WHERE l.workspace_id = $1
+           AND l.dispatched_at >= ${since}
+           AND l.outcome = 'enqueued'
+           AND l.ticket_fingerprint ~ '^[0-9]+:'
+           AND (
+             lower(COALESCE(l.source, '')) = 'worker'
+             OR lower(COALESCE(l.agent_id, '')) LIKE 'worker-%'
+           )
+         ORDER BY l.dispatched_at, mc.called_at`,
         [workspaceId],
       ),
     ]);
@@ -341,11 +675,40 @@ export async function getWorkerScorecard(
           : null;
     }
 
+    const configuredWorkers: TierModelWorker[] = getWorkerConfigs().map((configured) => ({
+      id: configured.id,
+      model: configured.model,
+      tiers: configured.tiers,
+    }));
+    const tierAttemptRows = (tierAttemptRes.rows || []) as TierAttemptDbRow[];
+    const tierTaskRows = (taskRes.rows || []) as TierTaskDbRow[];
+    const tierScorecard = computeTierModelScorecard(
+      tierAttemptRows.map((row): TierAttemptInput => ({
+        ticketNumber: row.ticket_number,
+        dispatchId: row.dispatch_id,
+        workerId: row.worker_id,
+        model: row.model,
+        costUsd: row.cost_estimate,
+        dispatchedAt: row.dispatched_at,
+        calledAt: row.called_at,
+      })),
+      tierTaskRows.map((row): TierTaskInput => ({
+        ticketNumber: row.ticket_number,
+        modelTier: row.model_tier,
+        status: row.status,
+        statusHistory: row.status_history,
+      })),
+      configuredWorkers,
+    );
+
     return {
       windowDays: days,
       generatedAt: new Date().toISOString(),
       worker,
       runtime,
+      tierModel: tierScorecard.tierModel,
+      recommendations: tierScorecard.recommendations,
+      recommendationPolicy: DEFAULT_TIER_RECOMMENDATION_POLICY,
     };
   } catch (e) {
     console.warn('[worker-scorecard] rollup failed:', e);

@@ -244,6 +244,8 @@ const PRICE_TABLE: Array<{ match: string; inPer1M: number; outPer1M: number; cac
   { match: 'opus', inPer1M: 15, outPer1M: 75, cacheReadPer1M: 1.5 },
   { match: 'sonnet', inPer1M: 3, outPer1M: 15, cacheReadPer1M: 0.3 },
   { match: 'haiku', inPer1M: 0.8, outPer1M: 4, cacheReadPer1M: 0.08 },
+  // OpenAI list price: $0.40 input / $0.10 cached input / $1.60 output per 1M.
+  { match: 'gpt-4.1-mini', inPer1M: 0.4, outPer1M: 1.6, cacheReadPer1M: 0.1 },
   { match: 'gpt-5.4-pro', inPer1M: 21, outPer1M: 168 },
   { match: 'gpt-5.4', inPer1M: 1.75, outPer1M: 14 },
   { match: 'gpt-5.3-codex', inPer1M: 1.75, outPer1M: 14 },
