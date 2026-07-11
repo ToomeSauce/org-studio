@@ -23,8 +23,12 @@ export interface WorkerConfig {
   /** Board identity — appears as a teammate/assignee (e.g. "worker-codex"). */
   id: string;
   name: string;
-  engine: 'codex'; // claude-code adapter later; keep the union narrow for now
+  engine: 'codex' | 'openai-compat';
   model: string;
+  /** OpenAI-compatible endpoint base URL (openai-compat engine only). */
+  baseUrl?: string;
+  /** Env var containing the API key (openai-compat engine only). */
+  apiKeyEnv?: string;
   /** Execution mode — v1 implements local-process; other rungs land in W-5. */
   mode: 'local-process' | 'local-container' | 'gh-actions' | 'vm';
   lane: WorkerLane;
@@ -72,31 +76,45 @@ export function getWorkerConfigs(): WorkerConfig[] {
     if (!Array.isArray(parsed)) return DEFAULT_WORKERS;
     return parsed
       .filter((w: any) => w && typeof w.id === 'string' && w.id.startsWith('worker-'))
-      .map((w: any) => ({
-        id: w.id,
-        name: typeof w.name === 'string' ? w.name : w.id,
-        engine: w.engine === 'codex' ? 'codex' : 'codex',
-        model: typeof w.model === 'string' ? w.model : 'gpt-5.3-codex',
-        mode: ['local-process', 'local-container', 'gh-actions', 'vm'].includes(w.mode)
-          ? w.mode
-          : 'local-process',
-        lane: {
-          taskTypes: Array.isArray(w.lane?.taskTypes)
-            ? w.lane.taskTypes.map((t: any) => String(t).toLowerCase())
-            : [],
-          projectIds: Array.isArray(w.lane?.projectIds) ? w.lane.projectIds.map(String) : [],
-        },
-        timeoutMs:
-          Number.isFinite(w.timeoutMs) && w.timeoutMs > 0 ? w.timeoutMs : 15 * 60 * 1000,
-        verificationCommands: Array.isArray(w.verificationCommands)
-          ? w.verificationCommands
-              .filter((c: unknown): c is string => typeof c === 'string' && c.trim().length > 0)
-              .map((c: string) => c.trim())
-              .slice(0, 10)
-          : [...DEFAULT_WORKERS[0].verificationCommands],
-        frontier: w.frontier === true,
-        hostId: typeof w.hostId === 'string' && w.hostId ? w.hostId : undefined,
-      }));
+      .map((w: any) => {
+        const engine: WorkerConfig['engine'] =
+          w.engine === 'openai-compat' ? 'openai-compat' : 'codex';
+        return {
+          id: w.id,
+          name: typeof w.name === 'string' ? w.name : w.id,
+          engine,
+          model:
+            typeof w.model === 'string'
+              ? w.model
+              : engine === 'openai-compat'
+                ? 'gpt-4.1-mini'
+                : 'gpt-5.3-codex',
+          baseUrl: typeof w.baseUrl === 'string' && w.baseUrl.trim() ? w.baseUrl.trim() : undefined,
+          apiKeyEnv:
+            typeof w.apiKeyEnv === 'string' && w.apiKeyEnv.trim() ? w.apiKeyEnv.trim() : undefined,
+          mode: ['local-process', 'local-container', 'gh-actions', 'vm'].includes(w.mode)
+            ? w.mode
+            : 'local-process',
+          lane: {
+            taskTypes: Array.isArray(w.lane?.taskTypes)
+              ? w.lane.taskTypes.map((t: any) => String(t).toLowerCase())
+              : [],
+            projectIds: Array.isArray(w.lane?.projectIds) ? w.lane.projectIds.map(String) : [],
+          },
+          timeoutMs:
+            Number.isFinite(w.timeoutMs) && w.timeoutMs > 0 ? w.timeoutMs : 15 * 60 * 1000,
+          verificationCommands: Array.isArray(w.verificationCommands)
+            ? w.verificationCommands
+                .filter((c: unknown): c is string => typeof c === 'string' && c.trim().length > 0)
+                .map((c: string) => c.trim())
+                .slice(0, 10)
+            : engine === 'openai-compat'
+              ? []
+              : [...DEFAULT_WORKERS[0].verificationCommands],
+          frontier: w.frontier === true,
+          hostId: typeof w.hostId === 'string' && w.hostId ? w.hostId : undefined,
+        };
+      });
   } catch {
     console.warn('[workers] WORKER_RUNTIME_CONFIG is not valid JSON — using defaults');
     return DEFAULT_WORKERS;

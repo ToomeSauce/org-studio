@@ -67,6 +67,30 @@ describe('#1657: worker config gating', () => {
     expect(ws[0].lane.taskTypes).toEqual(['bug']); // lowercased
     expect(ws[0].lane.projectIds).toEqual(['p1']);
   });
+
+  it('#1693: parses openai-compat config without inventing verification commands', () => {
+    setEnv('WORKER_RUNTIME_ENABLED', 'true');
+    setEnv(
+      'WORKER_RUNTIME_CONFIG',
+      JSON.stringify([
+        {
+          id: 'worker-openai',
+          engine: 'openai-compat',
+          baseUrl: ' http://127.0.0.1:11434/v1 ',
+          apiKeyEnv: ' LOCAL_KEY ',
+          lane: { taskTypes: ['BUG'], projectIds: [] },
+        },
+      ]),
+    );
+    const [worker] = getWorkerConfigs();
+    expect(worker).toMatchObject({
+      engine: 'openai-compat',
+      model: 'gpt-4.1-mini',
+      baseUrl: 'http://127.0.0.1:11434/v1',
+      apiKeyEnv: 'LOCAL_KEY',
+      verificationCommands: [],
+    });
+  });
 });
 
 describe('#1657: lane gate', () => {
@@ -202,6 +226,7 @@ describe('#1657: WorkerRuntime send() = enqueue semantics', () => {
       materializePlan: vi.fn(async () => []),
       writeAgentsMd: vi.fn(async () => vi.fn(async () => undefined)),
       runEngine: vi.fn(async () => OK_RESULT),
+      runOpenAiCompatEngine: vi.fn(async () => OK_RESULT),
       runRemote: vi.fn(async () => ({ ok: false, mode: 'gh-actions', detail: 'not configured' })),
       updateTask: vi.fn(async () => undefined),
       recordDispatch: vi.fn(),
@@ -254,6 +279,42 @@ describe('#1657: WorkerRuntime send() = enqueue semantics', () => {
     expect(onComplete).not.toHaveBeenCalled(); // not yet — enqueue returned first
     await new Promise((r) => setTimeout(r, 0));
     expect(onComplete).toHaveBeenCalledWith('worker-codex');
+  });
+
+  it('#1693: selects the local openai-compat adapter and threads config-owned verification', async () => {
+    setEnv('WORKER_RUNTIME_ENABLED', 'true');
+    setEnv(
+      'WORKER_RUNTIME_CONFIG',
+      JSON.stringify([
+        {
+          id: 'worker-openai',
+          engine: 'openai-compat',
+          model: 'qwen2.5-coder',
+          baseUrl: 'http://127.0.0.1:11434/v1',
+          apiKeyEnv: 'LOCAL_KEY',
+          lane: { taskTypes: ['bug'], projectIds: [] },
+          verificationCommands: ['npm run test -- src/x.test.ts'],
+          timeoutMs: 5000,
+        },
+      ]),
+    );
+    setEnv('WORKER_REPO_PATHS', JSON.stringify({ 'proj-oss': '/tmp' }));
+    const { rt, deps } = makeRuntime({
+      fetchStore: vi.fn(async () => makeStore({ assignee: 'worker-openai' })),
+    });
+
+    await rt.send('worker-openai', 'brief', { idempotencyKey: 'openai-run' });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(deps.runEngine).not.toHaveBeenCalled();
+    expect(deps.runOpenAiCompatEngine).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: 'qwen2.5-coder',
+        baseUrl: 'http://127.0.0.1:11434/v1',
+        apiKeyEnv: 'LOCAL_KEY',
+        verificationCommands: ['npm run test -- src/x.test.ts'],
+      }),
+    );
   });
 
   it('refuses a second dispatch while a job is in flight (single-flight)', async () => {
@@ -363,6 +424,46 @@ describe('#1657: WorkerRuntime send() = enqueue semantics', () => {
       await rt.send('worker-codex', 'brief', { idempotencyKey: 'd-fail1' });
       await new Promise((r) => setTimeout(r, 0));
       expect(deps.updateTask).not.toHaveBeenCalled();
+    });
+
+    it('#1693: threads openai-compat config into remote provisioning', async () => {
+      setEnv('WORKER_RUNTIME_ENABLED', 'true');
+      setEnv(
+        'WORKER_RUNTIME_CONFIG',
+        JSON.stringify([
+          {
+            id: 'worker-openai',
+            engine: 'openai-compat',
+            model: 'qwen2.5-coder',
+            mode: 'gh-actions',
+            baseUrl: 'https://models.example/v1',
+            apiKeyEnv: 'REMOTE_KEY',
+            verificationCommands: ['npm run test -- src/x.test.ts'],
+            lane: { taskTypes: ['bug'], projectIds: [] },
+            timeoutMs: 5000,
+          },
+        ]),
+      );
+      vi.stubEnv('WORKER_REPO_SLUGS', JSON.stringify({ 'proj-oss': 'x/y' }));
+      const runRemote = vi.fn(async () => ({ ok: false, mode: 'gh-actions', detail: 'run failure' }));
+      const { rt } = makeRuntime({
+        runRemote,
+        fetchStore: vi.fn(async () => makeStore({ assignee: 'worker-openai' })),
+      });
+
+      await rt.send('worker-openai', 'brief', { idempotencyKey: 'd-openai-remote' });
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(runRemote).toHaveBeenCalledWith(
+        expect.objectContaining({
+          engine: 'openai-compat',
+          model: 'qwen2.5-coder',
+          baseUrl: 'https://models.example/v1',
+          apiKeyEnv: 'REMOTE_KEY',
+          verificationCommands: ['npm run test -- src/x.test.ts'],
+        }),
+        expect.objectContaining({ id: 'worker-openai' }),
+      );
     });
 
     it('#1661: failure at attempt cap escalates to blocked/needs-human-judgment', async () => {
