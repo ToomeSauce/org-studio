@@ -126,7 +126,15 @@ export default function WeeklyDigestSection() {
     );
   }
 
-  const { summary, topPerformers: tp, areasOfAttention, versionProgress, recentKudos, coachingHighlights } = digest;
+  const {
+    summary,
+    topPerformers: tp,
+    areasOfAttention,
+    versionProgress,
+    recentKudos,
+    coachingHighlights,
+    workerRouting,
+  } = digest;
   const showCoaching = expanded ? coachingHighlights : coachingHighlights.slice(0, 3);
 
   return (
@@ -215,6 +223,55 @@ export default function WeeklyDigestSection() {
                 </li>
               ))}
             </ul>
+          </div>
+        )}
+
+        {/* ── Worker routing feedback (#1694; advisory only) ── */}
+        {workerRouting.tierModel.length > 0 && (
+          <div>
+            <h3 className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider mb-3">
+              🧭 Worker Routing Feedback
+            </h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-left text-[var(--text-muted)]">
+                    <th className="py-1 pr-3 font-medium">Tier × initial model</th>
+                    <th className="py-1 pr-3 font-medium">First-pass</th>
+                    <th className="py-1 pr-3 font-medium">Attempts / done</th>
+                    <th className="py-1 font-medium">Cost / done</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {workerRouting.tierModel.map((cell) => (
+                    <tr key={`${cell.tier}-${cell.model}`} className="border-t border-[var(--border-subtle)] text-[var(--text-secondary)]">
+                      <td className="py-1.5 pr-3 font-mono text-[var(--text-primary)]">{cell.tier} × {cell.model}</td>
+                      <td className="py-1.5 pr-3 font-mono">
+                        {cell.firstPassRate == null ? '—' : `${Math.round(cell.firstPassRate * 100)}%`} ({cell.ticketsDone} done)
+                      </td>
+                      <td className="py-1.5 pr-3 font-mono">{cell.attemptsToDone?.toFixed(2) ?? '—'}</td>
+                      <td className="py-1.5 font-mono">
+                        {cell.costPerDoneTicketUsd == null ? '—' : `$${cell.costPerDoneTicketUsd.toFixed(2)}`}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {workerRouting.recommendations.length > 0 ? (
+              <ul className="space-y-1.5 mt-3">
+                {workerRouting.recommendations.map((recommendation) => (
+                  <li
+                    key={`${recommendation.tier}-${recommendation.model}-${recommendation.nextModel}`}
+                    className="text-sm text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/20 px-3 py-2 rounded-[var(--radius-md)] border border-amber-200 dark:border-amber-800"
+                  >
+                    {recommendation.message} <span className="font-medium">Advisory only—no routing changed.</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-xs text-[var(--text-muted)] mt-2">No tier-routing changes recommended from the current sample.</p>
+            )}
           </div>
         )}
 

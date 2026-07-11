@@ -289,11 +289,38 @@ type WorkerLaneMetrics = {
   bounceRate: number | null;
 };
 
+type TierModelMetrics = {
+  tier: 'trivial' | 'standard' | 'complex';
+  model: string;
+  workerIds: string[];
+  tickets: number;
+  ticketsDone: number;
+  firstPassTickets: number;
+  firstPassRate: number | null;
+  bounceCount: number;
+  attemptsToDone: number | null;
+  costTotalUsd: number | null;
+  costPerDoneTicketUsd: number | null;
+};
+
+type TierRecommendation = {
+  tier: 'trivial' | 'standard' | 'complex';
+  model: string;
+  nextModel: string;
+  nextWorkerId: string;
+  tickets: number;
+  firstPassRate: number;
+  message: string;
+};
+
 type WorkerScorecardSnapshot = {
   windowDays: number;
   generatedAt: string;
   worker: WorkerLaneMetrics;
   runtime: WorkerLaneMetrics;
+  tierModel: TierModelMetrics[];
+  recommendations: TierRecommendation[];
+  recommendationPolicy: { minTickets: number; firstPassThreshold: number };
 };
 
 function WorkerScorecardPanel() {
@@ -405,6 +432,59 @@ function WorkerScorecardPanel() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {(snap.tierModel || []).length > 0 && (
+        <div className="space-y-2 pt-2 border-t border-[var(--border-subtle)]">
+          <div>
+            <h3 className="text-xs font-semibold text-[var(--text-primary)]">Routing feedback by tier × initial model</h3>
+            <p className="text-[11px] text-[var(--text-muted)]">
+              Retries and their cost stay attributed to the first model chosen, so the matrix evaluates the routing decision—not just the eventual closer.
+            </p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-left text-[var(--text-muted)]">
+                  <th className="py-1 pr-3 font-medium">Tier</th>
+                  <th className="py-1 pr-3 font-medium">Initial model</th>
+                  <th className="py-1 pr-3 font-medium">Done / routed</th>
+                  <th className="py-1 pr-3 font-medium">First-pass</th>
+                  <th className="py-1 pr-3 font-medium">Bounces</th>
+                  <th className="py-1 pr-3 font-medium">Attempts / done</th>
+                  <th className="py-1 font-medium">Cost / done</th>
+                </tr>
+              </thead>
+              <tbody>
+                {snap.tierModel.map((cell) => (
+                  <tr key={`${cell.tier}-${cell.model}`} className="border-t border-[var(--border-subtle)] text-[var(--text-secondary)]">
+                    <td className="py-1.5 pr-3 font-mono text-[var(--text-primary)]">{cell.tier}</td>
+                    <td className="py-1.5 pr-3 font-mono">{cell.model}</td>
+                    <td className="py-1.5 pr-3 font-mono">{cell.ticketsDone} / {cell.tickets}</td>
+                    <td className="py-1.5 pr-3 font-mono">{formatPercent(cell.firstPassRate)}</td>
+                    <td className="py-1.5 pr-3 font-mono">{cell.bounceCount}</td>
+                    <td className="py-1.5 pr-3 font-mono">{cell.attemptsToDone?.toFixed(2) ?? '—'}</td>
+                    <td className="py-1.5 font-mono">{formatUsd(cell.costPerDoneTicketUsd)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {(snap.recommendations || []).length > 0 && (
+        <div className="space-y-1.5 pt-2 border-t border-[var(--border-subtle)]">
+          <h3 className="text-xs font-semibold text-amber-700 dark:text-amber-300">Advisory routing recommendations</h3>
+          {snap.recommendations.map((recommendation) => (
+            <div
+              key={`${recommendation.tier}-${recommendation.model}-${recommendation.nextModel}`}
+              className="px-3 py-2 rounded-[var(--radius-md)] bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-300"
+            >
+              {recommendation.message} <span className="font-medium">Advisory only—routing was not changed.</span>
+            </div>
+          ))}
         </div>
       )}
     </div>
