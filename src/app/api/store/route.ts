@@ -39,6 +39,8 @@ import { canonicalizeTeammate } from '@/lib/canonicalize-teammate';
 import { resolveWakeTrigger } from '@/lib/wake-trigger';
 import { getRuntimeRegistry } from '@/lib/runtimes/registry';
 import { MAX_REPO_CONTEXT_BYTES } from '@/lib/workers/repo-context';
+import { getWorkerConfigs } from '@/lib/workers/config';
+import { routeTieredWorker } from '@/lib/workers/route-tier';
 // #1645 — shared service layer: route + internal callers share one
 // implementation of updateProject side-effects (no HTTP self-fetch).
 import { updateProjectService, triggerAgentLoopService } from '@/lib/store-service';
@@ -303,8 +305,39 @@ function checkAndTriggerStuckTask(task: any, store: StoreData, workspaceId: stri
 
 /** Fire event-driven scheduler trigger for an agent when work lands in their backlog. Best-effort, non-blocking with retry.
  * #1645: implementation moved to src/lib/store-service.ts (shared with internal callers). */
-function triggerAgentLoop(assignee: string, store: StoreData) {
-  triggerAgentLoopService(assignee, store);
+function triggerAgentLoop(
+  assignee: string,
+  store: StoreData,
+  task?: { id?: string; assignee?: string; modelTier?: 'trivial' | 'standard' | 'complex' | null },
+  workspaceId: string = DEFAULT_WORKSPACE_ID,
+) {
+  // Fire-and-forget — preserve existing call-site behavior.
+  (async () => {
+    let effectiveAssignee = assignee;
+    // #1692 — modelTier routing for generic `worker` assignees.
+    // Fail-open by construction: any routing/persist error falls through to
+    // the original assignee and current trigger behavior.
+    if (task?.id) {
+      try {
+        const decision = routeTieredWorker({
+          assignee: task.assignee || assignee,
+          modelTier: task.modelTier ?? null,
+          workers: getWorkerConfigs().map((w) => ({ id: w.id, tiers: w.tiers })),
+        });
+        if (decision.routedWorkerId && decision.routedWorkerId !== (task.assignee || assignee)) {
+          await getStoreProvider(workspaceId).updateTask(task.id, { assignee: decision.routedWorkerId });
+          const idx = (store.tasks || []).findIndex((t: any) => t.id === task.id);
+          if (idx >= 0) {
+            store.tasks[idx] = { ...store.tasks[idx], assignee: decision.routedWorkerId };
+          }
+          effectiveAssignee = decision.routedWorkerId;
+        }
+      } catch (e: any) {
+        console.warn(`[dispatch #1692] tier routing failed-open for task ${task.id}:`, e?.message || e);
+      }
+    }
+    triggerAgentLoopService(effectiveAssignee, store);
+  })();
 }
 
 
@@ -1271,7 +1304,7 @@ export async function POST(req: NextRequest) {
 
         // Event-driven: if task lands in backlog, trigger the assignee's loop
         if (initialStatus === 'backlog' && task.assignee) {
-          triggerAgentLoop(task.assignee, store);
+          triggerAgentLoop(task.assignee, store, task as any, workspace.id);
         }
 
         // #862: removed QA-column event trigger — QA tickets trigger via the standard backlog/assignee path.
@@ -1661,7 +1694,8 @@ export async function POST(req: NextRequest) {
           }
         }
         if (triggeredAssignee) {
-          triggerAgentLoop(triggeredAssignee, store);
+          const triggeredTask = store.tasks.find((t: any) => t.id === payload.id);
+          triggerAgentLoop(triggeredAssignee, store, triggeredTask as any, workspace.id);
         }
 
         // Chain to next backlog task when agent completes work — #1290 dropped 'review'.
@@ -1771,7 +1805,7 @@ export async function POST(req: NextRequest) {
 
               // Trigger the assignee's loop
               if (t.assignee) {
-                triggerAgentLoop(t.assignee, store);
+                triggerAgentLoop(t.assignee, store, t as any, workspace.id);
               }
             }
           }

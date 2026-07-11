@@ -831,6 +831,21 @@ function getActionableWork(
   return { hasWork: hasInProgress || hasNewWork, hasNewWork, hasInProgress };
 }
 
+function dispatchDiagnosticTier(store: StoreData, agentId: string, agentName: string): string {
+  const nameLower = (agentName || '').toLowerCase();
+  const agentIdLower = (agentId || '').toLowerCase();
+  const mine = (store.tasks || []).filter((t: any) => {
+    const a = (t.assignee || '').toLowerCase();
+    return (a === nameLower || a === agentIdLower) && !t.isArchived;
+  });
+  const byPriority = (a: any, b: any) =>
+    (a.sortOrder ?? Number.MAX_SAFE_INTEGER) - (b.sortOrder ?? Number.MAX_SAFE_INTEGER) ||
+    (a.createdAt ?? 0) - (b.createdAt ?? 0);
+  const inProgress = mine.filter((t: any) => t.status === 'in-progress').sort(byPriority)[0];
+  const backlog = mine.filter((t: any) => t.status === 'backlog').sort(byPriority)[0];
+  return inProgress?.modelTier || backlog?.modelTier || 'none';
+}
+
 /** Quick gateway availability check with 3-second timeout. */
 async function checkGateway(): Promise<boolean> {
   try {
@@ -994,9 +1009,10 @@ async function fireOneShot(
     .map((t: any) => `${t.ticketNumber ?? '?'}:${t.status}`)
     .slice(0, 20)
     .join(',');
+  const tier = dispatchDiagnosticTier(store, loop.agentId, agentName);
   console.info(
     `[dispatch #1515 src=${source}] agent=${loop.agentId} ` +
-      `readMs=${readMs} tickets=[${agentTicketStatuses}]`,
+      `readMs=${readMs} tier=${tier} tickets=[${agentTicketStatuses}]`,
   );
 
   // #1641 — ledger writes are fire-and-forget; capture the shared fields

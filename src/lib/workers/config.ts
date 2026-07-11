@@ -34,6 +34,8 @@ export interface WorkerConfig {
   verificationCommands: string[];
   /** #1691 — only explicitly FRONTIER-tier workers may execute plan jobs. */
   frontier: boolean;
+  /** #1692 — model-tier routing allowlist for generic `worker` assignees. */
+  tiers: Array<'trivial' | 'standard' | 'complex'>;
   /** HostProfile id (#1659) — resolves against settings.hostProfiles, then
    *  presets. Unset = no host constraints (W-2 behavior). */
   hostId?: string;
@@ -56,6 +58,7 @@ export const DEFAULT_WORKERS: WorkerConfig[] = [
       'npx eslint <changed-files>',
     ],
     frontier: false,
+    tiers: ['trivial', 'standard', 'complex'],
   },
 ];
 
@@ -95,6 +98,11 @@ export function getWorkerConfigs(): WorkerConfig[] {
               .slice(0, 10)
           : [...DEFAULT_WORKERS[0].verificationCommands],
         frontier: w.frontier === true,
+        tiers: Array.isArray(w.tiers) && w.tiers.length > 0
+          ? w.tiers
+              .map((t: any) => String(t).toLowerCase())
+              .filter((t: string) => ['trivial', 'standard', 'complex'].includes(t)) as Array<'trivial' | 'standard' | 'complex'>
+          : ['trivial', 'standard', 'complex'],
         hostId: typeof w.hostId === 'string' && w.hostId ? w.hostId : undefined,
       }));
   } catch {
