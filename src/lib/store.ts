@@ -74,6 +74,10 @@ export interface Project {
   // backward compat and treated as the first entry when `repoUrls` is unset.
   // Each entry is "owner/repo" form (no protocol, no https://github.com prefix).
   repoUrls?: string[];
+  // #1690 — compact precomputed checkout map injected into execution-worker
+  // briefs. Stored in Postgres `data` JSONB overflow (no migration).
+  repoContextPack?: string;             // UTF-8 markdown, max 4KB
+  repoContextPackGeneratedAt?: number;  // epoch ms; brief warns after 30 days
   lifecycle?: 'building' | 'mature' | 'bau' | 'sunset';
   visionOwner?: string;         // Human who approves version plans
   devOwner?: string;            // Agent/human who does dev work

@@ -26,6 +26,7 @@
  * its injectable deps, which keeps all of this unit-testable.
  */
 import { renderLeashBlock, type LeashProjectLike, type LeashSpendInfo } from '../leash-block';
+import { REPO_CONTEXT_STALE_AFTER_MS } from './repo-context';
 import type { WorkerRunResult } from './engine-codex';
 
 // ---------------------------------------------------------------------------
@@ -53,18 +54,25 @@ export interface BriefComment {
   type?: string; // 'comment' | 'system'
 }
 
+export interface RepoContextProjectLike {
+  repoContextPack?: string;
+  repoContextPackGeneratedAt?: number;
+}
+
 export interface AssembleBriefOpts {
   /** The scheduler's dispatch message (passed through as the header). */
   dispatchMessage: string;
   task: BriefTask;
   /** Full comment thread, oldest-first. Empty array = no thread section. */
   comments?: BriefComment[];
-  /** Owning project — for the leash block (#1654). */
-  project?: LeashProjectLike | null;
+  /** Owning project — for the leash block and cached repo context. */
+  project?: (LeashProjectLike & RepoContextProjectLike) | null;
   /** Live spend for the leash block; omit for static render. */
   spend?: LeashSpendInfo | null;
   /** Cap on comment-thread characters in the brief (default 6000). */
   maxThreadChars?: number;
+  /** Injectable clock for deterministic staleness tests. */
+  nowMs?: number;
 }
 
 const DEFAULT_MAX_THREAD_CHARS = 6000;
@@ -141,6 +149,18 @@ export function assembleBrief(opts: AssembleBriefOpts): string {
       .filter(Boolean)
       .join('\n'),
   );
+
+  const repoContextPack = opts.project?.repoContextPack?.trim();
+  if (repoContextPack) {
+    const generatedAt = opts.project?.repoContextPackGeneratedAt;
+    const stale =
+      typeof generatedAt === 'number' &&
+      (opts.nowMs ?? Date.now()) - generatedAt > REPO_CONTEXT_STALE_AFTER_MS;
+    const warning = stale
+      ? `> ⚠️ This cached map is over 30 days old (generated ${new Date(generatedAt).toISOString()}). Regenerate before relying on paths that may have moved.\n\n`
+      : '';
+    sections.push(`## Repository context pack\n\n${warning}${repoContextPack}`);
+  }
 
   const prior = renderPriorAttempts(task, comments);
   if (prior) {

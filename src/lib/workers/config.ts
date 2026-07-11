@@ -30,6 +30,8 @@ export interface WorkerConfig {
   lane: WorkerLane;
   /** Hard wall-clock cap per job (ms). */
   timeoutMs: number;
+  /** Targeted verification commands copied into RepoContextPack (#1690). */
+  verificationCommands: string[];
   /** HostProfile id (#1659) — resolves against settings.hostProfiles, then
    *  presets. Unset = no host constraints (W-2 behavior). */
   hostId?: string;
@@ -47,6 +49,10 @@ export const DEFAULT_WORKERS: WorkerConfig[] = [
       projectIds: [],
     },
     timeoutMs: 15 * 60 * 1000,
+    verificationCommands: [
+      'npx vitest run <target-test-file>',
+      'npx eslint <changed-files>',
+    ],
   },
 ];
 
@@ -79,6 +85,12 @@ export function getWorkerConfigs(): WorkerConfig[] {
         },
         timeoutMs:
           Number.isFinite(w.timeoutMs) && w.timeoutMs > 0 ? w.timeoutMs : 15 * 60 * 1000,
+        verificationCommands: Array.isArray(w.verificationCommands)
+          ? w.verificationCommands
+              .filter((c: unknown): c is string => typeof c === 'string' && c.trim().length > 0)
+              .map((c: string) => c.trim())
+              .slice(0, 10)
+          : [...DEFAULT_WORKERS[0].verificationCommands],
         hostId: typeof w.hostId === 'string' && w.hostId ? w.hostId : undefined,
       }));
   } catch {

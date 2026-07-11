@@ -32,6 +32,7 @@ import { getMonthlyProjectSpend } from '@/lib/budget-spend';
 import { canonicalizeTeammate } from '@/lib/canonicalize-teammate';
 import { resolveWakeTrigger } from '@/lib/wake-trigger';
 import { getRuntimeRegistry } from '@/lib/runtimes/registry';
+import { MAX_REPO_CONTEXT_BYTES } from '@/lib/workers/repo-context';
 // #1645 — shared service layer: route + internal callers share one
 // implementation of updateProject side-effects (no HTTP self-fetch).
 import { updateProjectService, triggerAgentLoopService } from '@/lib/store-service';
@@ -1816,6 +1817,16 @@ export async function POST(req: NextRequest) {
           delete (project as any).autonomy.approvedThrough;
         }
 
+        if ('repoContextPack' in project) {
+          if (project.repoContextPack !== null && typeof project.repoContextPack !== 'string') {
+            return NextResponse.json({ error: 'repoContextPack must be a string or null' }, { status: 400 });
+          }
+          if (typeof project.repoContextPack === 'string' && Buffer.byteLength(project.repoContextPack, 'utf8') > MAX_REPO_CONTEXT_BYTES) {
+            return NextResponse.json({ error: `repoContextPack exceeds ${MAX_REPO_CONTEXT_BYTES} UTF-8 bytes` }, { status: 400 });
+          }
+          project.repoContextPackGeneratedAt = project.repoContextPack ? Date.now() : null;
+        }
+
         // PERF: Use targeted provider.createProject() instead of full store write
         await getStoreProvider(workspace.id).createProject(project);
         return NextResponse.json({ ok: true, project });
@@ -1842,6 +1853,17 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ error: validated.error }, { status: 400 });
           }
           payload.updates.boundaries = validated.value;
+        }
+
+        if ('repoContextPack' in payload.updates) {
+          const pack = payload.updates.repoContextPack;
+          if (pack !== null && typeof pack !== 'string') {
+            return NextResponse.json({ error: 'repoContextPack must be a string or null' }, { status: 400 });
+          }
+          if (typeof pack === 'string' && Buffer.byteLength(pack, 'utf8') > MAX_REPO_CONTEXT_BYTES) {
+            return NextResponse.json({ error: `repoContextPack exceeds ${MAX_REPO_CONTEXT_BYTES} UTF-8 bytes` }, { status: 400 });
+          }
+          payload.updates.repoContextPackGeneratedAt = pack ? Date.now() : null;
         }
 
         // #1645: full behavior lives in the shared service layer so internal
