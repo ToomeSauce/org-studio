@@ -55,11 +55,14 @@ export function triggerAgentLoopService(assignee: string, store: StoreData): voi
   if (!assignee) return;
   // Resolve assignee name → agentId
   const teammates = store.settings?.teammates || [];
+  const assigneeLower = assignee.toLowerCase();
   const match = teammates.find((t: any) =>
-    t.name?.toLowerCase() === assignee.toLowerCase() ||
-    t.agentId === assignee.toLowerCase()
+    t.name?.toLowerCase() === assigneeLower ||
+    t.agentId === assigneeLower
   );
-  const agentId = match?.agentId;
+  // #1692: `worker` is a virtual generic assignee resolved by the scheduler
+  // against modelTier. It deliberately has no teammate/loop of its own.
+  const agentId = match?.agentId || (assigneeLower === 'worker' ? 'worker' : undefined);
   if (!agentId) return;
 
   // Fire-and-forget — retry logic runs async, never blocks the response

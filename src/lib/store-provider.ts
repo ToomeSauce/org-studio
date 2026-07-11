@@ -149,6 +149,16 @@ export interface StoreProvider {
   updateTask(taskId: string, updates: Partial<any>): Promise<any>;
 
   /**
+   * #1692 — atomically change a task assignee only while it still matches
+   * the expected value. Returns false when another writer won the race.
+   */
+  compareAndSetTaskAssignee(
+    taskId: string,
+    expectedAssignee: string,
+    nextAssignee: string,
+  ): Promise<boolean>;
+
+  /**
    * Delete a task (or archive it)
    */
   deleteTask(taskId: string): Promise<void>;
@@ -443,6 +453,22 @@ export class FileStoreProvider implements StoreProvider {
     ws.tasks[idx] = { ...ws.tasks[idx], ...updates };
     this.writeEnvelope(root);
     return ws.tasks[idx];
+  }
+
+  async compareAndSetTaskAssignee(
+    taskId: string,
+    expectedAssignee: string,
+    nextAssignee: string,
+  ): Promise<boolean> {
+    // File-mode reads/writes are synchronous inside this method, so no other
+    // in-process async writer can interleave between the comparison and write.
+    const { root, ws } = this.readEnvelope();
+    const task = ws.tasks.find((candidate: any) => candidate.id === taskId);
+    if (!task) throw new Error(`Task not found: ${taskId}`);
+    if ((task.assignee || '').toLowerCase() !== expectedAssignee.toLowerCase()) return false;
+    task.assignee = nextAssignee;
+    this.writeEnvelope(root);
+    return true;
   }
 
   async deleteTask(taskId: string): Promise<void> {
@@ -1329,6 +1355,40 @@ export class PostgresStoreProvider implements StoreProvider {
       try { await client.query(`NOTIFY org_studio_change, '${changePayload.replace(/'/g, "''")}'`); } catch {} // best-effort
 
       return updated;
+    } finally {
+      client.release();
+    }
+  }
+
+  async compareAndSetTaskAssignee(
+    taskId: string,
+    expectedAssignee: string,
+    nextAssignee: string,
+  ): Promise<boolean> {
+    const pool = await this.getPool();
+    const client = await pool.connect();
+    try {
+      const result = await client.query(
+        `UPDATE org_studio_tasks
+            SET assignee = $3
+          WHERE id = $1
+            AND workspace_id = $2
+            AND lower(COALESCE(assignee, '')) = lower($4)
+        RETURNING id`,
+        [taskId, this.workspaceId, nextAssignee, expectedAssignee],
+      );
+      if (result.rowCount !== 1) return false;
+
+      const changePayload = JSON.stringify({
+        type: 'task_updated',
+        taskId,
+        updates: { assignee: nextAssignee },
+        assignee: nextAssignee,
+        timestamp: Date.now(),
+        source: 'postgres',
+      });
+      try { await client.query(`NOTIFY org_studio_change, '${changePayload.replace(/'/g, "''")}'`); } catch {} // best-effort
+      return true;
     } finally {
       client.release();
     }

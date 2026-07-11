@@ -12,6 +12,8 @@
  * (Container Apps env vars).
  */
 
+import { MODEL_TIERS, type ModelTier } from '@/lib/model-tier';
+
 export interface WorkerLane {
   /** Allowed taskTypes (lowercase). Empty = allow all types. */
   taskTypes: string[];
@@ -38,6 +40,8 @@ export interface WorkerConfig {
   verificationCommands: string[];
   /** #1691 — only explicitly FRONTIER-tier workers may execute plan jobs. */
   frontier: boolean;
+  /** #1692 — model tiers this worker may serve, ordered by worker config. */
+  tiers: ModelTier[];
   /** HostProfile id (#1659) — resolves against settings.hostProfiles, then
    *  presets. Unset = no host constraints (W-2 behavior). */
   hostId?: string;
@@ -60,6 +64,7 @@ export const DEFAULT_WORKERS: WorkerConfig[] = [
       'npx eslint <changed-files>',
     ],
     frontier: false,
+    tiers: [...MODEL_TIERS],
   },
 ];
 
@@ -112,6 +117,13 @@ export function getWorkerConfigs(): WorkerConfig[] {
               ? []
               : [...DEFAULT_WORKERS[0].verificationCommands],
           frontier: w.frontier === true,
+          tiers: Array.isArray(w.tiers)
+            ? w.tiers
+                .map((tier: unknown) => String(tier).toLowerCase())
+                .filter((tier: string): tier is ModelTier =>
+                  (MODEL_TIERS as string[]).includes(tier),
+                )
+            : [...MODEL_TIERS],
           hostId: typeof w.hostId === 'string' && w.hostId ? w.hostId : undefined,
         };
       });
