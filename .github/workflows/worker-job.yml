@@ -41,6 +41,29 @@ on:
         description: "Job brief (assembled by ContextAssembler)"
         required: true
         type: string
+      engine:
+        description: "Engine adapter (codex | openai-compat)"
+        required: false
+        type: choice
+        options: [codex, openai-compat]
+        default: codex
+      model:
+        description: "Engine model name"
+        required: true
+        type: string
+      base_url:
+        description: "OpenAI-compatible base URL (openai-compat only)"
+        required: false
+        type: string
+      api_key_env:
+        description: "Env var name for API key (openai-compat only)"
+        required: false
+        type: string
+      verification_commands:
+        description: "JSON array of verification commands"
+        required: false
+        type: string
+        default: "[]"
       marker:
         description: "Dispatch correlation marker"
         required: true
@@ -93,6 +116,11 @@ jobs:
           persist-credentials: ${{ inputs.job_kind != 'plan' }}
           fetch-depth: 0
 
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Configure git identity
         run: |
           git config user.name "org-studio-worker"
@@ -127,20 +155,74 @@ jobs:
         env:
           BRIEF: ${{ inputs.brief }}
           JOB_KIND: ${{ inputs.job_kind }}
+          ENGINE: ${{ inputs.engine }}
+          MODEL: ${{ inputs.model }}
+          BASE_URL: ${{ inputs.base_url }}
+          API_KEY_ENV: ${{ inputs.api_key_env }}
+          VERIFICATION_COMMANDS_JSON: ${{ inputs.verification_commands }}
+          WORKER_TIMEOUT_MS: "1200000"
           # Engine credentials come from repo secrets; GitHub masks them in
           # logs. Absent secrets fail this step cleanly.
           FOUNDRY_API_KEY: ${{ secrets.WORKER_FOUNDRY_API_KEY }}
+          WORKER_OPENAI_COMPAT_API_KEY: ${{ secrets.WORKER_OPENAI_COMPAT_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.WORKER_OPENAI_COMPAT_API_KEY }}
         run: |
-          if [ -z "$FOUNDRY_API_KEY" ]; then
-            echo "::error::WORKER_FOUNDRY_API_KEY secret not configured — engine mode unavailable"
-            exit 1
+          set -euo pipefail
+
+          printf '%s' "$BRIEF" > /tmp/brief.txt
+
+          PLAN_READONLY=0
+
+          # Planner checkout is made OS-read-only. core.fileMode=false keeps
+          # chmod noise out of status; permissions are restored only so the
+          # result artifact can be written after the engine exits.
+          if [ "$JOB_KIND" = "plan" ]; then
+            PLAN_READONLY=1
+            trap 'if [ "$PLAN_READONLY" = "1" ]; then chmod -R u+w . || true; fi' EXIT
+            git config core.fileMode false
+            chmod -R a-w .
           fi
 
-          npm i -g @openai/codex@0.142.5
+          ENGINE_EXIT=1
 
-          mkdir -p ~/.codex
-          cat > ~/.codex/config.toml <<'EOF'
-          model = "gpt-5.3-codex"
+          write_engine_result_failure() {
+            local exit_code="$1"
+            local error_message="$2"
+            EXIT_CODE="$exit_code" ERROR_MESSAGE="$error_message" node - <<'NODE'
+          const { writeFileSync } = require('fs');
+          const exitCode = Number(process.env.EXIT_CODE || '1');
+          writeFileSync(
+            '/tmp/engine-result.json',
+            JSON.stringify({
+              ok: false,
+              exitCode,
+              durationMs: 0,
+              commands: [],
+              fileChanges: [],
+              messages: [],
+              errors: [process.env.ERROR_MESSAGE || 'engine failed before result was available'],
+              usage: null,
+              rawEventCount: 0,
+            }),
+            'utf8',
+          );
+          NODE
+          }
+
+          write_engine_result_failure 1 "engine did not complete before result was updated"
+
+          if [ "$ENGINE" = "codex" ]; then
+            if [ -z "${FOUNDRY_API_KEY:-}" ]; then
+              write_engine_result_failure 78 "WORKER_FOUNDRY_API_KEY secret not configured — codex engine unavailable"
+              echo "::error::WORKER_FOUNDRY_API_KEY secret not configured — codex engine unavailable"
+              exit 78
+            fi
+
+            npm i -g @openai/codex@0.142.5
+
+            mkdir -p ~/.codex
+            cat > ~/.codex/config.toml <<EOF
+          model = "$MODEL"
           model_provider = "foundry"
           preferred_auth_method = "apikey"
 
@@ -151,24 +233,155 @@ jobs:
           wire_api = "responses"
           EOF
 
-          printf '%s' "$BRIEF" > /tmp/brief.txt
+            STARTED_MS=$(python3 - <<'PY'
+          import time
+          print(int(time.time() * 1000))
+          PY
+            )
+            set +e
+            # Codex's own sandbox cannot initialize on Actions runners. Code
+            # jobs rely on the ephemeral runner; planner jobs additionally make
+            # the checkout read-only and hard-fail if anything changes.
+            codex exec --json --skip-git-repo-check --sandbox danger-full-access "$(cat /tmp/brief.txt)" | tee /tmp/engine-events.jsonl
+            ENGINE_EXIT=${PIPESTATUS[0]}
+            set -e
+            ENDED_MS=$(python3 - <<'PY'
+          import time
+          print(int(time.time() * 1000))
+          PY
+            )
 
-          # Planner checkout is made OS-read-only. core.fileMode=false keeps
-          # chmod noise out of status; permissions are restored only so the
-          # result artifact can be written after the engine exits.
-          if [ "$JOB_KIND" = "plan" ]; then
-            git config core.fileMode false
-            chmod -R a-w .
+            ENGINE_EXIT="$ENGINE_EXIT" STARTED_MS="$STARTED_MS" ENDED_MS="$ENDED_MS" node --experimental-strip-types - <<'NODE'
+          import { parseEngineEvents } from './src/lib/workers/engine-codex.ts';
+          import { readFileSync, writeFileSync } from 'fs';
+
+          const raw = readFileSync('/tmp/engine-events.jsonl', 'utf8');
+          const parsed = parseEngineEvents(raw);
+          const exitCode = Number(process.env.ENGINE_EXIT || '1');
+          const started = Number(process.env.STARTED_MS || '0');
+          const ended = Number(process.env.ENDED_MS || '0');
+          const result = {
+            ok: exitCode === 0,
+            exitCode,
+            durationMs: Math.max(0, ended - started),
+            ...parsed,
+          };
+          writeFileSync('/tmp/engine-result.json', JSON.stringify(result), 'utf8');
+          NODE
+
+            if [ "$JOB_KIND" != "plan" ] && [ "$ENGINE_EXIT" -eq 0 ]; then
+              set +e
+              node - <<'NODE'
+          const { execFileSync } = require('child_process');
+          const { readFileSync, writeFileSync } = require('fs');
+
+          let commands = [];
+          const result = JSON.parse(readFileSync('/tmp/engine-result.json', 'utf8'));
+          try {
+            const parsed = JSON.parse(process.env.VERIFICATION_COMMANDS_JSON || '[]');
+            commands = Array.isArray(parsed) ? parsed : [];
+          } catch (err) {
+            result.errors.push(`verification_commands JSON parse failed: ${err?.message || err}`);
+            result.ok = false;
+            result.exitCode = 65;
+          }
+
+          if (result.ok && Array.isArray(commands)) {
+            for (const cmd of commands) {
+              if (typeof cmd !== 'string' || !cmd.trim()) continue;
+              try {
+                execFileSync('bash', ['-lc', cmd], { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' });
+                result.commands.push({ command: cmd, exitCode: 0 });
+              } catch (err) {
+                const code = Number.isInteger(err?.status) ? err.status : 1;
+                const stderr = String(err?.stderr || err?.stdout || '').slice(-500);
+                result.commands.push({ command: cmd, exitCode: code });
+                result.errors.push(`verification failed: ${cmd} (exit ${code}) ${stderr}`.trim());
+                result.ok = false;
+                result.exitCode = code;
+                break;
+              }
+            }
+          }
+
+          writeFileSync('/tmp/engine-result.json', JSON.stringify(result), 'utf8');
+          if (!result.ok) process.exit(result.exitCode || 1);
+          NODE
+              ENGINE_EXIT=$?
+              set -e
+            fi
+          elif [ "$ENGINE" = "openai-compat" ]; then
+            if [ "$JOB_KIND" = "plan" ]; then
+              node - <<'NODE'
+          const { writeFileSync } = require('fs');
+          writeFileSync(
+            '/tmp/engine-result.json',
+            JSON.stringify({
+              ok: false,
+              exitCode: 64,
+              durationMs: 0,
+              commands: [],
+              fileChanges: [],
+              messages: ['OpenAI-compatible engine does not support planner jobs.'],
+              errors: ['planner read-only jobs require codex engine in gh-actions mode'],
+              usage: null,
+              rawEventCount: 0,
+            }),
+            'utf8',
+          );
+          NODE
+              ENGINE_EXIT=64
+            else
+              set +e
+              node --experimental-strip-types - <<'NODE'
+          import { writeFileSync } from 'fs';
+          import { runOpenAiCompatEngine } from './src/lib/workers/engine-openai-compat.ts';
+
+          const parseVerification = (raw) => {
+            try {
+              const parsed = JSON.parse(raw || '[]');
+              return Array.isArray(parsed) ? parsed.filter((entry) => typeof entry === 'string') : [];
+            } catch {
+              return [];
+            }
+          };
+
+          let result;
+          try {
+            result = await runOpenAiCompatEngine({
+              cwd: process.cwd(),
+              brief: process.env.BRIEF || '',
+              model: process.env.MODEL || 'gpt-4.1-mini',
+              timeoutMs: Number(process.env.WORKER_TIMEOUT_MS || '1200000'),
+              baseUrl: (process.env.BASE_URL || '').trim() || undefined,
+              apiKeyEnv: (process.env.API_KEY_ENV || '').trim() || undefined,
+              verificationCommands: parseVerification(process.env.VERIFICATION_COMMANDS_JSON || '[]'),
+            });
+          } catch (error) {
+            result = {
+              ok: false,
+              exitCode: 1,
+              durationMs: 0,
+              commands: [],
+              fileChanges: [],
+              messages: ['OpenAI-compatible engine crashed before returning a result.'],
+              errors: [error?.message || String(error)],
+              usage: null,
+              rawEventCount: 0,
+            };
+          }
+
+          writeFileSync('/tmp/engine-result.json', JSON.stringify(result), 'utf8');
+          if (!result.ok) process.exit(result.exitCode || 1);
+          NODE
+              ENGINE_EXIT=$?
+              set -e
+            fi
+          else
+            write_engine_result_failure 64 "unsupported engine '$ENGINE'"
+            echo "::error::unsupported engine '$ENGINE'"
+            exit 64
           fi
-
-          set +e
-          # Codex's own sandbox cannot initialize on Actions runners. Code
-          # jobs rely on the ephemeral runner; planner jobs additionally make
-          # the checkout read-only and hard-fail if anything changes.
-          codex exec --json --skip-git-repo-check --sandbox danger-full-access "$(cat /tmp/brief.txt)" | tee /tmp/engine-events.jsonl
-          ENGINE_EXIT=${PIPESTATUS[0]}
-          set -e
-          echo "$ENGINE_EXIT" > /tmp/engine-exit-code.txt
 
           if [ "$JOB_KIND" = "plan" ]; then
             chmod -R u+w .
@@ -176,17 +389,53 @@ jobs:
               echo "::error::planner changed the checkout; discarding changes and failing the run"
               git reset --hard HEAD
               git clean -fd
+              node - <<'NODE'
+          const { readFileSync, writeFileSync } = require('fs');
+          let result = {
+            ok: false,
+            exitCode: 86,
+            durationMs: 0,
+            commands: [],
+            fileChanges: [],
+            messages: [],
+            errors: [],
+            usage: null,
+            rawEventCount: 0,
+          };
+          try {
+            result = JSON.parse(readFileSync('/tmp/engine-result.json', 'utf8'));
+          } catch {}
+          result.ok = false;
+          result.exitCode = 86;
+          result.errors = Array.isArray(result.errors) ? result.errors : [];
+          result.errors.push('planner changed checkout contents; reset/clean applied');
+          writeFileSync('/tmp/engine-result.json', JSON.stringify(result), 'utf8');
+          NODE
               ENGINE_EXIT=86
-              echo "$ENGINE_EXIT" > /tmp/engine-exit-code.txt
             fi
           else
-            # Structurally unreachable for planners: only code jobs may commit.
-            git add -A ':!/tmp' || true
-            git diff --cached --quiet || git commit -m "worker(#${{ inputs.ticket }}): engine output (${{ inputs.marker }})"
+            if [ "$ENGINE_EXIT" -eq 0 ]; then
+              git add -A ':!/tmp' || true
+              if git diff --cached --quiet; then
+                node - <<'NODE'
+          const { readFileSync, writeFileSync } = require('fs');
+          const result = JSON.parse(readFileSync('/tmp/engine-result.json', 'utf8'));
+          result.ok = false;
+          result.exitCode = 85;
+          result.errors = Array.isArray(result.errors) ? result.errors : [];
+          result.errors.push('engine+verification succeeded but produced no changes');
+          writeFileSync('/tmp/engine-result.json', JSON.stringify(result), 'utf8');
+          NODE
+                echo "::error::engine+verification succeeded but produced no changes"
+                exit 85
+              fi
+              git commit -m "worker(#${{ inputs.ticket }}): engine output (${{ inputs.marker }})"
+            fi
           fi
 
           if [ "$ENGINE_EXIT" -ne 0 ]; then
-            echo "::warning::codex exited with code $ENGINE_EXIT; result artifact will carry the failure"
+            echo "::warning::engine exited with code $ENGINE_EXIT; result artifact will carry the failure"
+            exit "$ENGINE_EXIT"
           fi
 
       - name: Push branch
@@ -227,45 +476,33 @@ jobs:
           import os
           from pathlib import Path
 
-          usage = None
-          messages = []
-          events_path = Path('/tmp/engine-events.jsonl')
-          if events_path.exists():
-            for line in events_path.read_text(encoding='utf-8', errors='ignore').splitlines():
-              try:
-                event = json.loads(line)
-              except Exception:
-                continue
-              if event.get('type') == 'item.completed':
-                item = event.get('item') or {}
-                if item.get('type') == 'agent_message' and isinstance(item.get('text'), str):
-                  messages.append(item['text'])
-              if event.get('type') == 'turn.completed':
-                raw = event.get('usage') or {}
-                usage = {
-                  'input_tokens': raw.get('input_tokens') if isinstance(raw.get('input_tokens'), int) else None,
-                  'cached_input_tokens': raw.get('cached_input_tokens') if isinstance(raw.get('cached_input_tokens'), int) else None,
-                  'output_tokens': raw.get('output_tokens') if isinstance(raw.get('output_tokens'), int) else None,
-                  'reasoning_output_tokens': raw.get('reasoning_output_tokens') if isinstance(raw.get('reasoning_output_tokens'), int) else None,
-                }
-
-          engine_exit = None
-          exit_path = Path('/tmp/engine-exit-code.txt')
-          if exit_path.exists():
-            raw = exit_path.read_text(encoding='utf-8', errors='ignore').strip()
-            if raw:
-              try:
-                engine_exit = int(raw)
-              except Exception:
-                engine_exit = None
+          engine_result = None
+          engine_path = Path('/tmp/engine-result.json')
+          if engine_path.exists():
+            try:
+              engine_result = json.loads(engine_path.read_text(encoding='utf-8'))
+            except Exception:
+              engine_result = {
+                'ok': False,
+                'exitCode': None,
+                'durationMs': 0,
+                'commands': [],
+                'fileChanges': [],
+                'messages': [],
+                'errors': ['result artifact parse failure'],
+                'usage': None,
+                'rawEventCount': 0,
+              }
 
           pr_url = (os.environ.get('PR_URL') or '').strip() or None
           result = {
             'pr_url': pr_url,
-            'usage': usage,
-            'messages': messages,
+            'engine_result': engine_result,
             'smoke': os.environ.get('SMOKE') == 'true',
-            'engine_exit': engine_exit,
+            # Backwards-compat fields for older parsers.
+            'usage': (engine_result or {}).get('usage') if isinstance(engine_result, dict) else None,
+            'messages': (engine_result or {}).get('messages') if isinstance(engine_result, dict) else [],
+            'engine_exit': (engine_result or {}).get('exitCode') if isinstance(engine_result, dict) else None,
           }
           Path('result.json').write_text(json.dumps(result), encoding='utf-8')
           PY
