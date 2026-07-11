@@ -525,27 +525,27 @@ export class WorkerRuntime implements AgentRuntime {
     try {
       if (task.jobKind === 'plan') {
         const version = (project?.sections || [])
-        .flatMap((section: any) => section.versions || [])
-        .find((candidate: any) => candidate.version === task.version);
-      const item = (version?.items || []).find(
-        (candidate: any) => candidate.id === task.roadmapItemId,
-      );
-      if (!version || !item) {
-        throw new Error(
-          `Planner context missing roadmap item ${task.roadmapItemId || '(unset)'} in version ${task.version || '(unset)'}`,
+          .flatMap((section: any) => section.versions || [])
+          .find((candidate: any) => candidate.version === task.version);
+        const item = (version?.items || []).find(
+          (candidate: any) => candidate.id === task.roadmapItemId,
         );
-      }
-      const vision = await this.deps.fetchVision(task.projectId);
-      const plannerContext: PlannerRoadmapContext = {
-        projectId: task.projectId,
-        projectName: project?.name,
-        version: version.version,
-        versionTitle: version.title,
-        versionSuccessCriteria: version.successCriteria,
-        itemId: item.id,
-        itemTitle: item.title,
-        visionExtract: extractVisionForPlanner(vision),
-      };
+        if (!version || !item) {
+          throw new Error(
+            `Planner context missing roadmap item ${task.roadmapItemId || '(unset)'} in version ${task.version || '(unset)'}`,
+          );
+        }
+        const vision = await this.deps.fetchVision(task.projectId);
+        const plannerContext: PlannerRoadmapContext = {
+          projectId: task.projectId,
+          projectName: project?.name,
+          version: version.version,
+          versionTitle: version.title,
+          versionSuccessCriteria: version.successCriteria,
+          itemId: item.id,
+          itemTitle: item.title,
+          visionExtract: extractVisionForPlanner(vision),
+        };
         dispatchMessage = `${message.trim()}\n\n${buildPlannerInstructions(plannerContext)}`;
       }
     } catch (error) {
