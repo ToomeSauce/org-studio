@@ -1,4 +1,5 @@
 import type { TaskComment } from '@/lib/store';
+import { getStoreProvider } from '@/lib/store-provider';
 
 export interface WorkerPipelineReceiptStatusEntry {
   status: string;
@@ -30,6 +31,7 @@ export interface WorkerPipelineReceipt {
   modelHistory: string[];
   modelTierSnapshot: WorkerPipelineModelTierSnapshot;
   evidenceLinks: WorkerPipelineEvidenceLinks;
+  attribution: WorkerPipelineReceiptAttribution;
 }
 
 export interface WorkerPipelineReceiptInput {
@@ -50,7 +52,86 @@ export interface WorkerPipelineReceiptInput {
   }> | null;
 }
 
+export interface WorkerPipelineReceiptAttribution {
+  tokensIn: number;
+  tokensOut: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsd: number;
+  modelHistory: string[];
+}
+
+type AttributionRow = {
+  model_used: string | null;
+  tokens_in: number | string | null;
+  tokens_out: number | string | null;
+  cache_read_tokens: number | string | null;
+  cache_write_tokens: number | string | null;
+  cost_estimate: number | string | null;
+};
+
+type QueryResult = { rows?: unknown[] };
+type QueryablePool = {
+  query: (sql: string, params?: unknown[]) => Promise<QueryResult>;
+};
+
+type CommentScope = { kind: string; taskId?: string; sectionId?: string; boardProjectId?: string; dmThreadId?: string };
+type ListCommentsOptions = { limit?: number; before?: number };
+
+type TaskRecord = WorkerPipelineReceiptInput & {
+  comments?: TaskComment[] | null;
+};
+
+type StoreProviderLike = {
+  read: () => Promise<{ tasks?: TaskRecord[] }>;
+  listComments?: (scope: CommentScope, opts?: ListCommentsOptions) => Promise<unknown[]>;
+};
+
 const URL_REGEX = /\bhttps?:\/\/[^\s<>"'`]+/gi;
+const RECEIPT_COMMENT_LIMIT = 200;
+
+let _pool: QueryablePool | null | undefined = undefined;
+
+const emptyAttribution = (): WorkerPipelineReceiptAttribution => ({
+  tokensIn: 0,
+  tokensOut: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+  costUsd: 0,
+  modelHistory: [],
+});
+
+const round6 = (n: number): number => Math.round(n * 1e6) / 1e6;
+
+async function getPool(): Promise<QueryablePool | null> {
+  if (_pool !== undefined) return _pool;
+  if (!process.env.DATABASE_URL) {
+    _pool = null;
+    return null;
+  }
+  try {
+    const pg = await import('pg');
+    const Pool = (pg as { default?: { Pool?: new (config: { connectionString: string; max: number }) => QueryablePool }; Pool?: new (config: { connectionString: string; max: number }) => QueryablePool }).default?.Pool
+      || (pg as { Pool?: new (config: { connectionString: string; max: number }) => QueryablePool }).Pool;
+    if (!Pool) {
+      _pool = null;
+      return null;
+    }
+    _pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 2 });
+    return _pool;
+  } catch {
+    _pool = null;
+    return null;
+  }
+}
+
+export function __setPoolForTest(pool: QueryablePool | null): void {
+  _pool = pool;
+}
+
+export function __resetForTest(): void {
+  _pool = undefined;
+}
 
 function asNullableString(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
@@ -65,6 +146,15 @@ function asNullableNumber(raw: unknown): number | null {
     if (Number.isFinite(numeric)) return numeric;
     const parsed = Date.parse(raw);
     if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function asFiniteNumber(raw: unknown): number | null {
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'string') {
+    const numeric = Number(raw);
+    if (Number.isFinite(numeric)) return numeric;
   }
   return null;
 }
@@ -176,7 +266,7 @@ function deriveModelHistory(history: WorkerPipelineReceiptStatusEntry[]): string
   for (const entry of history) {
     if (entry.model) seen.add(entry.model);
   }
-  return [...seen].sort((a, b) => a.localeCompare(b));
+  return [...seen];
 }
 
 function latestStatusModel(history: WorkerPipelineReceiptStatusEntry[]): string | null {
@@ -189,9 +279,15 @@ function latestStatusModel(history: WorkerPipelineReceiptStatusEntry[]): string 
 export function assembleWorkerPipelineReceipt(
   task: WorkerPipelineReceiptInput,
   comments?: TaskComment[] | null,
+  attribution?: WorkerPipelineReceiptAttribution | null,
 ): WorkerPipelineReceipt {
   const statusHistory = normalizeReceiptStatusHistory(task.statusHistory);
-  const modelHistory = deriveModelHistory(statusHistory);
+  const statusModelHistory = deriveModelHistory(statusHistory);
+  const attr = attribution || emptyAttribution();
+  const modelHistory = [...attr.modelHistory];
+  for (const model of statusModelHistory) {
+    if (!modelHistory.includes(model)) modelHistory.push(model);
+  }
   const evidenceLinks = extractEvidenceLinks(task.reviewNotes, comments);
 
   return {
@@ -210,5 +306,111 @@ export function assembleWorkerPipelineReceipt(
       latestStatusModel: latestStatusModel(statusHistory),
     },
     evidenceLinks,
+    attribution: attr,
   };
+}
+
+function parseTicketNumber(raw: unknown): number | null {
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'string' && raw.trim()) {
+    const parsed = Number(raw.trim());
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function sumAttributionRows(rows: AttributionRow[] | null | undefined): WorkerPipelineReceiptAttribution {
+  if (!rows?.length) return emptyAttribution();
+
+  let tokensIn = 0;
+  let tokensOut = 0;
+  let cacheReadTokens = 0;
+  let cacheWriteTokens = 0;
+  let costTotal = 0;
+  const models = new Set<string>();
+
+  for (const row of rows) {
+    tokensIn += asFiniteNumber(row.tokens_in) ?? 0;
+    tokensOut += asFiniteNumber(row.tokens_out) ?? 0;
+    cacheReadTokens += asFiniteNumber(row.cache_read_tokens) ?? 0;
+    cacheWriteTokens += asFiniteNumber(row.cache_write_tokens) ?? 0;
+    const cost = asFiniteNumber(row.cost_estimate);
+    if (cost != null) costTotal += cost;
+    const model = asNullableString(row.model_used);
+    if (model) models.add(model);
+  }
+
+  return {
+    tokensIn,
+    tokensOut,
+    cacheReadTokens,
+    cacheWriteTokens,
+    costUsd: round6(costTotal),
+    modelHistory: [...models],
+  };
+}
+
+async function listTaskComments(
+  provider: Pick<StoreProviderLike, 'listComments'>,
+  taskId: string,
+  fallbackComments: TaskComment[] | null | undefined,
+): Promise<TaskComment[]> {
+  try {
+    if (typeof provider?.listComments === 'function') {
+      const comments = await provider.listComments({ kind: 'task', taskId }, { limit: RECEIPT_COMMENT_LIMIT });
+      if (Array.isArray(comments)) return comments as TaskComment[];
+    }
+  } catch {
+    // Fail-soft: keep receipt path working even when comments table/provider call fails.
+  }
+  return Array.isArray(fallbackComments) ? fallbackComments : [];
+}
+
+async function fetchAttribution(workspaceId: string, ticketNumber: number): Promise<WorkerPipelineReceiptAttribution> {
+  const pool = await getPool();
+  if (!pool) return emptyAttribution();
+
+  try {
+    const result = await pool.query(
+      `SELECT
+         COALESCE(mc.model_served, mc.model_requested) AS model_used,
+         mc.tokens_in,
+         mc.tokens_out,
+         mc.cache_read_tokens,
+         mc.cache_write_tokens,
+         mc.cost_estimate
+       FROM org_studio_dispatch_ledger l
+       LEFT JOIN org_studio_dispatch_model_calls mc
+         ON mc.dispatch_id = l.dispatch_id
+        AND mc.workspace_id = $1
+       WHERE l.workspace_id = $1
+         AND l.ticket_fingerprint ~ '^[0-9]+:'
+         AND NULLIF(split_part(split_part(l.ticket_fingerprint, ',', 1), ':', 1), '')::bigint = $2::bigint
+       ORDER BY l.dispatched_at ASC, mc.called_at ASC, l.dispatch_id ASC`,
+      [workspaceId, ticketNumber],
+    );
+    return sumAttributionRows((result?.rows || []) as AttributionRow[]);
+  } catch (error: unknown) {
+    if (typeof error === 'object' && error && 'code' in error && (error as { code?: string }).code === '42P01') {
+      return emptyAttribution();
+    }
+    return emptyAttribution();
+  }
+}
+
+export async function getWorkerPipelineReceipt(
+  workspaceId: string,
+  ticketNumber: number,
+): Promise<WorkerPipelineReceipt | null> {
+  const ticket = parseTicketNumber(ticketNumber);
+  if (!workspaceId || ticket == null) return null;
+
+  const provider = getStoreProvider(workspaceId) as StoreProviderLike;
+  const store = await provider.read();
+  const task = (store?.tasks || []).find((entry) => parseTicketNumber(entry?.ticketNumber) === ticket);
+  if (!task) return null;
+
+  const comments = await listTaskComments(provider, String(task.id || ''), task.comments);
+  const attribution = await fetchAttribution(workspaceId, ticket);
+  return assembleWorkerPipelineReceipt(task, comments, attribution);
 }
