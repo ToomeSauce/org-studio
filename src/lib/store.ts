@@ -223,6 +223,14 @@ export interface Task {
   // as today. Validated in addTask/updateTask via src/lib/model-tier.ts.
   // Persists via the `data` JSONB overflow (no column, no migration).
   modelTier?: 'trivial' | 'standard' | 'complex' | null;
+  // #1691 — planner jobs are feature tasks whose deliverable is board data,
+  // not code. Chunk provenance fields also live in JSONB overflow. Generated
+  // chunks share the source task's canonical roadmapItemId/version; the
+  // roadmap item's taskId remains anchored to the plan task.
+  jobKind?: 'code' | 'plan';
+  parentId?: string;
+  plannerChunkKey?: string;
+  plannerSourceTaskId?: string;
 
   // #1589 Domain Steward — last time the active-stewardship sweep nudged the
   // owner about this ticket. Idempotency stamp (no duplicate nudges within

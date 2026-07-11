@@ -10,6 +10,12 @@ import { syncRoadmapItemForTask } from '@/lib/roadmap-sync';
 import { buildStatusTransition } from '@/lib/task-status';
 import { evaluateBlockedGate } from '@/lib/blocked-gate';
 import { validateModelTier } from '@/lib/model-tier';
+import {
+  persistPlannerChunks,
+  validatePlannerOutput,
+  type CreatedPlannerChunk,
+  type PlannerOutput,
+} from '@/lib/workers/planner';
 import { fireReindexTask } from '@/lib/embedding/indexer';
 import { checkArchivedProject } from '@/lib/archived-project-compat';
 import { getEffectiveOwner } from '@/lib/component-helpers';
@@ -42,6 +48,9 @@ import { recordInternalCallFailure } from '@/lib/dispatch-ledger';
 import { isTaskHeldByHumanStop } from '@/lib/stop-window';
 
 const SCHEDULER_URL = 'http://localhost:4501/api/scheduler';
+// Planner runs are already single-flight per worker; this second guard closes
+// the API-level read→create race inside one dashboard process.
+const plannerMaterializationsInFlight = new Set<string>();
 
 /**
  * #1506 — strip server-side audit metadata from a comment before returning
@@ -679,7 +688,151 @@ export async function POST(req: NextRequest) {
     const store = await readStore(workspace.id);
 
     switch (action) {
+      case 'materializePlannerChunks': {
+        const sourceTask = store.tasks.find((task: any) => task.id === payload.sourceTaskId);
+        if (!sourceTask) {
+          return NextResponse.json({ error: 'Planner source task not found' }, { status: 404 });
+        }
+        if (sourceTask.jobKind !== 'plan') {
+          return NextResponse.json({ error: 'Planner source task must have jobKind=plan' }, { status: 400 });
+        }
+        if (!sourceTask.projectId || !sourceTask.version || !sourceTask.roadmapItemId) {
+          return NextResponse.json(
+            { error: 'Planner source task must be linked to a project, version, and roadmap item' },
+            { status: 400 },
+          );
+        }
+        const sourceProject = store.projects.find((project: any) => project.id === sourceTask.projectId);
+        const sourceVersion = (sourceProject?.sections || [])
+          .flatMap((section: any) => section.versions || [])
+          .find((version: any) => version.version === sourceTask.version);
+        const sourceRoadmapItem = (sourceVersion?.items || []).find(
+          (item: any) => item.id === sourceTask.roadmapItemId,
+        );
+        if (!sourceRoadmapItem) {
+          return NextResponse.json(
+            { error: 'Planner source task roadmap link is stale or invalid' },
+            { status: 409 },
+          );
+        }
+
+        let output: PlannerOutput;
+        try {
+          output = validatePlannerOutput(payload.output);
+        } catch (error) {
+          return NextResponse.json(
+            { error: `Invalid planner output: ${error instanceof Error ? error.message : String(error)}` },
+            { status: 400 },
+          );
+        }
+
+        const materializationKey = `${workspace.id}:${sourceTask.id}`;
+        if (plannerMaterializationsInFlight.has(materializationKey)) {
+          return NextResponse.json(
+            { error: 'Planner materialization is already in progress for this source task' },
+            { status: 409 },
+          );
+        }
+        plannerMaterializationsInFlight.add(materializationKey);
+        const provider = getStoreProvider(workspace.id);
+        const assignee =
+          (typeof payload.assignee === 'string' && payload.assignee.trim()) ||
+          sourceTask.assignee ||
+          'Mikey';
+        try {
+          const chunks = await persistPlannerChunks({
+            sourceTask: {
+              ...sourceTask,
+              assignee,
+            },
+            output,
+            deps: {
+              findExisting: async (sourceTaskId: string) => {
+                const fresh = await provider.read();
+                return (fresh.tasks || [])
+                  .filter((task: any) => task.plannerSourceTaskId === sourceTaskId)
+                  .map((task: any): CreatedPlannerChunk => ({
+                    id: task.id,
+                    ticketNumber: task.ticketNumber,
+                    title: task.title,
+                    plannerChunkKey: task.plannerChunkKey,
+                    modelTier: task.modelTier,
+                    blockedBy: Array.isArray(task.blockedBy) ? task.blockedBy : [],
+                  }));
+              },
+              createChunk: async (input) => {
+                const ticketNumber = await provider.allocateTicketNumber();
+                const now = Date.now();
+                const id = Math.random().toString(36).slice(2, 10) + now.toString(36);
+                const task = {
+                  id,
+                  ticketNumber,
+                  createdAt: now,
+                  lastActivityAt: now,
+                  workspace_id: workspace.id,
+                  createdBy: 'planner-worker',
+                  initiatedBy: 'planner-worker',
+                  statusHistory: [{ status: 'planning', timestamp: now, by: 'planner-worker' }],
+                  sortOrder: 0,
+                  ...input,
+                  // Hard invariant: planner chunks NEVER enter backlog here.
+                  status: 'planning' as const,
+                  assignee: canonicalizeTeammate(assignee, store.settings?.teammates || []),
+                };
+                const planningTasks = (store.tasks || []).filter(
+                  (candidate: any) => candidate.projectId === task.projectId && candidate.status === 'planning',
+                );
+                task.sortOrder =
+                  planningTasks.reduce(
+                    (max: number, candidate: any) =>
+                      Math.max(max, typeof candidate.sortOrder === 'number' ? candidate.sortOrder : 0),
+                    0,
+                  ) + 1000 + ticketNumber;
+                await provider.createTask(task);
+                return {
+                  id: task.id,
+                  ticketNumber: task.ticketNumber,
+                  title: task.title,
+                  plannerChunkKey: task.plannerChunkKey,
+                  modelTier: task.modelTier,
+                  blockedBy: task.blockedBy,
+                };
+              },
+              updateChunk: async (taskId, updates) => {
+                await provider.updateTask(taskId, updates);
+              },
+              rollbackChunk: async (taskId) => {
+                await provider.deleteTask(taskId);
+              },
+            },
+          });
+          return NextResponse.json({ ok: true, chunks });
+        } catch (error) {
+          return NextResponse.json(
+            { error: `Planner materialization failed: ${error instanceof Error ? error.message : String(error)}` },
+            { status: 409 },
+          );
+        } finally {
+          plannerMaterializationsInFlight.delete(materializationKey);
+        }
+      }
+
       case 'addTask': {
+        if (
+          payload?.task?.jobKind !== undefined &&
+          !['code', 'plan'].includes(payload.task.jobKind)
+        ) {
+          return NextResponse.json(
+            { error: "jobKind must be 'code' or 'plan'" },
+            { status: 400 },
+          );
+        }
+        if (payload?.task?.jobKind === 'plan' && payload.task?.taskType !== 'feature') {
+          return NextResponse.json(
+            { error: 'Plan jobs must be roadmap feature tasks' },
+            { status: 400 },
+          );
+        }
         // #1249 — priority field removed. Strip any client-supplied priority
         // up-front so callers using stale templates do not poison the data bag.
         // Ordering is via column position (sortOrder); see #1250 for the
@@ -1127,6 +1280,26 @@ export async function POST(req: NextRequest) {
       }
 
       case 'updateTask': {
+        if (
+          payload?.updates?.jobKind !== undefined &&
+          payload.updates.jobKind !== null &&
+          !['code', 'plan'].includes(payload.updates.jobKind)
+        ) {
+          return NextResponse.json(
+            { error: "jobKind must be 'code', 'plan', or null" },
+            { status: 400 },
+          );
+        }
+        if (payload?.updates?.jobKind === 'plan') {
+          const existingTask = store.tasks.find((task: any) => task.id === payload.id);
+          const effectiveTaskType = payload.updates.taskType ?? existingTask?.taskType;
+          if (effectiveTaskType !== 'feature') {
+            return NextResponse.json(
+              { error: 'Plan jobs must be roadmap feature tasks' },
+              { status: 400 },
+            );
+          }
+        }
         // #1249 — priority field removed. Strip any client-supplied priority
         // from `updates` so stale templates cannot reintroduce the field.
         if (payload?.updates && 'priority' in payload.updates) {

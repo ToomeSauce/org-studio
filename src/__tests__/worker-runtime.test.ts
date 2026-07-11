@@ -198,6 +198,8 @@ describe('#1657: WorkerRuntime send() = enqueue semantics', () => {
       fetchStore: vi.fn(async () => makeStore()),
       postComment: vi.fn(async () => undefined),
       fetchComments: vi.fn(async () => []),
+      fetchVision: vi.fn(async () => ''),
+      materializePlan: vi.fn(async () => []),
       writeAgentsMd: vi.fn(async () => vi.fn(async () => undefined)),
       runEngine: vi.fn(async () => OK_RESULT),
       runRemote: vi.fn(async () => ({ ok: false, mode: 'gh-actions', detail: 'not configured' })),
@@ -430,6 +432,158 @@ describe('#1657: WorkerRuntime send() = enqueue semantics', () => {
     // Slot freed — subsequent dispatch enqueues.
     const out = (await rt.send('worker-codex', 'brief')) as any;
     expect(out.enqueued).toBe(true);
+  });
+
+  it('#1691: rejects plan jobs on a worker not marked FRONTIER', async () => {
+    enableWorkers({ taskTypes: ['feature'], projectIds: [] });
+    const { rt, deps } = makeRuntime({
+      fetchStore: vi.fn(async () =>
+        makeStore({ jobKind: 'plan', taskType: 'feature' }),
+      ),
+    });
+    await expect(rt.send('worker-codex', 'brief')).rejects.toThrow('FRONTIER-tier');
+    expect(deps.runEngine).not.toHaveBeenCalled();
+  });
+
+  it('#1691: plan job builds read-only frontier brief and materializes validated chunks', async () => {
+    setEnv('WORKER_RUNTIME_ENABLED', 'true');
+    setEnv(
+      'WORKER_RUNTIME_CONFIG',
+      JSON.stringify([
+        {
+          id: 'worker-codex',
+          name: 'Worker (Codex)',
+          engine: 'codex',
+          model: 'frontier-model',
+          mode: 'local-process',
+          frontier: true,
+          lane: { taskTypes: ['feature'], projectIds: ['proj-oss'] },
+          timeoutMs: 5000,
+        },
+      ]),
+    );
+    setEnv('WORKER_REPO_PATHS', JSON.stringify({ 'proj-oss': '/tmp' }));
+    const plannerJson = {
+      chunks: [
+        {
+          key: 'one', title: 'Chunk one', description: 'Implement one.', doneWhen: 'One passes.',
+          constraints: 'Scoped.', modelTier: 'standard', dependsOn: [],
+        },
+        {
+          key: 'two', title: 'Chunk two', description: 'Implement two.', doneWhen: 'Two passes.',
+          constraints: 'Scoped.', modelTier: 'complex', dependsOn: ['one'],
+        },
+      ],
+    };
+    let captured: any;
+    const materialized = [
+      { id: 'c1', ticketNumber: 1700, title: 'Chunk one', plannerChunkKey: 'one', blockedBy: [] },
+      { id: 'c2', ticketNumber: 1701, title: 'Chunk two', plannerChunkKey: 'two', blockedBy: [1700] },
+    ];
+    const fetchStore = vi.fn(async () => ({
+      ...makeStore({
+        jobKind: 'plan', taskType: 'feature', version: '2026.11.15', roadmapItemId: 'item-plan',
+      }),
+      projects: [{
+        id: 'proj-oss',
+        name: 'OSS',
+        repoContextPack: 'repo map',
+        sections: [{ versions: [{ version: '2026.11.15', title: 'Plan', items: [{ id: 'item-plan', title: 'Roadmap outcome' }] }] }],
+      }],
+    }));
+    const { rt, deps } = makeRuntime({
+      fetchStore,
+      fetchVision: vi.fn(async () => '## North Star\nUseful software.'),
+      runEngine: vi.fn(async (opts: any) => {
+        captured = opts;
+        return {
+          ...OK_RESULT,
+          fileChanges: [],
+          messages: [`ORG_STUDIO_PLAN_JSON_START\n${JSON.stringify(plannerJson)}\nORG_STUDIO_PLAN_JSON_END`],
+        };
+      }),
+      materializePlan: vi.fn(async () => materialized),
+    });
+    await rt.send('worker-codex', 'DISPATCH', { idempotencyKey: 'plan-1' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(captured.sandboxMode).toBe('read-only');
+    expect(captured.brief).toContain('FRONTIER-tier');
+    expect(captured.brief).toContain('Useful software.');
+    expect(captured.brief).toContain('repo map');
+    expect(captured.brief).toContain('do NOT edit files');
+    expect(deps.writeAgentsMd).not.toHaveBeenCalled();
+    expect(deps.materializePlan).toHaveBeenCalledWith('task-1', plannerJson, 'worker-codex');
+    expect(deps.postComment).toHaveBeenCalledWith(
+      'task-1',
+      'worker-codex',
+      expect.stringContaining('#1701'),
+    );
+    expect(deps.updateTask).toHaveBeenCalledWith(
+      'task-1',
+      expect.objectContaining({ status: 'done' }),
+    );
+  });
+
+  it('#1691: remote plan jobs use artifact-only workflow output and never invoke local engine', async () => {
+    setEnv('WORKER_RUNTIME_ENABLED', 'true');
+    setEnv(
+      'WORKER_RUNTIME_CONFIG',
+      JSON.stringify([{ id: 'worker-codex', name: 'Worker', engine: 'codex', model: 'frontier-model', mode: 'gh-actions', frontier: true, lane: { taskTypes: ['feature'], projectIds: [] }, timeoutMs: 5000 }]),
+    );
+    setEnv('WORKER_REPO_SLUGS', JSON.stringify({ 'proj-oss': 'ToomeSauce/org-studio' }));
+    const output = {
+      chunks: [
+        { key: 'one', title: 'One', description: 'One.', doneWhen: 'One.', constraints: 'Scoped.', modelTier: 'standard', dependsOn: [] },
+        { key: 'two', title: 'Two', description: 'Two.', doneWhen: 'Two.', constraints: 'Scoped.', modelTier: 'complex', dependsOn: ['one'] },
+      ],
+    };
+    const { rt, deps } = makeRuntime({
+      fetchStore: vi.fn(async () => ({
+        ...makeStore({ jobKind: 'plan', taskType: 'feature', version: 'v1', roadmapItemId: 'i1' }),
+        projects: [{ id: 'proj-oss', sections: [{ versions: [{ version: 'v1', items: [{ id: 'i1', title: 'Item' }] }] }] }],
+      })),
+      runRemote: vi.fn(async () => ({
+        ok: true,
+        mode: 'gh-actions',
+        detail: 'run success',
+        messages: [`ORG_STUDIO_PLAN_JSON_START\n${JSON.stringify(output)}\nORG_STUDIO_PLAN_JSON_END`],
+      })),
+      materializePlan: vi.fn(async () => [
+        { id: 'c1', ticketNumber: 1700, title: 'One', plannerChunkKey: 'one', blockedBy: [] },
+        { id: 'c2', ticketNumber: 1701, title: 'Two', plannerChunkKey: 'two', blockedBy: [1700] },
+      ]),
+    });
+    await rt.send('worker-codex', 'brief', { idempotencyKey: 'remote-plan' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(deps.runRemote).toHaveBeenCalledWith(
+      expect.objectContaining({ jobKind: 'plan', repo: 'ToomeSauce/org-studio' }),
+      expect.anything(),
+    );
+    expect(deps.runEngine).not.toHaveBeenCalled();
+    expect(deps.materializePlan).toHaveBeenCalled();
+    expect(deps.updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'done' }));
+  });
+
+  it('#1691: malformed plan output posts error context and does not materialize', async () => {
+    setEnv('WORKER_RUNTIME_ENABLED', 'true');
+    setEnv(
+      'WORKER_RUNTIME_CONFIG',
+      JSON.stringify([{ id: 'worker-codex', name: 'Worker', engine: 'codex', model: 'm', mode: 'local-process', frontier: true, lane: { taskTypes: ['feature'], projectIds: [] }, timeoutMs: 5000 }]),
+    );
+    setEnv('WORKER_REPO_PATHS', JSON.stringify({ 'proj-oss': '/tmp' }));
+    const { rt, deps } = makeRuntime({
+      fetchStore: vi.fn(async () => ({
+        ...makeStore({ jobKind: 'plan', taskType: 'feature', version: 'v1', roadmapItemId: 'i1' }),
+        projects: [{ id: 'proj-oss', sections: [{ versions: [{ version: 'v1', items: [{ id: 'i1', title: 'Item' }] }] }] }],
+      })),
+      runEngine: vi.fn(async () => ({ ...OK_RESULT, fileChanges: [], messages: ['not json'] })),
+    });
+    await rt.send('worker-codex', 'brief', {});
+    await new Promise((r) => setTimeout(r, 0));
+    expect(deps.materializePlan).not.toHaveBeenCalled();
+    expect(deps.postComment).toHaveBeenCalledWith(
+      'task-1', 'worker-codex', expect.stringContaining('missing ORG_STUDIO_PLAN_JSON_START'),
+    );
   });
 
   it('discover() reflects configured workers with lane metadata', async () => {

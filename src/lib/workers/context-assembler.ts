@@ -73,6 +73,8 @@ export interface AssembleBriefOpts {
   maxThreadChars?: number;
   /** Injectable clock for deterministic staleness tests. */
   nowMs?: number;
+  /** Plan jobs are read-only board planners, not code/PR jobs. */
+  operatingMode?: 'code' | 'plan';
 }
 
 const DEFAULT_MAX_THREAD_CHARS = 6000;
@@ -177,13 +179,21 @@ export function assembleBrief(opts: AssembleBriefOpts): string {
   if (leash) sections.push(leash);
 
   sections.push(
-    [
-      `## Operating rules`,
-      `- Make the changes in this repository. Read AGENTS.md at the repo root first — it carries the host build policy.`,
-      `- Verify with targeted checks only (single-file tests / single-file typecheck). Do NOT run whole-project builds, full test suites, or full-repo lint/typecheck.`,
-      `- Commit on the current branch with a descriptive message referencing #${task.ticketNumber ?? 'the ticket'}. Do NOT push.`,
-      `- If you cannot complete the task, say clearly in your final message WHAT you tried and WHY it failed — that summary is written back to the ticket.`,
-    ].join('\n'),
+    opts.operatingMode === 'plan'
+      ? [
+          `## Operating rules`,
+          `- This is a read-only planning job. Inspect repository files as needed, but do NOT edit files, commit, push, open a PR, or deploy.`,
+          `- Your only deliverable is the strict planner JSON requested above. Org Studio validates it and creates board tickets server-side.`,
+          `- Never place chunks directly in backlog; the materializer always creates them in Planning so the human launch gate remains intact.`,
+          `- If planning cannot be completed, return an honest explanation outside the result markers; malformed or missing result JSON fails the job cleanly.`,
+        ].join('\n')
+      : [
+          `## Operating rules`,
+          `- Make the changes in this repository. Read AGENTS.md at the repo root first — it carries the host build policy.`,
+          `- Verify with targeted checks only (single-file tests / single-file typecheck). Do NOT run whole-project builds, full test suites, or full-repo lint/typecheck.`,
+          `- Commit on the current branch with a descriptive message referencing #${task.ticketNumber ?? 'the ticket'}. Do NOT push.`,
+          `- If you cannot complete the task, say clearly in your final message WHAT you tried and WHY it failed — that summary is written back to the ticket.`,
+        ].join('\n'),
   );
 
   return sections.join('\n\n');
