@@ -42,8 +42,12 @@ export interface ProvisionJobSpec {
   ticketNumber: number;
   title: string;
   brief: string;
+  engine?: 'codex' | 'openai-compat';
   model: string;
+  baseUrl?: string;
+  apiKeyEnv?: string;
   timeoutMs: number;
+  verificationCommands?: string[];
   /** Engine opts threaded for local modes (sandbox/argv from HostProfile). */
   engineOpts?: Partial<EngineRunOpts>;
   /** Local checkout path (local modes only). */
@@ -189,6 +193,11 @@ export class GhActionsAdapter implements ProvisioningAdapter {
             ticket: String(spec.ticketNumber),
             title: spec.title.slice(0, 120),
             brief: spec.brief.slice(0, 60_000), // workflow_dispatch input cap safety
+            engine: spec.engine || 'codex',
+            model: spec.model,
+            base_url: spec.baseUrl || '',
+            api_key_env: spec.apiKeyEnv || '',
+            verification_commands: JSON.stringify(spec.verificationCommands || []),
             marker,
             job_kind: spec.jobKind || 'code',
             smoke: spec.smoke ? 'true' : 'false',

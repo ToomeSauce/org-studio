@@ -226,6 +226,11 @@ describe('#1660: GhActionsAdapter', () => {
     const body = JSON.parse(dispatchCall.init.body);
     expect(body.inputs.target_repo).toBe('o/r');
     expect(body.inputs.ticket).toBe('9');
+    expect(body.inputs.engine).toBe('codex');
+    expect(body.inputs.model).toBe('m');
+    expect(body.inputs.base_url).toBe('');
+    expect(body.inputs.api_key_env).toBe('');
+    expect(body.inputs.verification_commands).toBe('[]');
     expect(body.inputs.smoke).toBe('true');
     expect(body.inputs.marker).toBe(marker);
   });
@@ -251,6 +256,47 @@ describe('#1660: GhActionsAdapter', () => {
     const r = await adapter.provision({ repo: 'o/r', ticketNumber: 1, title: 'T', brief: 'B', model: 'm', timeoutMs: 1 });
     expect(r.ok).toBe(false);
     expect(r.detail).toContain('failure');
+  });
+
+  it('#1693: forwards openai-compat dispatch inputs (engine/baseUrl/apiKeyEnv/verification)', async () => {
+    let dispatchBody: any = null;
+    let marker = '';
+    const impl = vi.fn(async (url: string, init: any) => {
+      if (url.includes('/dispatches')) {
+        dispatchBody = JSON.parse(init.body);
+        marker = dispatchBody.inputs.marker;
+        return { ok: true, status: 204, json: async () => ({}) };
+      }
+      if (url.includes('/runs?')) {
+        return {
+          ok: true, status: 200,
+          json: async () => ({ workflow_runs: [{ id: 71, name: `x ${marker}`, html_url: 'u' }] }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ id: 71, status: 'completed', conclusion: 'failure' }) };
+    });
+    const adapter = new GhActionsAdapter({
+      workflowRepo: 'o/r', token: 't', fetchImpl: impl, pollIntervalMs: 1, maxPolls: 2, sleep: async () => undefined,
+    });
+
+    await adapter.provision({
+      repo: 'o/r',
+      ticketNumber: 1,
+      title: 'T',
+      brief: 'B',
+      engine: 'openai-compat',
+      model: 'qwen2.5-coder',
+      baseUrl: 'http://127.0.0.1:11434/v1',
+      apiKeyEnv: 'LOCAL_KEY',
+      verificationCommands: ['npm run test -- src/x.test.ts'],
+      timeoutMs: 1,
+    });
+
+    expect(dispatchBody.inputs.engine).toBe('openai-compat');
+    expect(dispatchBody.inputs.model).toBe('qwen2.5-coder');
+    expect(dispatchBody.inputs.base_url).toBe('http://127.0.0.1:11434/v1');
+    expect(dispatchBody.inputs.api_key_env).toBe('LOCAL_KEY');
+    expect(dispatchBody.inputs.verification_commands).toBe('["npm run test -- src/x.test.ts"]');
   });
 
   it('dispatch HTTP failure short-circuits without polling', async () => {
