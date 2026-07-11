@@ -1,11 +1,25 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const getStoreProviderMock = vi.fn();
+vi.mock('@/lib/store-provider', () => ({
+  getStoreProvider: (...args: any[]) => getStoreProviderMock(...args),
+}));
+
 import {
+  __resetWorkerPipelineReceiptForTest,
+  __setWorkerPipelineReceiptPoolForTest,
   assembleWorkerPipelineReceipt,
   extractEvidenceLinks,
+  getWorkerPipelineReceipt,
   normalizeReceiptStatusHistory,
 } from '@/lib/worker-pipeline-receipt';
 
 describe('worker pipeline receipt helpers (#1704)', () => {
+  beforeEach(() => {
+    getStoreProviderMock.mockReset();
+    __resetWorkerPipelineReceiptForTest();
+  });
+
   it('extracts PR + worker run links from reviewNotes/comments with dedupe and stable ordering', () => {
     const links = extractEvidenceLinks(
       [
@@ -107,6 +121,7 @@ describe('worker pipeline receipt helpers (#1704)', () => {
       modelHistory: [],
       modelTierSnapshot: { requested: null, latestStatusModel: null },
       evidenceLinks: { workerRuns: [], pullRequests: [] },
+      attributions: [],
     });
   });
 
@@ -122,5 +137,162 @@ describe('worker pipeline receipt helpers (#1704)', () => {
       { status: 'in-progress', timestamp: 2, by: 'A', model: null },
       { status: 'done', timestamp: 3, by: 'A', model: null },
     ]);
+  });
+});
+
+describe('getWorkerPipelineReceipt (#1705)', () => {
+  beforeEach(() => {
+    getStoreProviderMock.mockReset();
+    __resetWorkerPipelineReceiptForTest();
+  });
+
+  it('returns null when the workspace-scoped ticket does not exist', async () => {
+    getStoreProviderMock.mockReturnValue({
+      read: vi.fn(async () => ({ tasks: [{ id: 'task-1', ticketNumber: 9 }] })),
+      listComments: vi.fn(async () => []),
+    });
+    __setWorkerPipelineReceiptPoolForTest({ query: vi.fn(async () => ({ rows: [] })) });
+
+    await expect(getWorkerPipelineReceipt('ws-1', 1705)).resolves.toBeNull();
+  });
+
+  it('uses scoped listComments and merges attributed model history from ledger rows', async () => {
+    const listComments = vi.fn(async () => [
+      {
+        id: 'c1',
+        author: 'Worker',
+        content: 'PR https://github.com/org/studio/pull/1705',
+        createdAt: 100,
+      },
+    ]);
+    getStoreProviderMock.mockReturnValue({
+      read: vi.fn(async () => ({
+        tasks: [
+          {
+            id: 'task-1705',
+            ticketNumber: 1705,
+            modelTier: 'standard',
+            reviewNotes: 'run https://github.com/org/studio/actions/runs/99',
+            statusHistory: [
+              { status: 'backlog', timestamp: 1, by: 'Planner' },
+              { status: 'in-progress', timestamp: 2, by: 'Worker' },
+              { status: 'done', timestamp: 3, by: 'Worker' },
+            ],
+          },
+        ],
+      })),
+      listComments,
+    });
+
+    const query = vi.fn(async (_text: string, values: unknown[]) => {
+      expect(values).toEqual(['ws-1705', 1705]);
+      return {
+        rows: [
+          {
+            dispatch_id: 'd1',
+            dispatched_at: 2000,
+            called_at: 2050,
+            worker_id: 'worker-codex',
+            source: 'worker',
+            model_requested: 'gpt-5.3-codex',
+            model_served: 'gpt-5.3-codex',
+            model_used: 'gpt-5.3-codex',
+            cost_estimate: '0.05',
+          },
+          {
+            dispatch_id: 'd1',
+            dispatched_at: 2000,
+            called_at: 2100,
+            worker_id: 'worker-codex',
+            source: 'worker',
+            model_requested: 'gpt-5.4',
+            model_served: 'gpt-5.4',
+            model_used: 'gpt-5.4',
+            cost_estimate: '0.10',
+          },
+          {
+            dispatch_id: 'd2',
+            dispatched_at: 3000,
+            called_at: null,
+            worker_id: 'worker-codex',
+            source: 'worker',
+            model_requested: null,
+            model_served: null,
+            model_used: null,
+            cost_estimate: null,
+          },
+        ],
+      };
+    });
+    __setWorkerPipelineReceiptPoolForTest({ query });
+
+    const receipt = await getWorkerPipelineReceipt('ws-1705', 1705);
+    expect(listComments).toHaveBeenCalledWith({ kind: 'task', taskId: 'task-1705' }, { limit: 200 });
+    expect(query).toHaveBeenCalledOnce();
+    expect(receipt?.modelHistory).toEqual(['gpt-5.3-codex']);
+    expect(receipt?.attributions).toEqual([
+      {
+        dispatchId: 'd1',
+        dispatchedAt: 2000,
+        calledAt: 2050,
+        workerId: 'worker-codex',
+        source: 'worker',
+        modelRequested: 'gpt-5.3-codex',
+        modelServed: 'gpt-5.3-codex',
+        modelUsed: 'gpt-5.3-codex',
+        costUsd: 0.15000000000000002,
+      },
+      {
+        dispatchId: 'd2',
+        dispatchedAt: 3000,
+        calledAt: null,
+        workerId: 'worker-codex',
+        source: 'worker',
+        modelRequested: null,
+        modelServed: null,
+        modelUsed: null,
+        costUsd: null,
+      },
+    ]);
+    expect(receipt?.evidenceLinks).toEqual({
+      workerRuns: ['https://github.com/org/studio/actions/runs/99'],
+      pullRequests: ['https://github.com/org/studio/pull/1705'],
+    });
+  });
+
+  it('fails soft when listComments or ledger reads are unavailable', async () => {
+    getStoreProviderMock.mockReturnValue({
+      read: vi.fn(async () => ({
+        tasks: [
+          {
+            id: 'task-1705',
+            ticketNumber: 1705,
+            reviewNotes: null,
+            comments: [
+              {
+                id: 'inline-1',
+                author: 'Worker',
+                content: 'inline run https://ci.example.com/job?run_id=501',
+                createdAt: 1,
+              },
+            ],
+            statusHistory: [{ status: 'done', timestamp: 1 }],
+          },
+        ],
+      })),
+      listComments: vi.fn(async () => {
+        throw new Error('comments table missing');
+      }),
+    });
+    __setWorkerPipelineReceiptPoolForTest({
+      query: vi.fn(async () => {
+        throw new Error('dispatch tables missing');
+      }),
+    });
+
+    const receipt = await getWorkerPipelineReceipt('ws-1705', 1705);
+    expect(receipt).toBeTruthy();
+    expect(receipt?.attributions).toEqual([]);
+    expect(receipt?.evidenceLinks.workerRuns).toEqual(['https://ci.example.com/job?run_id=501']);
   });
 });
