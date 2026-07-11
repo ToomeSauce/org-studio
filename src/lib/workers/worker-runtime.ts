@@ -442,18 +442,16 @@ export class WorkerRuntime implements AgentRuntime {
     }
 
     const repo =
-      task.jobKind === 'plan'
-        ? resolveRepoPath(task.projectId)
-        : worker.mode === 'gh-actions'
-          ? resolveRepoSlug(task.projectId)
-          : resolveRepoPath(task.projectId);
+      worker.mode === 'gh-actions'
+        ? resolveRepoSlug(task.projectId)
+        : resolveRepoPath(task.projectId);
     if (!repo) {
       const reason =
-        task.jobKind === 'plan'
-          ? `No local read-only checkout configured for planner project ${task.projectId} ` +
-            `(set WORKER_REPO_PATHS={"${task.projectId}":"/abs/path"}).`
-          : worker.mode === 'gh-actions'
-            ? `No repo slug configured for project ${task.projectId} (set WORKER_REPO_SLUGS={"${task.projectId}":"owner/name"}).`
+        worker.mode === 'gh-actions'
+          ? `No repo slug configured for project ${task.projectId} (set WORKER_REPO_SLUGS={"${task.projectId}":"owner/name"}).`
+          : task.jobKind === 'plan'
+            ? `No local read-only checkout configured for planner project ${task.projectId} ` +
+              `(set WORKER_REPO_PATHS={"${task.projectId}":"/abs/path"}).`
             : `No repo checkout configured for project ${task.projectId} ` +
               `(set WORKER_REPO_PATHS={"${task.projectId}":"/abs/path"}). W-5 adds real provisioning.`;
       await this.deps.postComment(task.id, worker.id, `⛔ ${reason}`);
@@ -524,8 +522,9 @@ export class WorkerRuntime implements AgentRuntime {
     // --- ContextAssembler forward path (#1658 + planner context #1691) ---
     const comments = await this.deps.fetchComments(task.id);
     let dispatchMessage = message;
-    if (task.jobKind === 'plan') {
-      const version = (project?.sections || [])
+    try {
+      if (task.jobKind === 'plan') {
+        const version = (project?.sections || [])
         .flatMap((section: any) => section.versions || [])
         .find((candidate: any) => candidate.version === task.version);
       const item = (version?.items || []).find(
@@ -547,7 +546,13 @@ export class WorkerRuntime implements AgentRuntime {
         itemTitle: item.title,
         visionExtract: extractVisionForPlanner(vision),
       };
-      dispatchMessage = `${message.trim()}\n\n${buildPlannerInstructions(plannerContext)}`;
+        dispatchMessage = `${message.trim()}\n\n${buildPlannerInstructions(plannerContext)}`;
+      }
+    } catch (error) {
+      if (task.jobKind === 'plan') {
+        await this.recordPlannerFailure(task, worker, comments, dispatchId, error);
+      }
+      throw error;
     }
     const brief = assembleBrief({
       dispatchMessage,
@@ -732,17 +737,45 @@ export class WorkerRuntime implements AgentRuntime {
     const { worker, task, profile, repo, brief, comments, dispatchId } = job;
     const wrapper = buildOsWrapper(profile, worker.timeoutMs, this.deps.systemdRunAvailable());
     try {
-      // Planner jobs deliberately use the local read-only engine path even
-      // when code jobs use gh-actions: the remote workflow is structurally a
-      // branch/PR producer. No AGENTS.md write, no branch, no PR, no repo edit.
-      const res = await this.deps.runEngine({
-        cwd: resolveRepoPath(task.projectId) || repo,
-        brief,
-        model: worker.model,
-        timeoutMs: wrapper.timeoutMs,
-        sandboxMode: 'read-only',
-        argvPrefix: wrapper.argvPrefix,
-      });
+      // Planner jobs use either the local engine's read-only sandbox or the
+      // remote workflow's plan branch. The workflow makes the checkout
+      // read-only and skips branch/commit/push/PR steps entirely.
+      let res: WorkerRunResult;
+      if (worker.mode === 'gh-actions') {
+        const remote = await this.deps.runRemote(
+          {
+            repo,
+            ticketNumber: Number(task.ticketNumber || 0),
+            title: String(task.title || 'Planner job'),
+            brief,
+            model: worker.model,
+            timeoutMs: worker.timeoutMs,
+            jobKind: 'plan',
+          },
+          worker,
+        );
+        if (!remote.ok) throw new Error(remote.detail || 'remote planner run failed');
+        res = {
+          ok: true,
+          exitCode: 0,
+          durationMs: 0,
+          commands: [],
+          fileChanges: [],
+          messages: remote.messages || [],
+          errors: [],
+          usage: remote.usage || null,
+          rawEventCount: 0,
+        };
+      } else {
+        res = await this.deps.runEngine({
+          cwd: resolveRepoPath(task.projectId) || repo,
+          brief,
+          model: worker.model,
+          timeoutMs: wrapper.timeoutMs,
+          sandboxMode: 'read-only',
+          argvPrefix: wrapper.argvPrefix,
+        });
+      }
       this.deps.recordModelCall({
         dispatchId,
         agentId: worker.id,
@@ -768,27 +801,37 @@ export class WorkerRuntime implements AgentRuntime {
           chunks.map((chunk) => `#${chunk.ticketNumber}`).join(', '),
       });
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      await this.deps.postComment(
-        task.id,
-        worker.id,
-        `🧭 **Planner run** \`${dispatchId.slice(0, 12)}\` — ❌ invalid/failed output\n\n${detail.slice(0, 1_500)}`,
-      );
-      const priorAttempts = comments.filter(
-        (comment) =>
-          typeof comment.content === 'string' && comment.content.includes('**Planner run**'),
-      ).length;
-      const maxAttempts = Math.max(1, Number(process.env.WORKER_MAX_ATTEMPTS || 3));
-      if (priorAttempts + 1 >= maxAttempts) {
-        await this.deps.updateTask(task.id, {
-          status: 'blocked',
-          blockedReasonType: 'needs-human-judgment',
-          blockedReason: `Planner failed ${priorAttempts + 1} validated attempt(s): ${detail.slice(0, 400)}`,
-          reviewNotes:
-            `Planner output rejected after ${priorAttempts + 1} attempt(s). Last error: ${detail.slice(0, 800)}`,
-        });
-      }
+      await this.recordPlannerFailure(task, worker, comments, dispatchId, error);
       throw error;
+    }
+  }
+
+  private async recordPlannerFailure(
+    task: any,
+    worker: WorkerConfig,
+    comments: BriefComment[],
+    dispatchId: string,
+    error: unknown,
+  ): Promise<void> {
+    const detail = error instanceof Error ? error.message : String(error);
+    await this.deps.postComment(
+      task.id,
+      worker.id,
+      `🧭 **Planner run** \`${dispatchId.slice(0, 12)}\` — ❌ invalid/failed output\n\n${detail.slice(0, 1_500)}`,
+    );
+    const priorAttempts = comments.filter(
+      (comment) =>
+        typeof comment.content === 'string' && comment.content.includes('**Planner run**'),
+    ).length;
+    const maxAttempts = Math.max(1, Number(process.env.WORKER_MAX_ATTEMPTS || 3));
+    if (priorAttempts + 1 >= maxAttempts) {
+      await this.deps.updateTask(task.id, {
+        status: 'blocked',
+        blockedReasonType: 'needs-human-judgment',
+        blockedReason: `Planner failed ${priorAttempts + 1} validated attempt(s): ${detail.slice(0, 400)}`,
+        reviewNotes:
+          `Planner output rejected after ${priorAttempts + 1} attempt(s). Last error: ${detail.slice(0, 800)}`,
+      });
     }
   }
 

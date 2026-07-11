@@ -48,6 +48,9 @@ export interface ProvisionJobSpec {
   engineOpts?: Partial<EngineRunOpts>;
   /** Local checkout path (local modes only). */
   localRepoPath?: string;
+  /** Plan jobs inspect the checkout and return structured messages without
+   *  creating a branch, commit, push, or PR. */
+  jobKind?: 'code' | 'plan';
   /** Smoke mode: the workflow proves provision→branch→PR→teardown without
    *  invoking a real engine (no engine secrets needed on the runner). */
   smoke?: boolean;
@@ -65,6 +68,8 @@ export interface ProvisionResult {
     outputTokens: number | null;
     reasoningOutputTokens: number | null;
   } | null;
+  /** Agent messages returned in the workflow artifact (planner output lives here). */
+  messages?: string[];
   /** Engine result when the job ran in-process (local modes). */
   engineResult?: WorkerRunResult;
 }
@@ -185,6 +190,7 @@ export class GhActionsAdapter implements ProvisioningAdapter {
             title: spec.title.slice(0, 120),
             brief: spec.brief.slice(0, 60_000), // workflow_dispatch input cap safety
             marker,
+            job_kind: spec.jobKind || 'code',
             smoke: spec.smoke ? 'true' : 'false',
           },
         }),
@@ -261,6 +267,16 @@ export class GhActionsAdapter implements ProvisioningAdapter {
 
             if (typeof parsed?.pr_url === 'string' && parsed.pr_url) {
               out.prUrl = parsed.pr_url;
+            }
+            if (
+              Array.isArray(parsed?.messages) &&
+              parsed.messages.every((message: unknown) => typeof message === 'string')
+            ) {
+              out.messages = parsed.messages;
+            }
+            if (typeof parsed?.engine_exit === 'number' && parsed.engine_exit !== 0) {
+              out.ok = false;
+              out.detail = `engine exit ${parsed.engine_exit} — ${runUrl}`;
             }
 
             if (parsed?.usage === null) {

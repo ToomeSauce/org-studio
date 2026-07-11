@@ -154,6 +154,25 @@ describe('#1691 planner materialization', () => {
       .toContain('All chunks are in **Planning**');
   });
 
+  it('rejects same-count existing chunks when keys or dependency wiring drifted', async () => {
+    await expect(
+      persistPlannerChunks({
+        sourceTask: {
+          id: 'source', title: 'Planner', projectId: 'p', version: 'v',
+          roadmapItemId: 'i', assignee: 'Mikey',
+        },
+        output: validatePlannerOutput(VALID),
+        deps: {
+          findExisting: vi.fn(async () => [
+            { id: 'a', ticketNumber: 10, title: 'A', plannerChunkKey: 'wrong', blockedBy: [] },
+            { id: 'b', ticketNumber: 11, title: 'B', plannerChunkKey: 'implement', blockedBy: [] },
+          ]),
+          createChunk: vi.fn(), updateChunk: vi.fn(), rollbackChunk: vi.fn(),
+        },
+      }),
+    ).rejects.toThrow("missing chunk 'schema'");
+  });
+
   it('rolls back created chunks when a later write fails', async () => {
     const rollback = vi.fn(async () => undefined);
     let calls = 0;

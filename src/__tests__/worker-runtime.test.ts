@@ -524,6 +524,46 @@ describe('#1657: WorkerRuntime send() = enqueue semantics', () => {
     );
   });
 
+  it('#1691: remote plan jobs use artifact-only workflow output and never invoke local engine', async () => {
+    setEnv('WORKER_RUNTIME_ENABLED', 'true');
+    setEnv(
+      'WORKER_RUNTIME_CONFIG',
+      JSON.stringify([{ id: 'worker-codex', name: 'Worker', engine: 'codex', model: 'frontier-model', mode: 'gh-actions', frontier: true, lane: { taskTypes: ['feature'], projectIds: [] }, timeoutMs: 5000 }]),
+    );
+    setEnv('WORKER_REPO_SLUGS', JSON.stringify({ 'proj-oss': 'ToomeSauce/org-studio' }));
+    const output = {
+      chunks: [
+        { key: 'one', title: 'One', description: 'One.', doneWhen: 'One.', constraints: 'Scoped.', modelTier: 'standard', dependsOn: [] },
+        { key: 'two', title: 'Two', description: 'Two.', doneWhen: 'Two.', constraints: 'Scoped.', modelTier: 'complex', dependsOn: ['one'] },
+      ],
+    };
+    const { rt, deps } = makeRuntime({
+      fetchStore: vi.fn(async () => ({
+        ...makeStore({ jobKind: 'plan', taskType: 'feature', version: 'v1', roadmapItemId: 'i1' }),
+        projects: [{ id: 'proj-oss', sections: [{ versions: [{ version: 'v1', items: [{ id: 'i1', title: 'Item' }] }] }] }],
+      })),
+      runRemote: vi.fn(async () => ({
+        ok: true,
+        mode: 'gh-actions',
+        detail: 'run success',
+        messages: [`ORG_STUDIO_PLAN_JSON_START\n${JSON.stringify(output)}\nORG_STUDIO_PLAN_JSON_END`],
+      })),
+      materializePlan: vi.fn(async () => [
+        { id: 'c1', ticketNumber: 1700, title: 'One', plannerChunkKey: 'one', blockedBy: [] },
+        { id: 'c2', ticketNumber: 1701, title: 'Two', plannerChunkKey: 'two', blockedBy: [1700] },
+      ]),
+    });
+    await rt.send('worker-codex', 'brief', { idempotencyKey: 'remote-plan' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(deps.runRemote).toHaveBeenCalledWith(
+      expect.objectContaining({ jobKind: 'plan', repo: 'ToomeSauce/org-studio' }),
+      expect.anything(),
+    );
+    expect(deps.runEngine).not.toHaveBeenCalled();
+    expect(deps.materializePlan).toHaveBeenCalled();
+    expect(deps.updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'done' }));
+  });
+
   it('#1691: malformed plan output posts error context and does not materialize', async () => {
     setEnv('WORKER_RUNTIME_ENABLED', 'true');
     setEnv(

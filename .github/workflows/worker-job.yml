@@ -45,6 +45,12 @@ on:
         description: "Dispatch correlation marker"
         required: true
         type: string
+      job_kind:
+        description: "code = branch/PR output; plan = read-only JSON artifact"
+        required: false
+        type: choice
+        options: [code, plan]
+        default: code
       smoke:
         description: "true = prove provision→branch→PR→teardown without an engine"
         required: false
@@ -84,6 +90,7 @@ jobs:
         with:
           repository: ${{ inputs.target_repo }}
           token: ${{ github.token }}
+          persist-credentials: ${{ inputs.job_kind != 'plan' }}
           fetch-depth: 0
 
       - name: Configure git identity
@@ -92,6 +99,7 @@ jobs:
           git config user.email "worker@toomesauce.com"
 
       - name: Create work branch
+        if: ${{ inputs.job_kind != 'plan' }}
         id: branch
         run: |
           BRANCH="worker/${{ inputs.ticket }}-${{ github.run_id }}"
@@ -99,7 +107,7 @@ jobs:
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
 
       - name: Run job (smoke mode)
-        if: ${{ inputs.smoke == 'true' }}
+        if: ${{ inputs.smoke == 'true' && inputs.job_kind != 'plan' }}
         run: |
           # Smoke proof: a deterministic, obviously-safe change that exercises
           # the full provision→commit→push→PR path without any engine/model.
@@ -118,6 +126,7 @@ jobs:
         if: ${{ inputs.smoke != 'true' }}
         env:
           BRIEF: ${{ inputs.brief }}
+          JOB_KIND: ${{ inputs.job_kind }}
           # Engine credentials come from repo secrets; GitHub masks them in
           # logs. Absent secrets fail this step cleanly.
           FOUNDRY_API_KEY: ${{ secrets.WORKER_FOUNDRY_API_KEY }}
@@ -144,28 +153,48 @@ jobs:
 
           printf '%s' "$BRIEF" > /tmp/brief.txt
 
+          # Planner checkout is made OS-read-only. core.fileMode=false keeps
+          # chmod noise out of status; permissions are restored only so the
+          # result artifact can be written after the engine exits.
+          if [ "$JOB_KIND" = "plan" ]; then
+            git config core.fileMode false
+            chmod -R a-w .
+          fi
+
           set +e
-          # Sandbox note: codex's bwrap/landlock sandbox cannot initialize on
-          # Actions runners (no unprivileged userns loopback: 'bwrap: loopback:
-          # Failed RTM_NEWADDR'). The EPHEMERAL RUNNER is the isolation layer
-          # here (W-1 finding; design doc security ladder) — run full-access.
+          # Codex's own sandbox cannot initialize on Actions runners. Code
+          # jobs rely on the ephemeral runner; planner jobs additionally make
+          # the checkout read-only and hard-fail if anything changes.
           codex exec --json --skip-git-repo-check --sandbox danger-full-access "$(cat /tmp/brief.txt)" | tee /tmp/engine-events.jsonl
           ENGINE_EXIT=${PIPESTATUS[0]}
           set -e
           echo "$ENGINE_EXIT" > /tmp/engine-exit-code.txt
-          if [ "$ENGINE_EXIT" -ne 0 ]; then
-            echo "::warning::codex exited with code $ENGINE_EXIT; continuing to branch/PR/artifact steps"
+
+          if [ "$JOB_KIND" = "plan" ]; then
+            chmod -R u+w .
+            if [ -n "$(git status --porcelain)" ]; then
+              echo "::error::planner changed the checkout; discarding changes and failing the run"
+              git reset --hard HEAD
+              git clean -fd
+              ENGINE_EXIT=86
+              echo "$ENGINE_EXIT" > /tmp/engine-exit-code.txt
+            fi
+          else
+            # Structurally unreachable for planners: only code jobs may commit.
+            git add -A ':!/tmp' || true
+            git diff --cached --quiet || git commit -m "worker(#${{ inputs.ticket }}): engine output (${{ inputs.marker }})"
           fi
 
-          # Commit whatever the engine changed (it is instructed to commit
-          # itself; this is the safety net for uncommitted work).
-          git add -A ':!/tmp' || true
-          git diff --cached --quiet || git commit -m "worker(#${{ inputs.ticket }}): engine output (${{ inputs.marker }})"
+          if [ "$ENGINE_EXIT" -ne 0 ]; then
+            echo "::warning::codex exited with code $ENGINE_EXIT; result artifact will carry the failure"
+          fi
 
       - name: Push branch
+        if: ${{ inputs.job_kind != 'plan' }}
         run: git push origin "${{ steps.branch.outputs.branch }}"
 
       - name: Open PR (never merge)
+        if: ${{ inputs.job_kind != 'plan' }}
         id: open_pr
         env:
           GH_TOKEN: ${{ github.token }}
@@ -199,6 +228,7 @@ jobs:
           from pathlib import Path
 
           usage = None
+          messages = []
           events_path = Path('/tmp/engine-events.jsonl')
           if events_path.exists():
             for line in events_path.read_text(encoding='utf-8', errors='ignore').splitlines():
@@ -206,6 +236,10 @@ jobs:
                 event = json.loads(line)
               except Exception:
                 continue
+              if event.get('type') == 'item.completed':
+                item = event.get('item') or {}
+                if item.get('type') == 'agent_message' and isinstance(item.get('text'), str):
+                  messages.append(item['text'])
               if event.get('type') == 'turn.completed':
                 raw = event.get('usage') or {}
                 usage = {
@@ -229,6 +263,7 @@ jobs:
           result = {
             'pr_url': pr_url,
             'usage': usage,
+            'messages': messages,
             'smoke': os.environ.get('SMOKE') == 'true',
             'engine_exit': engine_exit,
           }

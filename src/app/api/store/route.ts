@@ -48,6 +48,9 @@ import { recordInternalCallFailure } from '@/lib/dispatch-ledger';
 import { isTaskHeldByHumanStop } from '@/lib/stop-window';
 
 const SCHEDULER_URL = 'http://localhost:4501/api/scheduler';
+// Planner runs are already single-flight per worker; this second guard closes
+// the API-level read→create race inside one dashboard process.
+const plannerMaterializationsInFlight = new Set<string>();
 
 /**
  * #1506 — strip server-side audit metadata from a comment before returning
@@ -699,6 +702,19 @@ export async function POST(req: NextRequest) {
             { status: 400 },
           );
         }
+        const sourceProject = store.projects.find((project: any) => project.id === sourceTask.projectId);
+        const sourceVersion = (sourceProject?.sections || [])
+          .flatMap((section: any) => section.versions || [])
+          .find((version: any) => version.version === sourceTask.version);
+        const sourceRoadmapItem = (sourceVersion?.items || []).find(
+          (item: any) => item.id === sourceTask.roadmapItemId,
+        );
+        if (!sourceRoadmapItem) {
+          return NextResponse.json(
+            { error: 'Planner source task roadmap link is stale or invalid' },
+            { status: 409 },
+          );
+        }
 
         let output: PlannerOutput;
         try {
@@ -710,6 +726,14 @@ export async function POST(req: NextRequest) {
           );
         }
 
+        const materializationKey = `${workspace.id}:${sourceTask.id}`;
+        if (plannerMaterializationsInFlight.has(materializationKey)) {
+          return NextResponse.json(
+            { error: 'Planner materialization is already in progress for this source task' },
+            { status: 409 },
+          );
+        }
+        plannerMaterializationsInFlight.add(materializationKey);
         const provider = getStoreProvider(workspace.id);
         const assignee =
           (typeof payload.assignee === 'string' && payload.assignee.trim()) ||
@@ -732,6 +756,7 @@ export async function POST(req: NextRequest) {
                     ticketNumber: task.ticketNumber,
                     title: task.title,
                     plannerChunkKey: task.plannerChunkKey,
+                    modelTier: task.modelTier,
                     blockedBy: Array.isArray(task.blockedBy) ? task.blockedBy : [],
                   }));
               },
@@ -769,6 +794,7 @@ export async function POST(req: NextRequest) {
                   ticketNumber: task.ticketNumber,
                   title: task.title,
                   plannerChunkKey: task.plannerChunkKey,
+                  modelTier: task.modelTier,
                   blockedBy: task.blockedBy,
                 };
               },
@@ -786,6 +812,8 @@ export async function POST(req: NextRequest) {
             { error: `Planner materialization failed: ${error instanceof Error ? error.message : String(error)}` },
             { status: 409 },
           );
+        } finally {
+          plannerMaterializationsInFlight.delete(materializationKey);
         }
       }
 

@@ -66,6 +66,7 @@ export interface CreatedPlannerChunk {
   ticketNumber: number;
   title: string;
   plannerChunkKey: string;
+  modelTier?: ModelTier;
   blockedBy: number[];
 }
 
@@ -280,6 +281,25 @@ export async function persistPlannerChunks(args: {
       throw new Error(
         `planner output already partially materialized (${existing.length}/${args.output.chunks.length} chunks); refusing duplicate writes`,
       );
+    }
+    const existingByKey = new Map(existing.map((task) => [task.plannerChunkKey, task]));
+    const ticketByKey = new Map(existing.map((task) => [task.plannerChunkKey, task.ticketNumber]));
+    for (const chunk of args.output.chunks) {
+      const task = existingByKey.get(chunk.key);
+      if (!task) {
+        throw new Error(`existing planner materialization is missing chunk '${chunk.key}'`);
+      }
+      if (task.modelTier !== undefined && task.modelTier !== chunk.modelTier) {
+        throw new Error(`existing planner chunk '${chunk.key}' has drifted modelTier`);
+      }
+      const expectedBlockedBy = chunk.dependsOn.map((key) => ticketByKey.get(key));
+      if (
+        expectedBlockedBy.some((ticket) => ticket === undefined) ||
+        JSON.stringify([...task.blockedBy].sort((a, b) => a - b)) !==
+          JSON.stringify((expectedBlockedBy as number[]).sort((a, b) => a - b))
+      ) {
+        throw new Error(`existing planner chunk '${chunk.key}' has drifted dependency wiring`);
+      }
     }
     return existing;
   }
