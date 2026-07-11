@@ -1,0 +1,1 @@
+{"id":"worker-openai","runtime":"gh-actions","engine":"openai-compat","model":"gpt-4.1-mini","mode":"gh-actions","baseUrl":"https://api.openai.com/v1","apiKeyEnv":"WORKER_OPENAI_COMPAT_API_KEY","capabilities":["code"],"verificationCommands":["node --version"]}
