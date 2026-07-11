@@ -193,10 +193,14 @@ export function extractMarkedUnifiedDiff(
     };
   }
 
-  const diff = match[1].trim();
-  if (!diff) {
+  const diffBody = match[1].trim();
+  if (!diffBody) {
     return { ok: false, error: "marker block is empty" };
   }
+  // `git apply` requires a complete final patch line. The model response is
+  // marker-wrapped, so normalize the extracted body to exactly one trailing
+  // newline instead of trimming it away (#1693 live-run regression).
+  const diff = `${diffBody}\n`;
   if (
     !/^diff --git\s/m.test(diff) &&
     (!/^---\s/m.test(diff) || !/^\+\+\+\s/m.test(diff))
