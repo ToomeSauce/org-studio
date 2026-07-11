@@ -1,3 +1,7 @@
+import { execFileSync } from "child_process";
+import { mkdtempSync, readFileSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   OPENAI_COMPAT_DIFF_END,
@@ -76,6 +80,46 @@ afterEach(() => {
 });
 
 describe("#1693: OpenAI-compatible worker engine", () => {
+  it("preserves the terminal patch newline required by real git apply", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openai-compat-real-git-"));
+    try {
+      execFileSync("git", ["init", "-q"], { cwd });
+      const content = [
+        OPENAI_COMPAT_DIFF_START,
+        "diff --git a/live-proof.txt b/live-proof.txt",
+        "new file mode 100644",
+        "--- /dev/null",
+        "+++ b/live-proof.txt",
+        "@@ -0,0 +1 @@",
+        "+ok",
+        OPENAI_COMPAT_DIFF_END,
+      ].join("\n");
+      const fetchImpl = vi.fn(async () =>
+        makeResponse({ choices: [{ message: { content } }], usage: {} }),
+      );
+
+      const result = await runOpenAiCompatEngine(
+        {
+          cwd,
+          brief: "Create the live proof fixture",
+          model: "gpt-4.1-mini",
+          timeoutMs: 30_000,
+          baseUrl: "https://models.example/v1",
+          verificationCommands: [],
+        },
+        { fetchImpl: fetchImpl as any },
+      );
+
+      expect(result.ok).toBe(true);
+      expect(result.fileChanges).toEqual([
+        { path: "live-proof.txt", kind: "add" },
+      ]);
+      expect(readFileSync(join(cwd, "live-proof.txt"), "utf8")).toBe("ok\n");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("makes one chat-completions request, applies patch, and runs configured verification commands", async () => {
     process.env.TEST_OPENAI_KEY = "shh";
     const fetchImpl = vi.fn(async (_url: string, _init: any) =>
