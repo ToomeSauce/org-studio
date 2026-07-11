@@ -91,6 +91,8 @@ import { searchMemory } from '@/lib/embedding/search';
 import { enrichStewardNudge, enrichProposePrompt, type MemoryHit } from '@/lib/embedding/precedent';
 // #1633 — push-based dispatch policy (enable/runNow/sync no longer create heavy crons).
 import { planEnable, planRunNow, planSync } from '@/lib/scheduler-dispatch-policy';
+import { getWorkerConfigs } from '@/lib/workers/config';
+import { diagnosticTier, persistTierRoute } from '@/lib/workers/route-tier';
 
 // Minimum seconds between event-driven triggers for the same agent (debounce)
 const TRIGGER_COOLDOWN_MS = 60_000; // 1 minute
@@ -994,9 +996,10 @@ async function fireOneShot(
     .map((t: any) => `${t.ticketNumber ?? '?'}:${t.status}`)
     .slice(0, 20)
     .join(',');
+  const tier = diagnosticTier(store.tasks || [], [nameLower, agentIdLower]);
   console.info(
     `[dispatch #1515 src=${source}] agent=${loop.agentId} ` +
-      `readMs=${readMs} tickets=[${agentTicketStatuses}]`,
+      `readMs=${readMs} tier=${tier ?? 'none'} tickets=[${agentTicketStatuses}]`,
   );
 
   // #1641 — ledger writes are fire-and-forget; capture the shared fields
@@ -1407,7 +1410,7 @@ export async function POST(request: NextRequest) {
         // that path is a separate followup (see #1534). Slimming the
         // pre-dispatch decision path is the win here.
         const reader = createMemoizedStoreReader();
-        const store = await reader.readSlim('trigger-top');
+        let store = await reader.readSlim('trigger-top');
         // #1184: classify the trigger source so the dispatch-health view can
         // tell addTask hooks from sweeps from manual presses. Caller is
         // responsible for tagging; default to 'manual' (safe assumption —
@@ -1419,7 +1422,69 @@ export async function POST(request: NextRequest) {
             ? body.triggerSource
             : 'manual'
         ) as TriggerSource;
-        const agentName = getAgentName(store, agentId);
+        let dispatchAgentId = agentId;
+        let dispatchAgentName = getAgentName(store, agentId);
+
+        // #1692 — resolve the virtual generic `worker` assignee before any
+        // per-agent loop/single-flight/lane gates. Routing reads FULL generic
+        // task rows because modelTier lives in JSONB and is intentionally not
+        // part of the scheduler's slim snapshot. Only the CAS winner may
+        // dispatch the selected worker; success refreshes the snapshot so the
+        // downstream actionable-work gate sees the concrete assignee.
+        if (agentId.toLowerCase() === 'worker') {
+          try {
+            const provider = getStoreProviderAllWorkspaces();
+            const genericTasks =
+              typeof provider.getTasksForAgent === 'function'
+                ? await provider.getTasksForAgent('worker', 'worker')
+                : (await provider.read()).tasks.filter(
+                    (task: any) => (task.assignee || '').toLowerCase() === 'worker',
+                  );
+            const tierTask = genericTasks
+              .filter(
+                (task: any) =>
+                  task.status === 'backlog' &&
+                  !task.isArchived &&
+                  isTaskAnyDispatchEligible(store as any, task),
+              )
+              .sort(
+                (a: any, b: any) =>
+                  (a.sortOrder ?? Number.MAX_SAFE_INTEGER) -
+                    (b.sortOrder ?? Number.MAX_SAFE_INTEGER) ||
+                  (a.createdAt ?? 0) - (b.createdAt ?? 0),
+              )[0];
+
+            if (tierTask) {
+              const route = await persistTierRoute(tierTask, getWorkerConfigs(), {
+                hasEnabledLoop: (workerId) => !!getLoopByAgent(store, workerId),
+                compareAndSetAssignee: (taskId, expected, next) =>
+                  provider.compareAndSetTaskAssignee(taskId, expected, next),
+                refresh: async () => {
+                  reader.refresh();
+                  return reader.readSlim('trigger-post-tier-route');
+                },
+              });
+              console.info(
+                `[dispatch #1692] task=${tierTask.ticketNumber ?? tierTask.id} ` +
+                  `tier=${route.tier ?? 'none'} route=${route.reason} ` +
+                  `worker=${route.workerId ?? 'current'}`,
+              );
+              if (route.reason === 'routed' && route.workerId && route.snapshot) {
+                store = route.snapshot;
+                dispatchAgentId = route.workerId;
+                dispatchAgentName = getAgentName(store, route.workerId);
+              }
+            }
+          } catch (error) {
+            // The routing layer is advisory. Any read/config/runtime error
+            // preserves the pre-#1692 assignment and dispatch behavior.
+            console.warn(
+              `[dispatch #1692] routing failed open: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          }
+        }
 
         // #1184: helper — record the attempt then return the response.
         // Computes diagnosis lazily so successful paths skip the cost.
@@ -1431,9 +1496,9 @@ export async function POST(request: NextRequest) {
           },
         ) => {
           try {
-            const diag = diagnoseAgentBacklog(store, agentId, agentName);
+            const diag = diagnoseAgentBacklog(store, dispatchAgentId, dispatchAgentName);
             await recordDispatchAttempt({
-              agentId,
+              agentId: dispatchAgentId,
               triggerSource,
               outcome: opts.outcome,
               reason: opts.reason,
@@ -1449,7 +1514,7 @@ export async function POST(request: NextRequest) {
           return NextResponse.json(response);
         };
 
-        const loop = getLoopByAgent(store, agentId);
+        const loop = getLoopByAgent(store, dispatchAgentId);
         if (!loop) {
           return recordAndReturn(
             { ok: true, skipped: true, reason: 'No enabled loop for agent' },
@@ -1467,9 +1532,10 @@ export async function POST(request: NextRequest) {
         //       in server.mjs hits the /api/runtimes endpoint, which on
         //       agent re-discovery clears loopDisabledAt automatically.
         //       (Implemented below in this same slice.)
-                const teammates = store.settings?.teammates || [];
+        const teammates = store.settings?.teammates || [];
         const teammate = teammates.find(
-          (tm: any) => (tm?.agentId || '').toLowerCase() === agentId.toLowerCase(),
+          (tm: any) =>
+            (tm?.agentId || '').toLowerCase() === dispatchAgentId.toLowerCase(),
         );
         // #1352 slice 5: routed through claim-contract lib so the test suite
         // and the route agree on what 'blocked' means.
@@ -1487,7 +1553,7 @@ export async function POST(request: NextRequest) {
 
         // Cooldown — don't fire more than once per minute per agent
         const now = Date.now();
-        const lastTrigger = lastTriggerByAgent[agentId] || 0;
+        const lastTrigger = lastTriggerByAgent[dispatchAgentId] || 0;
         if (now - lastTrigger < TRIGGER_COOLDOWN_MS) {
           return recordAndReturn(
             { ok: true, skipped: true, reason: 'Cooldown — triggered recently' },
@@ -1503,7 +1569,7 @@ export async function POST(request: NextRequest) {
         checkBudgetAlerts((store.projects || []) as any[], spendSnapshot).catch((e) =>
           console.warn('[budget-alerts] non-fatal:', e?.message || e),
         );
-        if (!hasActionableWork(store, agentId, spendSnapshot)) {
+        if (!hasActionableWork(store, dispatchAgentId, spendSnapshot)) {
           return recordAndReturn(
             { ok: true, skipped: true, reason: 'No actionable work' },
             { outcome: 'skipped', reason: 'no-actionable-work' },
@@ -1540,20 +1606,27 @@ export async function POST(request: NextRequest) {
         // sees the post-sweep state. This is the original #1515 contract.
         reader.refresh();
         const freshStore = await reader.readSlim('trigger-post-sweep');
-        const { stalled, incremented } = await detectAndIncrementLoops(freshStore, agentId);
+        const { stalled, incremented } = await detectAndIncrementLoops(
+          freshStore,
+          dispatchAgentId,
+        );
 
         if (stalled.length > 0) {
           // Pause stalled tasks and send alerts instead of firing another loop
           // #1526: detectAndIncrementLoops wrote loopCount updates above;
           // refresh before pauseStalledTasks reads.
           reader.refresh();
-          await pauseStalledTasks(await reader.readSlim('trigger-pre-pause'), agentId, stalled);
+          await pauseStalledTasks(
+            await reader.readSlim('trigger-pre-pause'),
+            dispatchAgentId,
+            stalled,
+          );
           
           // Check if there's still non-paused actionable work
           // #1526: pauseStalledTasks wrote loopPausedAt; refresh again.
           reader.refresh();
           const postPauseStore = await reader.readSlim('trigger-post-pause');
-          if (!hasActionableWork(postPauseStore, agentId)) {
+          if (!hasActionableWork(postPauseStore, dispatchAgentId)) {
             return recordAndReturn(
               { 
                 ok: true, skipped: true, 
@@ -1570,8 +1643,8 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        lastTriggerByAgent[agentId] = now;
-        recordTrigger(agentId, now);
+        lastTriggerByAgent[dispatchAgentId] = now;
+        recordTrigger(dispatchAgentId, now);
 
         // Dispatch task to agent's main persistent session.
         // fireOneShot returns the sessionKey iff it actually enqueued to the

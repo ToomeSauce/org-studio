@@ -44,6 +44,7 @@ describe('#1657: worker config gating', () => {
     expect(ws).toHaveLength(1);
     expect(ws[0].id).toBe('worker-codex');
     expect(ws[0].lane.taskTypes).toEqual(['chore', 'bug']);
+    expect(ws[0].tiers).toEqual(['trivial', 'standard', 'complex']);
   });
 
   it('invalid JSON config falls back to defaults', () => {
@@ -66,6 +67,23 @@ describe('#1657: worker config gating', () => {
     expect(ws[0].id).toBe('worker-x');
     expect(ws[0].lane.taskTypes).toEqual(['bug']); // lowercased
     expect(ws[0].lane.projectIds).toEqual(['p1']);
+    expect(ws[0].tiers).toEqual(['trivial', 'standard', 'complex']);
+  });
+
+  it('normalizes explicit tier allowlists and drops invalid tiers', () => {
+    setEnv('WORKER_RUNTIME_ENABLED', 'true');
+    setEnv(
+      'WORKER_RUNTIME_CONFIG',
+      JSON.stringify([
+        {
+          id: 'worker-cheap',
+          model: 'm1',
+          tiers: ['Trivial', 'standard', 'invalid'],
+          lane: { taskTypes: [], projectIds: [] },
+        },
+      ]),
+    );
+    expect(getWorkerConfigs()[0].tiers).toEqual(['trivial', 'standard']);
   });
 
   it('#1693: parses openai-compat config without inventing verification commands', () => {

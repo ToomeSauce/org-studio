@@ -193,6 +193,15 @@ describe('triggerAgentLoopService (#1645)', () => {
     expect(JSON.parse(opts.body)).toEqual({ action: 'trigger', agentId: 'mikey' });
   });
 
+  it('routes the virtual generic worker assignee to scheduler resolution', async () => {
+    const { triggerAgentLoopService } = await loadService();
+    triggerAgentLoopService('worker', makeStore());
+    await flush();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, opts] = fetchMock.mock.calls[0];
+    expect(JSON.parse(opts.body)).toEqual({ action: 'trigger', agentId: 'worker' });
+  });
+
   it('no-ops when the assignee has no teammate mapping', async () => {
     const { triggerAgentLoopService } = await loadService();
     triggerAgentLoopService('Nobody', makeStore());

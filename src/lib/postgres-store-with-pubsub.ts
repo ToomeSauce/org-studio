@@ -78,6 +78,22 @@ export class PostgresStoreProviderWithPubSub implements StoreProvider {
     return result;
   }
 
+  async compareAndSetTaskAssignee(
+    taskId: string,
+    expectedAssignee: string,
+    nextAssignee: string,
+  ): Promise<boolean> {
+    const updated = await this.baseProvider.compareAndSetTaskAssignee(
+      taskId,
+      expectedAssignee,
+      nextAssignee,
+    );
+    if (updated && this.pubsub) {
+      await this.pubsub.notifyChange('tasks', 'update', taskId);
+    }
+    return updated;
+  }
+
   async deleteTask(taskId: string): Promise<void> {
     const result = await this.baseProvider.deleteTask(taskId);
     if (this.pubsub) {
