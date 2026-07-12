@@ -177,6 +177,13 @@ function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function countStandaloneMarkerLines(text: string, marker: string): number {
+  return text
+    .trim()
+    .split(/\r?\n/)
+    .filter((line) => line === marker).length;
+}
+
 const REFERENCED_FILE_CONTEXT_MAX_FILES = 3;
 const REFERENCED_FILE_CONTEXT_MAX_BYTES = 24 * 1024;
 const REFERENCED_FILE_MAX_SOURCE_BYTES = 2 * 1024 * 1024;
@@ -464,8 +471,8 @@ function extractMarkerWrappedBody(
   markerEnd: string,
 ): { ok: true; body: string } | { ok: false; error: string } {
   const trimmed = text.trim();
-  const startCount = trimmed.split(markerStart).length - 1;
-  const endCount = trimmed.split(markerEnd).length - 1;
+  const startCount = countStandaloneMarkerLines(trimmed, markerStart);
+  const endCount = countStandaloneMarkerLines(trimmed, markerEnd);
   if (startCount !== 1 || endCount !== 1) {
     return {
       ok: false,
@@ -1133,12 +1140,14 @@ export async function runOpenAiCompatEngine(
     });
   }
 
+  // Wrapper markers are standalone lines. Marker literals inside JSON strings
+  // or diff payload lines are file content, not a second response contract.
   const hasExactMarkers =
-    text.includes(OPENAI_COMPAT_EXACT_EDITS_START) ||
-    text.includes(OPENAI_COMPAT_EXACT_EDITS_END);
+    countStandaloneMarkerLines(text, OPENAI_COMPAT_EXACT_EDITS_START) > 0 ||
+    countStandaloneMarkerLines(text, OPENAI_COMPAT_EXACT_EDITS_END) > 0;
   const hasDiffMarkers =
-    text.includes(OPENAI_COMPAT_DIFF_START) ||
-    text.includes(OPENAI_COMPAT_DIFF_END);
+    countStandaloneMarkerLines(text, OPENAI_COMPAT_DIFF_START) > 0 ||
+    countStandaloneMarkerLines(text, OPENAI_COMPAT_DIFF_END) > 0;
   if (hasExactMarkers && hasDiffMarkers) {
     errors.push(
       "response contract violation: response must contain exactly one marker block (exact-edits OR unified diff), not both",

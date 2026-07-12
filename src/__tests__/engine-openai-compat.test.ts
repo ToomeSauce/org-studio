@@ -383,6 +383,85 @@ describe("#1693: OpenAI-compatible worker engine", () => {
     }
   });
 
+  it("treats unified-diff marker literals inside exact-edit content as payload", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openai-compat-exact-marker-payload-"));
+    try {
+      initCommittedRepo(cwd, "README.md", "old\n");
+      const replacement = `${OPENAI_COMPAT_DIFF_START}\n${OPENAI_COMPAT_DIFF_END}\n`;
+      const fetchImpl = vi.fn(async () =>
+        makeResponse({
+          choices: [
+            {
+              message: {
+                content: makeExactEdits({
+                  path: "README.md",
+                  oldText: "old\n",
+                  newText: replacement,
+                }),
+              },
+            },
+          ],
+          usage: {},
+        }),
+      );
+
+      const result = await runOpenAiCompatEngine(
+        {
+          cwd,
+          brief: "Replace README.md with documented marker literals",
+          model: "gpt-4.1-mini",
+          timeoutMs: 30_000,
+          verificationCommands: [],
+        },
+        { fetchImpl: fetchImpl as any },
+      );
+
+      expect(result.ok).toBe(true);
+      expect(readFileSync(join(cwd, "README.md"), "utf8")).toBe(replacement);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("treats exact-edit marker literals inside unified-diff lines as payload", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openai-compat-diff-marker-payload-"));
+    try {
+      initCommittedRepo(cwd, "README.md", "old\n");
+      const content = [
+        OPENAI_COMPAT_DIFF_START,
+        "diff --git a/README.md b/README.md",
+        "--- a/README.md",
+        "+++ b/README.md",
+        "@@ -1 +1,2 @@",
+        "-old",
+        `+${OPENAI_COMPAT_EXACT_EDITS_START}`,
+        `+${OPENAI_COMPAT_EXACT_EDITS_END}`,
+        OPENAI_COMPAT_DIFF_END,
+      ].join("\n");
+      const fetchImpl = vi.fn(async () =>
+        makeResponse({ choices: [{ message: { content } }], usage: {} }),
+      );
+
+      const result = await runOpenAiCompatEngine(
+        {
+          cwd,
+          brief: "Replace README.md with documented marker literals",
+          model: "gpt-4.1-mini",
+          timeoutMs: 30_000,
+          verificationCommands: [],
+        },
+        { fetchImpl: fetchImpl as any },
+      );
+
+      expect(result.ok).toBe(true);
+      expect(readFileSync(join(cwd, "README.md"), "utf8")).toBe(
+        `${OPENAI_COMPAT_EXACT_EDITS_START}\n${OPENAI_COMPAT_EXACT_EDITS_END}\n`,
+      );
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("rejects exact edits when oldText is not unique and leaves file untouched", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "openai-compat-exact-oldtext-"));
     try {
