@@ -609,6 +609,8 @@ If `ORG_STUDIO_API_KEY` is set, all write (POST/PUT) requests must include eithe
 
 When not set, the API is open (suitable for local development).
 
+---
+
 ## Audit a worker pipeline receipt
 
 Fetch one workspace-scoped ticket receipt and use `jq` to inspect its planner provenance, model/token/cost attribution, and extracted worker-run/PR links without manual joins:
