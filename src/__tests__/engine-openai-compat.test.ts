@@ -1,5 +1,12 @@
 import { execFileSync } from "child_process";
-import { mkdtempSync, readFileSync, rmSync } from "fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -115,6 +122,182 @@ describe("#1693: OpenAI-compatible worker engine", () => {
         { path: "live-proof.txt", kind: "add" },
       ]);
       expect(readFileSync(join(cwd, "live-proof.txt"), "utf8")).toBe("ok\n");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("appends bounded head/tail context for referenced existing files in the single request", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openai-compat-context-"));
+    try {
+      mkdirSync(join(cwd, "docs"), { recursive: true });
+      const longBody = [
+        "HEAD_KEEP",
+        ...Array.from({ length: 5_000 }, (_, idx) => `line-${idx}`),
+        "MIDDLE_DROP",
+        ...Array.from({ length: 5_000 }, (_, idx) => `tail-line-${idx}`),
+        "TAIL_KEEP",
+      ].join("\n");
+      writeFileSync(join(cwd, "docs/long-context.md"), `${longBody}\n`, "utf8");
+
+      const fetchImpl = vi.fn(async (_url: string, _init: RequestInit) =>
+        makeResponse({
+          choices: [{ message: { content: makeDiff("README.md") } }],
+          usage: {},
+        }),
+      );
+      const runCommand = successRunner();
+
+      const result = await runOpenAiCompatEngine(
+        {
+          cwd,
+          brief: "Update docs/long-context.md with a tiny fix",
+          model: "gpt-4.1-mini",
+          timeoutMs: 30_000,
+          verificationCommands: [],
+        },
+        { fetchImpl: fetchImpl as any, runCommand },
+      );
+
+      expect(result.ok).toBe(true);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      const [, init] = fetchImpl.mock.calls[0];
+      const body = JSON.parse(String(init.body));
+      const userMessage = body.messages.find((m: any) => m.role === "user");
+      expect(userMessage.content).toContain(
+        "[Referenced existing file context; bounded for cheap worker]",
+      );
+      expect(userMessage.content).toContain("--- BEGIN FILE: docs/long-context.md ---");
+      expect(userMessage.content).toContain("HEAD_KEEP");
+      expect(userMessage.content).toContain("TAIL_KEEP");
+      expect(userMessage.content).toContain(
+        "... [TRUNCATED: showing head/tail excerpt] ...",
+      );
+      expect(userMessage.content).not.toContain("MIDDLE_DROP");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("excludes traversal, hidden, secret-like, and symlink references from appended context", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openai-compat-path-safety-"));
+    const outside = mkdtempSync(join(tmpdir(), "openai-compat-outside-"));
+    try {
+      mkdirSync(join(cwd, "docs"), { recursive: true });
+      writeFileSync(join(cwd, "docs/allowed.md"), "ok\n", "utf8");
+      writeFileSync(join(cwd, "notes.secret.txt"), "nope\n", "utf8");
+      writeFileSync(join(cwd, ".env"), "TOKEN=1\n", "utf8");
+      writeFileSync(join(outside, "outside.md"), "outside\n", "utf8");
+      symlinkSync(join(cwd, "docs/allowed.md"), join(cwd, "docs/link.md"));
+
+      const fetchImpl = vi.fn(async (_url: string, _init: RequestInit) =>
+        makeResponse({
+          choices: [{ message: { content: makeDiff("README.md") } }],
+          usage: {},
+        }),
+      );
+
+      const result = await runOpenAiCompatEngine(
+        {
+          cwd,
+          brief:
+            "Only touch docs/allowed.md, docs/link.md, .env, notes.secret.txt, ../openai-compat-outside-/outside.md",
+          model: "gpt-4.1-mini",
+          timeoutMs: 30_000,
+          verificationCommands: [],
+        },
+        { fetchImpl: fetchImpl as any, runCommand: successRunner() },
+      );
+
+      expect(result.ok).toBe(true);
+      const [, init] = fetchImpl.mock.calls[0];
+      const body = JSON.parse(String(init.body));
+      const userMessage = body.messages.find((m: any) => m.role === "user");
+      const context = String(userMessage.content).split(
+        "[Referenced existing file context; bounded for cheap worker]",
+      )[1];
+      expect(context).toContain("--- BEGIN FILE: docs/allowed.md ---");
+      expect(context).not.toContain("docs/link.md");
+      expect(context).not.toContain(".env");
+      expect(context).not.toContain("notes.secret.txt");
+      expect(context).not.toContain("outside.md");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("repairs recognizable hunk-count mismatches before git apply --check", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openai-compat-hunk-repair-"));
+    try {
+      execFileSync("git", ["init", "-q"], { cwd });
+      writeFileSync(join(cwd, "README.md"), "old\n", "utf8");
+      const content = [
+        OPENAI_COMPAT_DIFF_START,
+        "diff --git a/README.md b/README.md",
+        "--- a/README.md",
+        "+++ b/README.md",
+        "@@ -1,99 +1,99 @@",
+        "-old",
+        "+new",
+        OPENAI_COMPAT_DIFF_END,
+      ].join("\n");
+      const fetchImpl = vi.fn(async () =>
+        makeResponse({ choices: [{ message: { content } }], usage: {} }),
+      );
+
+      const result = await runOpenAiCompatEngine(
+        {
+          cwd,
+          brief: "Fix README.md",
+          model: "gpt-4.1-mini",
+          timeoutMs: 30_000,
+          verificationCommands: [],
+        },
+        { fetchImpl: fetchImpl as any },
+      );
+
+      expect(result.ok).toBe(true);
+      expect(readFileSync(join(cwd, "README.md"), "utf8")).toBe("new\n");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when hunk structure is ambiguous/invalid", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openai-compat-hunk-invalid-"));
+    try {
+      execFileSync("git", ["init", "-q"], { cwd });
+      writeFileSync(join(cwd, "README.md"), "old\n", "utf8");
+      const content = [
+        OPENAI_COMPAT_DIFF_START,
+        "diff --git a/README.md b/README.md",
+        "--- a/README.md",
+        "+++ b/README.md",
+        "@@ -1,99 +1,99 @@",
+        "-old",
+        "BROKEN-LINE-WITHOUT-DIFF-PREFIX",
+        "+new",
+        OPENAI_COMPAT_DIFF_END,
+      ].join("\n");
+      const fetchImpl = vi.fn(async () =>
+        makeResponse({ choices: [{ message: { content } }], usage: {} }),
+      );
+
+      const result = await runOpenAiCompatEngine(
+        {
+          cwd,
+          brief: "Fix README.md",
+          model: "gpt-4.1-mini",
+          timeoutMs: 30_000,
+          verificationCommands: [],
+        },
+        { fetchImpl: fetchImpl as any },
+      );
+
+      expect(result.ok).toBe(false);
+      expect(result.errors.join("\n")).toContain("git apply --check failed");
+      expect(readFileSync(join(cwd, "README.md"), "utf8")).toBe("old\n");
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }

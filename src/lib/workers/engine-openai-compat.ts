@@ -1,7 +1,7 @@
 import { spawn } from "child_process";
-import { mkdtemp, rm, writeFile } from "fs/promises";
+import { lstat, mkdtemp, readFile, realpath, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
-import { join } from "path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "path";
 import type {
   EngineCommand,
   EngineFileChange,
@@ -166,6 +166,272 @@ function extractMessageText(payload: unknown): string | null {
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const REFERENCED_FILE_CONTEXT_MAX_FILES = 3;
+const REFERENCED_FILE_CONTEXT_MAX_BYTES = 24 * 1024;
+const REFERENCED_FILE_MAX_SOURCE_BYTES = 2 * 1024 * 1024;
+const FILE_EXCERPT_TRUNCATION_MARKER =
+  "... [TRUNCATED: showing head/tail excerpt] ...";
+const REPO_CONTEXT_TOTAL_TRUNCATION_MARKER =
+  "[TRUNCATED: referenced file context exceeded 24KiB budget]";
+const FORBIDDEN_SECRET_FILE_PATTERN =
+  /(?:^|[._-])(secret|secrets|token|tokens|password|passwd|credential|credentials|private|key|keys)(?:[._-]|$)|\.(pem|p12|pfx|key)$/i;
+
+function utf8Prefix(value: string, maxBytes: number): string {
+  if (maxBytes <= 0) return "";
+  let used = 0;
+  const out: string[] = [];
+  for (const char of value) {
+    const size = Buffer.byteLength(char, "utf8");
+    if (used + size > maxBytes) break;
+    out.push(char);
+    used += size;
+  }
+  return out.join("");
+}
+
+function utf8Suffix(value: string, maxBytes: number): string {
+  if (maxBytes <= 0) return "";
+  const chars = Array.from(value);
+  let used = 0;
+  const out: string[] = [];
+  for (let index = chars.length - 1; index >= 0; index -= 1) {
+    const char = chars[index];
+    const size = Buffer.byteLength(char, "utf8");
+    if (used + size > maxBytes) break;
+    out.push(char);
+    used += size;
+  }
+  return out.reverse().join("");
+}
+
+function truncateUtf8WithMarker(
+  value: string,
+  maxBytes: number,
+  marker: string,
+): string {
+  if (Buffer.byteLength(value, "utf8") <= maxBytes) return value;
+  const markerLine = `\n${marker}`;
+  const markerBytes = Buffer.byteLength(markerLine, "utf8");
+  if (maxBytes <= markerBytes) return utf8Prefix(marker, maxBytes);
+  return `${utf8Prefix(value, maxBytes - markerBytes).trimEnd()}${markerLine}`;
+}
+
+function renderBoundedFileExcerpt(content: string, maxBytes: number): string {
+  if (Buffer.byteLength(content, "utf8") <= maxBytes) return content;
+  const marker = `\n${FILE_EXCERPT_TRUNCATION_MARKER}\n`;
+  const markerBytes = Buffer.byteLength(marker, "utf8");
+  if (maxBytes <= markerBytes) return utf8Prefix(FILE_EXCERPT_TRUNCATION_MARKER, maxBytes);
+  const budget = maxBytes - markerBytes;
+  const headBudget = Math.floor(budget / 2);
+  const tailBudget = budget - headBudget;
+  return `${utf8Prefix(content, headBudget)}${marker}${utf8Suffix(content, tailBudget)}`;
+}
+
+function normalizeCandidatePath(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^['"`]+|['"`]+$/g, "")
+    .replace(/[),.;:!?]+$/g, "")
+    .replace(/^([ab])\//, "");
+}
+
+function extractBriefPathCandidates(brief: string): string[] {
+  const pathLike =
+    /`([^`\n]+)`|"([^"\n]+)"|'([^'\n]+)'|(\b(?:[A-Za-z0-9][A-Za-z0-9._-]*\/)+[A-Za-z0-9][A-Za-z0-9._-]*\b|\b[A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z0-9][A-Za-z0-9._-]*\b)/g;
+  const found: string[] = [];
+  for (const match of brief.matchAll(pathLike)) {
+    const candidate = normalizeCandidatePath(
+      match[1] || match[2] || match[3] || match[4] || "",
+    );
+    if (candidate) found.push(candidate);
+  }
+  return found;
+}
+
+function isForbiddenPath(path: string): boolean {
+  if (!path || isAbsolute(path) || path.includes("\\") || path.includes("\0")) {
+    return true;
+  }
+  const parts = path.split("/");
+  if (parts.length === 0) return true;
+  if (parts.some((part) => !part || part === "." || part === "..")) return true;
+  if (parts.some((part) => part.startsWith("."))) return true;
+  if (parts.some((part) => FORBIDDEN_SECRET_FILE_PATTERN.test(part))) return true;
+  if (FORBIDDEN_SECRET_FILE_PATTERN.test(basename(path))) return true;
+  return false;
+}
+
+interface ReferencedFileContext {
+  path: string;
+  excerpt: string;
+}
+
+async function resolveReferencedFileContext(
+  cwd: string,
+  brief: string,
+): Promise<ReferencedFileContext[]> {
+  const rootReal = await realpath(cwd).catch(() => resolve(cwd));
+  const candidates = [...new Set(extractBriefPathCandidates(brief))]
+    .filter((candidate) => !isForbiddenPath(candidate))
+    .sort((a, b) => a.localeCompare(b));
+
+  if (candidates.length === 0) return [];
+
+  const selected: { path: string; absolutePath: string }[] = [];
+  for (const candidate of candidates) {
+    if (selected.length >= REFERENCED_FILE_CONTEXT_MAX_FILES) break;
+    const absolutePath = resolve(cwd, candidate);
+    const repoRelative = relative(cwd, absolutePath);
+    if (!repoRelative || repoRelative.startsWith("..") || isAbsolute(repoRelative)) {
+      continue;
+    }
+
+    const segments = candidate.split("/");
+    let currentPath = cwd;
+    let finalStat: Awaited<ReturnType<typeof lstat>> | null = null;
+    let valid = true;
+    for (const segment of segments) {
+      currentPath = join(currentPath, segment);
+      let stat;
+      try {
+        stat = await lstat(currentPath);
+      } catch {
+        valid = false;
+        break;
+      }
+      if (stat.isSymbolicLink()) {
+        valid = false;
+        break;
+      }
+      finalStat = stat;
+    }
+    if (
+      !valid ||
+      !finalStat ||
+      !finalStat.isFile() ||
+      finalStat.size > REFERENCED_FILE_MAX_SOURCE_BYTES
+    ) {
+      continue;
+    }
+
+    const realCandidate = await realpath(absolutePath).catch(() => null);
+    if (!realCandidate) continue;
+    if (realCandidate !== rootReal && !realCandidate.startsWith(`${rootReal}${sep}`)) {
+      continue;
+    }
+
+    selected.push({ path: candidate, absolutePath });
+  }
+
+  if (selected.length === 0) return [];
+
+  const perFileBudget = Math.max(
+    1024,
+    Math.floor((REFERENCED_FILE_CONTEXT_MAX_BYTES - 512) / selected.length),
+  );
+  const contexts: ReferencedFileContext[] = [];
+  for (const file of selected) {
+    const content = await readFile(file.absolutePath, "utf8").catch(() => null);
+    if (content === null || content.includes("\0")) continue;
+    contexts.push({
+      path: file.path,
+      excerpt: renderBoundedFileExcerpt(content, perFileBudget),
+    });
+  }
+  return contexts;
+}
+
+async function maybeAugmentBriefWithReferencedFiles(
+  cwd: string,
+  brief: string,
+): Promise<string> {
+  const contexts = await resolveReferencedFileContext(cwd, brief).catch(
+    () => [] as ReferencedFileContext[],
+  );
+  if (contexts.length === 0) return brief;
+
+  const contextBlock = contexts
+    .map(
+      (context) =>
+        [`--- BEGIN FILE: ${context.path} ---`, context.excerpt, `--- END FILE: ${context.path} ---`].join(
+          "\n",
+        ),
+    )
+    .join("\n\n");
+  const appendix = [
+    "[Referenced existing file context; bounded for cheap worker]",
+    contextBlock,
+  ].join("\n");
+  const boundedAppendix = truncateUtf8WithMarker(
+    appendix,
+    REFERENCED_FILE_CONTEXT_MAX_BYTES,
+    REPO_CONTEXT_TOTAL_TRUNCATION_MARKER,
+  );
+  return `${brief}\n\n${boundedAppendix}`;
+}
+
+function repairRecognizableUnifiedDiffHunkCounts(diff: string): string {
+  const normalized = diff.replace(/\r\n/g, "\n");
+  const lines = normalized.split("\n");
+  const hadTrailingNewline = lines.length > 0 && lines[lines.length - 1] === "";
+  if (hadTrailingNewline) lines.pop();
+
+  const repaired = [...lines];
+  let touched = false;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const header = lines[index];
+    const headerMatch = header.match(
+      /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/,
+    );
+    if (!headerMatch) continue;
+
+    const oldStart = headerMatch[1];
+    const newStart = headerMatch[3];
+    const section = headerMatch[5] || "";
+
+    let oldCount = 0;
+    let newCount = 0;
+    let bodyIndex = index + 1;
+    while (bodyIndex < lines.length) {
+      const bodyLine = lines[bodyIndex];
+      if (bodyLine.startsWith("@@ ") || bodyLine.startsWith("diff --git ")) {
+        break;
+      }
+      // A plain multi-file patch can place a new ---/+++ file header directly
+      // after a hunk. The same byte prefixes are also valid deleted/added hunk
+      // content, so do not guess which case this is.
+      if (bodyLine.startsWith("--- ") && lines[bodyIndex + 1]?.startsWith("+++ ")) {
+        return diff;
+      }
+      if (bodyLine === "\\ No newline at end of file") {
+        bodyIndex += 1;
+        continue;
+      }
+      const prefix = bodyLine[0];
+      if (prefix !== " " && prefix !== "+" && prefix !== "-") {
+        return diff;
+      }
+      if (prefix !== "+") oldCount += 1;
+      if (prefix !== "-") newCount += 1;
+      bodyIndex += 1;
+    }
+
+    if (oldCount === 0 && newCount === 0) return diff;
+
+    const oldCountFragment = oldCount === 1 ? "" : `,${oldCount}`;
+    const newCountFragment = newCount === 1 ? "" : `,${newCount}`;
+    const repairedHeader = `@@ -${oldStart}${oldCountFragment} +${newStart}${newCountFragment} @@${section}`;
+    if (repairedHeader !== header) {
+      repaired[index] = repairedHeader;
+      touched = true;
+    }
+  }
+
+  if (!touched) return diff;
+  return `${repaired.join("\n")}${hadTrailingNewline ? "\n" : ""}`;
 }
 
 export function extractMarkedUnifiedDiff(
@@ -337,6 +603,7 @@ export async function runOpenAiCompatEngine(
 
   const abortController = new AbortController();
   const requestTimer = setTimeout(() => abortController.abort(), remainingMs());
+  const userPrompt = await maybeAugmentBriefWithReferencedFiles(opts.cwd, opts.brief);
 
   let payload: unknown;
   try {
@@ -349,7 +616,7 @@ export async function runOpenAiCompatEngine(
         temperature: 0,
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: opts.brief },
+          { role: "user", content: userPrompt },
         ],
       }),
       signal: abortController.signal,
@@ -441,7 +708,8 @@ export async function runOpenAiCompatEngine(
 
   const extracted = extractMarkedUnifiedDiff(text);
   if (!extracted.ok) {
-    errors.push(`unified diff contract violation: ${extracted.error}`);
+    const parseError = extracted.error;
+    errors.push(`unified diff contract violation: ${parseError}`);
     messages.push(
       "OpenAI-compatible engine rejected model output (diff marker contract).",
     );
@@ -459,7 +727,8 @@ export async function runOpenAiCompatEngine(
     });
   }
 
-  fileChanges.push(...parsePatchFileChanges(extracted.diff));
+  const repairedDiff = repairRecognizableUnifiedDiffHunkCounts(extracted.diff);
+  fileChanges.push(...parsePatchFileChanges(repairedDiff));
 
   let patchDir = "";
   let patchPath = "";
@@ -490,7 +759,7 @@ export async function runOpenAiCompatEngine(
   try {
     patchDir = await mkdtemp(join(tmpdir(), "worker-openai-compat-"));
     patchPath = join(patchDir, "patch.diff");
-    await writeFile(patchPath, extracted.diff, "utf8");
+    await writeFile(patchPath, repairedDiff, "utf8");
 
     const patchCheckCommand = `git apply --check --whitespace=nowarn ${patchPath}`;
     const patchCheck = await runCommand({
