@@ -21,6 +21,15 @@ export interface OpenAiCompatRunOpts extends EngineRunOpts {
 
 export const OPENAI_COMPAT_DIFF_START = "<<<ORG_STUDIO_UNIFIED_DIFF_START>>>";
 export const OPENAI_COMPAT_DIFF_END = "<<<ORG_STUDIO_UNIFIED_DIFF_END>>>";
+export const OPENAI_COMPAT_EXACT_EDITS_START =
+  "<<<ORG_STUDIO_EXACT_EDITS_START>>>";
+export const OPENAI_COMPAT_EXACT_EDITS_END =
+  "<<<ORG_STUDIO_EXACT_EDITS_END>>>";
+
+// Conservative cap to keep single-shot cheap-worker payload parsing bounded.
+const OPENAI_COMPAT_EXACT_EDITS_MAX_BYTES = 64 * 1024;
+const OPENAI_COMPAT_EXACT_EDITS_MAX_EDITS = 3;
+const OPENAI_COMPAT_EXACT_EDITS_MAX_PATH_BYTES = 512;
 
 export interface OpenAiCompatCommandRequest {
   command: string;
@@ -251,7 +260,12 @@ function extractBriefPathCandidates(brief: string): string[] {
 }
 
 function isForbiddenPath(path: string): boolean {
-  if (!path || isAbsolute(path) || path.includes("\\") || path.includes("\0")) {
+  if (
+    !path ||
+    isAbsolute(path) ||
+    path.includes("\\") ||
+    /[\u0000-\u001f\u007f]/.test(path)
+  ) {
     return true;
   }
   const parts = path.split("/");
@@ -434,32 +448,175 @@ function repairRecognizableUnifiedDiffHunkCounts(diff: string): string {
   return `${repaired.join("\n")}${hadTrailingNewline ? "\n" : ""}`;
 }
 
-export function extractMarkedUnifiedDiff(
+interface OpenAiCompatExactEdit {
+  path: string;
+  oldText: string;
+  newText: string;
+}
+
+interface OpenAiCompatExactEdits {
+  edits: OpenAiCompatExactEdit[];
+}
+
+function extractMarkerWrappedBody(
   text: string,
-): { ok: true; diff: string } | { ok: false; error: string } {
+  markerStart: string,
+  markerEnd: string,
+): { ok: true; body: string } | { ok: false; error: string } {
   const trimmed = text.trim();
-  const startCount = trimmed.split(OPENAI_COMPAT_DIFF_START).length - 1;
-  const endCount = trimmed.split(OPENAI_COMPAT_DIFF_END).length - 1;
+  const startCount = trimmed.split(markerStart).length - 1;
+  const endCount = trimmed.split(markerEnd).length - 1;
   if (startCount !== 1 || endCount !== 1) {
     return {
       ok: false,
-      error: `response must include exactly one ${OPENAI_COMPAT_DIFF_START}/${OPENAI_COMPAT_DIFF_END} block`,
+      error: `response must include exactly one ${markerStart}/${markerEnd} block`,
     };
   }
 
   const bodyPattern = new RegExp(
-    `^${escapeRegex(OPENAI_COMPAT_DIFF_START)}\\r?\\n([\\s\\S]+?)\\r?\\n${escapeRegex(OPENAI_COMPAT_DIFF_END)}$`,
+    `^${escapeRegex(markerStart)}\\r?\\n([\\s\\S]+?)\\r?\\n${escapeRegex(markerEnd)}$`,
   );
   const match = trimmed.match(bodyPattern);
   if (!match) {
     return {
       ok: false,
-      error:
-        "response must contain only the marker-wrapped unified diff with no extra text",
+      error: `response must contain only the marker-wrapped block for ${markerStart}`,
     };
   }
 
-  const diffBody = match[1].trim();
+  const body = match[1].trim();
+  if (!body) {
+    return { ok: false, error: "marker block is empty" };
+  }
+  return { ok: true, body };
+}
+
+function parseStrictExactEditsJson(
+  text: string,
+): { ok: true; value: OpenAiCompatExactEdits } | { ok: false; error: string } {
+  const extracted = extractMarkerWrappedBody(
+    text,
+    OPENAI_COMPAT_EXACT_EDITS_START,
+    OPENAI_COMPAT_EXACT_EDITS_END,
+  );
+  if (!extracted.ok) return { ok: false, error: extracted.error };
+
+  const bodyBytes = Buffer.byteLength(extracted.body, "utf8");
+  if (bodyBytes > OPENAI_COMPAT_EXACT_EDITS_MAX_BYTES) {
+    return {
+      ok: false,
+      error: `exact-edit JSON exceeds ${OPENAI_COMPAT_EXACT_EDITS_MAX_BYTES} bytes`,
+    };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(extracted.body);
+  } catch (error: unknown) {
+    return {
+      ok: false,
+      error: `exact-edit JSON parse failed: ${errorMessage(error)}`,
+    };
+  }
+
+  if (!isRecord(parsed) || Array.isArray(parsed)) {
+    return { ok: false, error: "exact-edit JSON must be an object" };
+  }
+  const rootKeys = Object.keys(parsed);
+  if (rootKeys.length !== 1 || rootKeys[0] !== "edits") {
+    return {
+      ok: false,
+      error: "exact-edit JSON must contain exactly one key: edits",
+    };
+  }
+  if (!Array.isArray(parsed.edits)) {
+    return { ok: false, error: "exact-edit JSON edits must be an array" };
+  }
+  if (parsed.edits.length < 1 || parsed.edits.length > OPENAI_COMPAT_EXACT_EDITS_MAX_EDITS) {
+    return {
+      ok: false,
+      error: `exact-edit JSON edits must contain 1-${OPENAI_COMPAT_EXACT_EDITS_MAX_EDITS} entries`,
+    };
+  }
+
+  const edits: OpenAiCompatExactEdit[] = [];
+  const seenPaths = new Set<string>();
+  for (let index = 0; index < parsed.edits.length; index += 1) {
+    const candidate = parsed.edits[index];
+    if (!isRecord(candidate) || Array.isArray(candidate)) {
+      return { ok: false, error: `edit ${index} must be an object` };
+    }
+    const keys = Object.keys(candidate).sort();
+    if (keys.join(",") !== "newText,oldText,path") {
+      return {
+        ok: false,
+        error: `edit ${index} must contain exactly path, oldText, newText`,
+      };
+    }
+
+    const path = candidate.path;
+    const oldText = candidate.oldText;
+    const newText = candidate.newText;
+    if (typeof path !== "string" || typeof oldText !== "string" || typeof newText !== "string") {
+      return {
+        ok: false,
+        error: `edit ${index} path, oldText, and newText must be strings`,
+      };
+    }
+    if (!path.trim()) {
+      return { ok: false, error: `edit ${index} path must be non-empty` };
+    }
+    if (Buffer.byteLength(path, "utf8") > OPENAI_COMPAT_EXACT_EDITS_MAX_PATH_BYTES) {
+      return {
+        ok: false,
+        error: `edit ${index} path exceeds ${OPENAI_COMPAT_EXACT_EDITS_MAX_PATH_BYTES} bytes`,
+      };
+    }
+    if (path.includes("\0") || oldText.includes("\0") || newText.includes("\0")) {
+      return {
+        ok: false,
+        error: `edit ${index} contains a forbidden NUL character`,
+      };
+    }
+    if (isForbiddenPath(path)) {
+      return {
+        ok: false,
+        error: `edit ${index} path is unsafe: ${path}`,
+      };
+    }
+    if (!oldText) {
+      return { ok: false, error: `edit ${index} oldText must be non-empty` };
+    }
+    if (oldText === newText) {
+      return {
+        ok: false,
+        error: `edit ${index} newText must differ from oldText`,
+      };
+    }
+    if (seenPaths.has(path)) {
+      return {
+        ok: false,
+        error: `exact-edit paths must be unique (duplicate: ${path})`,
+      };
+    }
+    seenPaths.add(path);
+    edits.push({ path, oldText, newText });
+  }
+
+  return { ok: true, value: { edits } };
+}
+
+export function extractMarkedUnifiedDiff(
+  text: string,
+): { ok: true; diff: string } | { ok: false; error: string } {
+  const extracted = extractMarkerWrappedBody(
+    text,
+    OPENAI_COMPAT_DIFF_START,
+    OPENAI_COMPAT_DIFF_END,
+  );
+  if (!extracted.ok) return { ok: false, error: extracted.error };
+
+  const diffBody = extracted.body;
   if (!diffBody) {
     return { ok: false, error: "marker block is empty" };
   }
@@ -511,6 +668,268 @@ function parsePatchFileChanges(diff: string): EngineFileChange[] {
   return changes;
 }
 
+function countExactOccurrences(haystack: string, needle: string): number {
+  if (!needle) return 0;
+  let count = 0;
+  let cursor = 0;
+  while (cursor <= haystack.length) {
+    const foundAt = haystack.indexOf(needle, cursor);
+    if (foundAt === -1) break;
+    count += 1;
+    // Advance one code unit so overlapping matches are also ambiguous.
+    cursor = foundAt + 1;
+  }
+  return count;
+}
+
+interface ExactEditResolvedFile {
+  path: string;
+  absolutePath: string;
+  original: Buffer;
+  next: Buffer;
+}
+
+async function derivePatchFromExactEdits(args: {
+  cwd: string;
+  edits: OpenAiCompatExactEdit[];
+  runCommand: OpenAiCompatCommandRunner;
+  timeoutMs: () => number;
+  env?: Record<string, string>;
+  commands: EngineCommand[];
+  allowedPaths: Set<string>;
+}): Promise<{ ok: true; diff: string } | { ok: false; error: string }> {
+  const cwdReal = await realpath(args.cwd).catch(() => resolve(args.cwd));
+  const sortedEdits = [...args.edits].sort((a, b) => a.path.localeCompare(b.path));
+
+  const resolvedFiles: ExactEditResolvedFile[] = [];
+  for (const edit of sortedEdits) {
+    if (!args.allowedPaths.has(edit.path)) {
+      return {
+        ok: false,
+        error: `exact-edit path was not explicitly referenced in the brief: ${edit.path}`,
+      };
+    }
+
+    const absolutePath = resolve(args.cwd, edit.path);
+    const repoRelative = relative(args.cwd, absolutePath);
+    if (!repoRelative || repoRelative.startsWith("..") || isAbsolute(repoRelative)) {
+      return { ok: false, error: `exact-edit path escapes repo root: ${edit.path}` };
+    }
+
+    const segments = edit.path.split("/");
+    let currentPath = args.cwd;
+    let finalStat: Awaited<ReturnType<typeof lstat>> | null = null;
+    for (const segment of segments) {
+      currentPath = join(currentPath, segment);
+      let stat;
+      try {
+        stat = await lstat(currentPath);
+      } catch {
+        return {
+          ok: false,
+          error: `exact-edit target does not exist: ${edit.path}`,
+        };
+      }
+      if (stat.isSymbolicLink()) {
+        return {
+          ok: false,
+          error: `exact-edit path cannot target symlinks: ${edit.path}`,
+        };
+      }
+      finalStat = stat;
+    }
+
+    if (!finalStat?.isFile()) {
+      return {
+        ok: false,
+        error: `exact-edit target must be an existing regular file: ${edit.path}`,
+      };
+    }
+    if (finalStat.size > REFERENCED_FILE_MAX_SOURCE_BYTES) {
+      return {
+        ok: false,
+        error: `exact-edit target exceeds ${REFERENCED_FILE_MAX_SOURCE_BYTES} bytes: ${edit.path}`,
+      };
+    }
+
+    const resolvedRealPath = await realpath(absolutePath).catch(() => null);
+    if (!resolvedRealPath) {
+      return {
+        ok: false,
+        error: `exact-edit target is unreadable: ${edit.path}`,
+      };
+    }
+    if (
+      resolvedRealPath !== cwdReal &&
+      !resolvedRealPath.startsWith(`${cwdReal}${sep}`)
+    ) {
+      return {
+        ok: false,
+        error: `exact-edit path resolves outside repo root: ${edit.path}`,
+      };
+    }
+
+    let originalBytes: Buffer;
+    try {
+      originalBytes = await readFile(absolutePath);
+    } catch {
+      return {
+        ok: false,
+        error: `exact-edit target is unreadable text: ${edit.path}`,
+      };
+    }
+    if (originalBytes.includes(0)) {
+      return {
+        ok: false,
+        error: `exact-edit target contains forbidden NUL bytes: ${edit.path}`,
+      };
+    }
+    const original = originalBytes.toString("utf8");
+    if (!originalBytes.equals(Buffer.from(original, "utf8"))) {
+      return {
+        ok: false,
+        error: `exact-edit target is not valid UTF-8 text: ${edit.path}`,
+      };
+    }
+
+    const occurrences = countExactOccurrences(original, edit.oldText);
+    if (occurrences !== 1) {
+      return {
+        ok: false,
+        error: `exact-edit oldText must appear exactly once in ${edit.path} (found ${occurrences})`,
+      };
+    }
+
+    const next = original.replace(edit.oldText, edit.newText);
+    resolvedFiles.push({
+      path: edit.path,
+      absolutePath,
+      original: originalBytes,
+      next: Buffer.from(next, "utf8"),
+    });
+  }
+
+  const targetPaths = resolvedFiles.map((file) => file.path);
+  const trackedArgs = ["ls-files", "--error-unmatch", "--", ...targetPaths];
+  const trackedCommand = `git ${trackedArgs.join(" ")}`;
+  const trackedResult = await args.runCommand({
+    command: "git",
+    args: trackedArgs,
+    cwd: args.cwd,
+    timeoutMs: args.timeoutMs(),
+    env: args.env,
+  });
+  args.commands.push({
+    command: trackedCommand,
+    exitCode: trackedResult.exitCode,
+  });
+  if (trackedResult.timedOut || trackedResult.exitCode !== 0) {
+    return {
+      ok: false,
+      error: "exact-edit targets must already be tracked by git",
+    };
+  }
+
+  const statusArgs = ["status", "--porcelain", "--", ...targetPaths];
+  const statusCommand = `git ${statusArgs.join(" ")}`;
+  const statusResult = await args.runCommand({
+    command: "git",
+    args: statusArgs,
+    cwd: args.cwd,
+    timeoutMs: args.timeoutMs(),
+    env: args.env,
+  });
+  args.commands.push({ command: statusCommand, exitCode: statusResult.exitCode });
+  if (statusResult.timedOut || statusResult.exitCode !== 0) {
+    return {
+      ok: false,
+      error: `failed to inspect target file cleanliness before exact-edit apply: ${safeTail(
+        statusResult.stderr || statusResult.stdout || "non-zero exit",
+      )}`,
+    };
+  }
+  if (statusResult.stdout.trim().length > 0) {
+    return {
+      ok: false,
+      error: "exact-edit targets have pre-existing staged or unstaged changes",
+    };
+  }
+
+  let outcome: { ok: true; diff: string } | { ok: false; error: string } = {
+    ok: false,
+    error: "exact-edit preparation did not run",
+  };
+  const restoreFailures: string[] = [];
+  try {
+    let writeFailure: string | null = null;
+    for (const file of resolvedFiles) {
+      try {
+        await writeFile(file.absolutePath, file.next, "utf8");
+      } catch {
+        writeFailure = file.path;
+        break;
+      }
+    }
+
+    if (writeFailure) {
+      outcome = {
+        ok: false,
+        error: `failed to stage temporary exact-edit content for ${writeFailure}`,
+      };
+    } else {
+      const diffArgs = [
+        "diff",
+        "--binary",
+        "--no-ext-diff",
+        "--",
+        ...targetPaths,
+      ];
+      const diffCommand = `git ${diffArgs.join(" ")}`;
+      const diffResult = await args.runCommand({
+        command: "git",
+        args: diffArgs,
+        cwd: args.cwd,
+        timeoutMs: args.timeoutMs(),
+        env: args.env,
+      });
+      args.commands.push({ command: diffCommand, exitCode: diffResult.exitCode });
+      if (diffResult.timedOut || diffResult.exitCode !== 0) {
+        outcome = {
+          ok: false,
+          error: `failed to generate git diff for exact edits: ${safeTail(
+            diffResult.stderr || diffResult.stdout || "non-zero exit",
+          )}`,
+        };
+      } else if (!diffResult.stdout.trim()) {
+        outcome = {
+          ok: false,
+          error: "exact-edit contract produced an empty git diff",
+        };
+      } else {
+        outcome = { ok: true, diff: diffResult.stdout };
+      }
+    }
+  } finally {
+    await Promise.all(
+      resolvedFiles.map(async (file) => {
+        try {
+          await writeFile(file.absolutePath, file.original, "utf8");
+        } catch {
+          restoreFailures.push(file.path);
+        }
+      }),
+    );
+  }
+
+  if (restoreFailures.length > 0) {
+    return {
+      ok: false,
+      error: `failed to restore original content after exact-edit diff generation (${restoreFailures.join(", ")})`,
+    };
+  }
+  return outcome;
+}
+
 function buildResult(args: {
   ok: boolean;
   startedMs: number;
@@ -538,18 +957,26 @@ function buildResult(args: {
 
 const SYSTEM_PROMPT = [
   "You are a single-shot patch engine for a git checkout.",
-  `Return exactly one unified diff wrapped by these markers:`,
+  "Prefer this contract for existing-file replacements:",
+  OPENAI_COMPAT_EXACT_EDITS_START,
+  '{"edits":[{"path":"repo/relative.txt","oldText":"exact unique existing text","newText":"replacement text"}]}',
+  OPENAI_COMPAT_EXACT_EDITS_END,
+  "The exact-edit JSON must be strict: object with only edits[], 1-3 edits, each edit has only path/oldText/newText.",
+  "Each exact edit must target a safe repo-relative existing file explicitly named in the user request, and oldText must match exactly once.",
+  "If exact edits are not viable, fall back to one unified diff wrapped by:",
   OPENAI_COMPAT_DIFF_START,
   "<UNIFIED_DIFF>",
   OPENAI_COMPAT_DIFF_END,
+  "Return exactly one marker block (exact-edits preferred), never both.",
   "No prose, no markdown fences, no shell commands, no extra text.",
-  "The diff must be directly applicable with `git apply`.",
+  "Any unified diff must be directly applicable with `git apply`.",
 ].join("\n");
 
 /**
  * OpenAI-compatible single-shot patch engine.
  * - exactly one chat-completions request
- * - strict marker-wrapped unified diff contract
+ * - strict marker-wrapped contract: preferred exact-edits JSON OR legacy unified diff
+ * - exact-edits are materialized to a deterministic git patch via temporary edits + git diff
  * - git apply --check, then apply
  * - run ONLY worker-configured verification commands
  */
@@ -706,12 +1133,18 @@ export async function runOpenAiCompatEngine(
     });
   }
 
-  const extracted = extractMarkedUnifiedDiff(text);
-  if (!extracted.ok) {
-    const parseError = extracted.error;
-    errors.push(`unified diff contract violation: ${parseError}`);
+  const hasExactMarkers =
+    text.includes(OPENAI_COMPAT_EXACT_EDITS_START) ||
+    text.includes(OPENAI_COMPAT_EXACT_EDITS_END);
+  const hasDiffMarkers =
+    text.includes(OPENAI_COMPAT_DIFF_START) ||
+    text.includes(OPENAI_COMPAT_DIFF_END);
+  if (hasExactMarkers && hasDiffMarkers) {
+    errors.push(
+      "response contract violation: response must contain exactly one marker block (exact-edits OR unified diff), not both",
+    );
     messages.push(
-      "OpenAI-compatible engine rejected model output (diff marker contract).",
+      "OpenAI-compatible engine rejected model output (mixed marker contracts).",
     );
     return buildResult({
       ok: false,
@@ -727,7 +1160,85 @@ export async function runOpenAiCompatEngine(
     });
   }
 
-  const repairedDiff = repairRecognizableUnifiedDiffHunkCounts(extracted.diff);
+  let patchDiff = "";
+  if (hasExactMarkers) {
+    const parsedExact = parseStrictExactEditsJson(text);
+    if (!parsedExact.ok) {
+      errors.push(`exact-edit contract violation: ${parsedExact.error}`);
+      messages.push(
+        "OpenAI-compatible engine rejected model output (exact-edit marker contract).",
+      );
+      return buildResult({
+        ok: false,
+        startedMs,
+        nowMs,
+        exitCode: null,
+        commands,
+        fileChanges,
+        messages,
+        errors,
+        usage,
+        rawEventCount,
+      });
+    }
+
+    const derived = await derivePatchFromExactEdits({
+      cwd: opts.cwd,
+      edits: parsedExact.value.edits,
+      runCommand,
+      timeoutMs: remainingMs,
+      env: opts.env,
+      commands,
+      allowedPaths: new Set(
+        extractBriefPathCandidates(opts.brief).filter(
+          (candidate) => !isForbiddenPath(candidate),
+        ),
+      ),
+    });
+    if (!derived.ok) {
+      errors.push(`exact-edit apply-prep failed: ${derived.error}`);
+      messages.push(
+        "OpenAI-compatible engine rejected exact edits before git apply.",
+      );
+      return buildResult({
+        ok: false,
+        startedMs,
+        nowMs,
+        exitCode: null,
+        commands,
+        fileChanges,
+        messages,
+        errors,
+        usage,
+        rawEventCount,
+      });
+    }
+    patchDiff = derived.diff;
+  } else {
+    const extracted = extractMarkedUnifiedDiff(text);
+    if (!extracted.ok) {
+      const parseError = extracted.error;
+      errors.push(`unified diff contract violation: ${parseError}`);
+      messages.push(
+        "OpenAI-compatible engine rejected model output (diff marker contract).",
+      );
+      return buildResult({
+        ok: false,
+        startedMs,
+        nowMs,
+        exitCode: null,
+        commands,
+        fileChanges,
+        messages,
+        errors,
+        usage,
+        rawEventCount,
+      });
+    }
+    patchDiff = extracted.diff;
+  }
+
+  const repairedDiff = repairRecognizableUnifiedDiffHunkCounts(patchDiff);
   fileChanges.push(...parsePatchFileChanges(repairedDiff));
 
   let patchDir = "";

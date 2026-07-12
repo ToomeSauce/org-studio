@@ -11,6 +11,8 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  OPENAI_COMPAT_EXACT_EDITS_END,
+  OPENAI_COMPAT_EXACT_EDITS_START,
   OPENAI_COMPAT_DIFF_END,
   OPENAI_COMPAT_DIFF_START,
   runOpenAiCompatEngine,
@@ -47,6 +49,37 @@ function makeDiff(path = "README.md", addedPath?: string) {
       : []),
     OPENAI_COMPAT_DIFF_END,
   ].join("\n");
+}
+
+function makeExactEdits(edit: {
+  path: string;
+  oldText: string;
+  newText: string;
+}) {
+  return [
+    OPENAI_COMPAT_EXACT_EDITS_START,
+    JSON.stringify({ edits: [edit] }),
+    OPENAI_COMPAT_EXACT_EDITS_END,
+  ].join("\n");
+}
+
+function initCommittedRepo(cwd: string, path = "README.md", content = "old\n") {
+  execFileSync("git", ["init", "-q"], { cwd });
+  writeFileSync(join(cwd, path), content, "utf8");
+  execFileSync("git", ["add", path], { cwd });
+  execFileSync(
+    "git",
+    [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "-qm",
+      "init",
+    ],
+    { cwd },
+  );
 }
 
 function successRunner(overrides: Partial<Record<string, any>> = {}) {
@@ -303,6 +336,439 @@ describe("#1693: OpenAI-compatible worker engine", () => {
     }
   });
 
+  it("applies marker-wrapped exact edits by deriving a real git diff from temporary file edits", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openai-compat-exact-real-git-"));
+    try {
+      initCommittedRepo(cwd, "README.md", "old\n");
+      const fetchImpl = vi.fn(async () =>
+        makeResponse({
+          choices: [
+            {
+              message: {
+                content: makeExactEdits({
+                  path: "README.md",
+                  oldText: "old\n",
+                  newText: "new\n",
+                }),
+              },
+            },
+          ],
+          usage: {},
+        }),
+      );
+
+      const result = await runOpenAiCompatEngine(
+        {
+          cwd,
+          brief: "Replace old with new in README.md",
+          model: "gpt-4.1-mini",
+          timeoutMs: 30_000,
+          verificationCommands: [],
+        },
+        { fetchImpl: fetchImpl as any },
+      );
+
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(result.ok).toBe(true);
+      expect(result.fileChanges).toEqual([{ path: "README.md", kind: "update" }]);
+      expect(readFileSync(join(cwd, "README.md"), "utf8")).toBe("new\n");
+      expect(
+        result.commands.some(
+          (command) =>
+            command.command === "git diff --binary --no-ext-diff -- README.md",
+        ),
+      ).toBe(true);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects exact edits when oldText is not unique and leaves file untouched", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openai-compat-exact-oldtext-"));
+    try {
+      initCommittedRepo(cwd, "README.md", "aaa\n");
+      const original = readFileSync(join(cwd, "README.md"), "utf8");
+      const fetchImpl = vi.fn(async () =>
+        makeResponse({
+          choices: [
+            {
+              message: {
+                content: makeExactEdits({
+                  path: "README.md",
+                  oldText: "aa",
+                  newText: "unique",
+                }),
+              },
+            },
+          ],
+          usage: {},
+        }),
+      );
+
+      const result = await runOpenAiCompatEngine(
+        {
+          cwd,
+          brief: "Replace duplicate text in README.md",
+          model: "gpt-4.1-mini",
+          timeoutMs: 30_000,
+          verificationCommands: [],
+        },
+        { fetchImpl: fetchImpl as any },
+      );
+
+      expect(result.ok).toBe(false);
+      expect(result.errors.join("\n")).toContain("must appear exactly once");
+      expect(readFileSync(join(cwd, "README.md"), "utf8")).toBe(original);
+      expect(
+        result.commands.some((command) => command.command.includes("git diff --binary")),
+      ).toBe(false);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects traversal, symlink, and secret-like exact-edit targets", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openai-compat-exact-path-"));
+    const outside = mkdtempSync(join(tmpdir(), "openai-compat-exact-outside-"));
+    try {
+      mkdirSync(join(cwd, "docs"), { recursive: true });
+      initCommittedRepo(cwd, "README.md", "old\n");
+      writeFileSync(join(outside, "outside.txt"), "outside\n", "utf8");
+      symlinkSync(join(cwd, "README.md"), join(cwd, "docs", "link.md"));
+
+      const cases = [
+        {
+          name: "traversal",
+          edit: {
+            path: "../outside.txt",
+            oldText: "outside",
+            newText: "nope",
+          },
+          expected: "path is unsafe",
+        },
+        {
+          name: "secret-like",
+          edit: {
+            path: "secrets.env",
+            oldText: "x",
+            newText: "y",
+          },
+          expected: "path is unsafe",
+        },
+        {
+          name: "symlink",
+          edit: {
+            path: "docs/link.md",
+            oldText: "old",
+            newText: "new",
+          },
+          expected: "cannot target symlinks",
+        },
+      ];
+
+      for (const testCase of cases) {
+        const fetchImpl = vi.fn(async () =>
+          makeResponse({
+            choices: [
+              {
+                message: { content: makeExactEdits(testCase.edit) },
+              },
+            ],
+            usage: {},
+          }),
+        );
+        const result = await runOpenAiCompatEngine(
+          {
+            cwd,
+            brief: `Case: ${testCase.name} ${testCase.edit.path}`,
+            model: "gpt-4.1-mini",
+            timeoutMs: 30_000,
+            verificationCommands: [],
+          },
+          { fetchImpl: fetchImpl as any },
+        );
+        expect(result.ok).toBe(false);
+        expect(result.errors.join("\n")).toContain(testCase.expected);
+        expect(readFileSync(join(cwd, "README.md"), "utf8")).toBe("old\n");
+      }
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects exact edits when a target file is already dirty", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openai-compat-exact-dirty-"));
+    try {
+      initCommittedRepo(cwd, "README.md", "old\n");
+      writeFileSync(join(cwd, "README.md"), "dirty\n", "utf8");
+
+      const fetchImpl = vi.fn(async () =>
+        makeResponse({
+          choices: [
+            {
+              message: {
+                content: makeExactEdits({
+                  path: "README.md",
+                  oldText: "dirty\n",
+                  newText: "patched\n",
+                }),
+              },
+            },
+          ],
+          usage: {},
+        }),
+      );
+
+      const result = await runOpenAiCompatEngine(
+        {
+          cwd,
+          brief: "Update README.md",
+          model: "gpt-4.1-mini",
+          timeoutMs: 30_000,
+          verificationCommands: [],
+        },
+        { fetchImpl: fetchImpl as any },
+      );
+
+      expect(result.ok).toBe(false);
+      expect(result.errors.join("\n")).toContain(
+        "pre-existing staged or unstaged changes",
+      );
+      expect(readFileSync(join(cwd, "README.md"), "utf8")).toBe("dirty\n");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects exact edits outside the brief's explicit path scope", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openai-compat-exact-scope-"));
+    try {
+      initCommittedRepo(cwd, "README.md", "old\n");
+      const fetchImpl = vi.fn(async () =>
+        makeResponse({
+          choices: [
+            {
+              message: {
+                content: makeExactEdits({
+                  path: "README.md",
+                  oldText: "old\n",
+                  newText: "new\n",
+                }),
+              },
+            },
+          ],
+          usage: {},
+        }),
+      );
+
+      const result = await runOpenAiCompatEngine(
+        {
+          cwd,
+          brief: "Update a different file named CHANGELOG.md",
+          model: "gpt-4.1-mini",
+          timeoutMs: 30_000,
+          verificationCommands: [],
+        },
+        { fetchImpl: fetchImpl as any },
+      );
+
+      expect(result.ok).toBe(false);
+      expect(result.errors.join("\n")).toContain(
+        "not explicitly referenced in the brief",
+      );
+      expect(readFileSync(join(cwd, "README.md"), "utf8")).toBe("old\n");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects untracked and non-UTF-8 exact-edit targets", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openai-compat-exact-tracked-"));
+    try {
+      initCommittedRepo(cwd, "README.md", "old\n");
+      writeFileSync(join(cwd, "scratch.txt"), "old\n", "utf8");
+      writeFileSync(join(cwd, "invalid.txt"), Buffer.from([0xc3, 0x28]));
+      execFileSync("git", ["add", "invalid.txt"], { cwd });
+      execFileSync(
+        "git",
+        [
+          "-c",
+          "user.email=test@example.com",
+          "-c",
+          "user.name=Test User",
+          "commit",
+          "-qm",
+          "track invalid fixture",
+        ],
+        { cwd },
+      );
+
+      const cases = [
+        {
+          path: "scratch.txt",
+          oldText: "old\n",
+          newText: "new\n",
+          expected: "must already be tracked by git",
+        },
+        {
+          path: "invalid.txt",
+          oldText: "anything",
+          newText: "replacement",
+          expected: "not valid UTF-8 text",
+        },
+      ];
+
+      for (const testCase of cases) {
+        const fetchImpl = vi.fn(async () =>
+          makeResponse({
+            choices: [
+              {
+                message: {
+                  content: makeExactEdits({
+                    path: testCase.path,
+                    oldText: testCase.oldText,
+                    newText: testCase.newText,
+                  }),
+                },
+              },
+            ],
+            usage: {},
+          }),
+        );
+        const result = await runOpenAiCompatEngine(
+          {
+            cwd,
+            brief: `Update ${testCase.path}`,
+            model: "gpt-4.1-mini",
+            timeoutMs: 30_000,
+            verificationCommands: [],
+          },
+          { fetchImpl: fetchImpl as any },
+        );
+        expect(result.ok).toBe(false);
+        expect(result.errors.join("\n")).toContain(testCase.expected);
+      }
+
+      expect(readFileSync(join(cwd, "scratch.txt"), "utf8")).toBe("old\n");
+      expect(readFileSync(join(cwd, "invalid.txt"))).toEqual(
+        Buffer.from([0xc3, 0x28]),
+      );
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects malformed, mixed, and oversized exact-edit blocks", async () => {
+    const runCommand = vi.fn();
+    const oversizedOldText = "a".repeat(70 * 1024);
+    const oversized = [
+      OPENAI_COMPAT_EXACT_EDITS_START,
+      JSON.stringify({
+        edits: [
+          {
+            path: "README.md",
+            oldText: oversizedOldText,
+            newText: "b",
+          },
+        ],
+      }),
+      OPENAI_COMPAT_EXACT_EDITS_END,
+    ].join("\n");
+
+    const cases = [
+      {
+        name: "malformed",
+        content: [
+          OPENAI_COMPAT_EXACT_EDITS_START,
+          "{this is not json",
+          OPENAI_COMPAT_EXACT_EDITS_END,
+        ].join("\n"),
+        expected: "exact-edit contract violation",
+      },
+      {
+        name: "mixed",
+        content: [
+          makeExactEdits({ path: "README.md", oldText: "old", newText: "new" }),
+          makeDiff("README.md"),
+        ].join("\n"),
+        expected: "exactly one marker block",
+      },
+      {
+        name: "oversized",
+        content: oversized,
+        expected: "exceeds",
+      },
+    ];
+
+    for (const testCase of cases) {
+      const fetchImpl = vi.fn(async () =>
+        makeResponse({
+          choices: [{ message: { content: testCase.content } }],
+          usage: {},
+        }),
+      );
+      const result = await runOpenAiCompatEngine(
+        {
+          cwd: "/tmp",
+          brief: `Case: ${testCase.name}`,
+          model: "gpt-4.1-mini",
+          timeoutMs: 30_000,
+          verificationCommands: [],
+        },
+        { fetchImpl: fetchImpl as any, runCommand: runCommand as any },
+      );
+      expect(result.ok).toBe(false);
+      expect(result.errors.join("\n")).toContain(testCase.expected);
+    }
+
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
+  it("rolls back applied exact-edit patches when verification fails", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openai-compat-exact-rollback-"));
+    try {
+      initCommittedRepo(cwd, "README.md", "old\n");
+      const fetchImpl = vi.fn(async () =>
+        makeResponse({
+          choices: [
+            {
+              message: {
+                content: makeExactEdits({
+                  path: "README.md",
+                  oldText: "old\n",
+                  newText: "new\n",
+                }),
+              },
+            },
+          ],
+          usage: {},
+        }),
+      );
+
+      const result = await runOpenAiCompatEngine(
+        {
+          cwd,
+          brief: "Patch README.md",
+          model: "gpt-4.1-mini",
+          timeoutMs: 30_000,
+          verificationCommands: ["exit 7"],
+        },
+        { fetchImpl: fetchImpl as any },
+      );
+
+      expect(result.ok).toBe(false);
+      expect(result.exitCode).toBe(7);
+      expect(result.errors.join("\n")).toContain("verification failed");
+      expect(result.commands.some((c) => c.command.includes("git apply -R"))).toBe(
+        true,
+      );
+      expect(readFileSync(join(cwd, "README.md"), "utf8")).toBe("old\n");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("makes one chat-completions request, applies patch, and runs configured verification commands", async () => {
     process.env.TEST_OPENAI_KEY = "shh";
     const fetchImpl = vi.fn(async (_url: string, _init: any) =>
@@ -334,6 +800,12 @@ describe("#1693: OpenAI-compatible worker engine", () => {
     expect(url).toBe("http://127.0.0.1:11434/v1/chat/completions");
     expect(init.headers.Authorization).toBe("Bearer shh");
     expect(init.headers["api-key"]).toBe("shh");
+    const payload = JSON.parse(String(init.body));
+    const systemMessage = payload.messages.find((m: any) => m.role === "system");
+    expect(systemMessage.content).toContain(OPENAI_COMPAT_EXACT_EDITS_START);
+    expect(systemMessage.content).toContain(OPENAI_COMPAT_EXACT_EDITS_END);
+    expect(systemMessage.content).toContain(OPENAI_COMPAT_DIFF_START);
+    expect(systemMessage.content).toContain("Return exactly one marker block");
     expect(result.ok).toBe(true);
     expect(result.usage?.inputTokens).toBe(21);
     expect(result.usage?.outputTokens).toBe(8);
