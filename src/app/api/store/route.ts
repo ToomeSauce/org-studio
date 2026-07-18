@@ -6,6 +6,7 @@ import { getStoreProvider, type StoreData } from '@/lib/store-provider';
 import { parseMentions } from '@/lib/mention-notifier';
 import { routeCommentNotifications } from '@/lib/notification-router';
 import { resolveTaskComponent, resolveTaskVersion } from '@/lib/notification-context';
+import { hasConfiguredAgentRuntime } from '@/lib/notification-runtime';
 import { syncRoadmapItemForTask } from '@/lib/roadmap-sync';
 import { buildStatusTransition } from '@/lib/task-status';
 import { evaluateBlockedGate } from '@/lib/blocked-gate';
@@ -2354,27 +2355,35 @@ export async function POST(req: NextRequest) {
         const routerComponent = task ? resolveTaskComponent(projectFull, task) : undefined;
         const routerVersion = task ? resolveTaskVersion(projectFull, task) : undefined;
 
-        // Single unified call replaces all per-scope branchy dispatch
-        routeCommentNotifications({
-          comment: { id: comment.id, author: comment.author, content: comment.content, type: comment.type },
-          scope: commentScope,
-          teammates,
-          context: {
-            task: task ? { id: task.id, title: task.title, projectId: task.projectId, assignee: task.assignee } : undefined,
-            project: routerProject,
-            section: routerSection,
-            component: routerComponent,
-            version: routerVersion,
-            projectTasks: projectTasks.map((t: any) => ({ assignee: t.assignee })),
-            watchers: [],
-          },
-        })
-          .then(result => {
-            if (result.notified.length) {
-              console.log(`[notification-router] Notified ${result.notified.join(', ')} for ${commentScope.kind} comment`);
-            }
+        // Only a runtime-connected process may claim durable notification
+        // delivery. Store-only cloud instances still emit comment_added via
+        // Postgres; the local LISTEN bridge consumes it. Letting both claim
+        // caused the cloud process to win, fail delivery, and make the real
+        // bridge suppress @mentions as duplicate-pg.
+        if (hasConfiguredAgentRuntime()) {
+          routeCommentNotifications({
+            comment: { id: comment.id, author: comment.author, content: comment.content, type: comment.type },
+            scope: commentScope,
+            teammates,
+            context: {
+              task: task ? { id: task.id, title: task.title, projectId: task.projectId, assignee: task.assignee } : undefined,
+              project: routerProject,
+              section: routerSection,
+              component: routerComponent,
+              version: routerVersion,
+              projectTasks: projectTasks.map((t: any) => ({ assignee: t.assignee })),
+              watchers: [],
+            },
           })
-          .catch(err => console.error('[notification-router] Error:', err));
+            .then(result => {
+              if (result.notified.length) {
+                console.log(`[notification-router] Notified ${result.notified.join(', ')} for ${commentScope.kind} comment`);
+              }
+            })
+            .catch(err => console.error('[notification-router] Error:', err));
+        } else {
+          console.log(`[notification-router] Deferred ${commentScope.kind} comment ${comment.id} to the runtime-connected LISTEN bridge`);
+        }
 
         // Telegram notification when an agent posts a task comment (so humans see replies)
         if (task) {
