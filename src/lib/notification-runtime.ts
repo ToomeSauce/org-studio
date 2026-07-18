@@ -1,4 +1,4 @@
-type RuntimeEnvironment = Partial<Pick<NodeJS.ProcessEnv, 'GATEWAY_URL' | 'HERMES_URL'>>;
+type RuntimeEnvironment = Record<string, string | undefined>;
 
 /**
  * Comment notifications must only be claimed by a process that can reach an
