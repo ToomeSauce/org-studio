@@ -2362,11 +2362,26 @@ export async function POST(req: NextRequest) {
         // bridge suppress @mentions as duplicate-pg.
         if (hasConfiguredAgentRuntime()) {
           routeCommentNotifications({
-            comment: { id: comment.id, author: comment.author, content: comment.content, type: comment.type },
+            comment: {
+              id: comment.id,
+              author: comment.author,
+              content: comment.content,
+              type: comment.type,
+              createdAt: comment.createdAt,
+            },
             scope: commentScope,
             teammates,
             context: {
-              task: task ? { id: task.id, title: task.title, projectId: task.projectId, assignee: task.assignee } : undefined,
+              task: task ? {
+                id: task.id,
+                title: task.title,
+                projectId: task.projectId,
+                assignee: task.assignee,
+                status: task.status,
+                blockedReason: task.blockedReason,
+                blockedReasonType: task.blockedReasonType,
+                blockedBy: task.blockedBy,
+              } : undefined,
               project: routerProject,
               section: routerSection,
               component: routerComponent,
