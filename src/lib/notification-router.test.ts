@@ -17,24 +17,42 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock the delivery layer so tests don't reach out to runtimes.
 const sentMessages: Array<{ agentId: string; message: string; idempotencyKey?: string }> = [];
+let runtimeDeliveryFails = false;
+let rpcDeliveryFails = false;
+let rpcAttempts = 0;
 vi.mock('@/lib/runtimes/registry', () => ({
   sendToAgent: vi.fn(async (agentId: string, message: string, opts: any) => {
+    if (runtimeDeliveryFails) throw new Error('runtime unavailable');
     sentMessages.push({ agentId, message, idempotencyKey: opts?.idempotencyKey });
   }),
 }));
 vi.mock('@/lib/gateway-rpc', () => ({
-  rpc: vi.fn(async () => undefined),
+  rpc: vi.fn(async () => {
+    rpcAttempts += 1;
+    if (rpcDeliveryFails) throw new Error('gateway unavailable');
+  }),
 }));
 
-// #1513 — mock the Postgres-backed dedup so unit tests don't need a DB.
-// Tests can override tryClaim's return value per-case via mockTryClaim.
+// #1513/#1780 — mock the Postgres-backed lease lifecycle so unit tests
+// don't need a DB. Existing cases can override mockTryClaim per delivery.
 const auditWrites: any[] = [];
+const completedClaims: Array<{ key: string; token: string }> = [];
+const releasedClaims: Array<{ key: string; token: string }> = [];
 let mockTryClaim: (key: string, agentId: string, commentId: string, scope: string) => Promise<boolean> =
   async () => true;
 vi.mock('@/lib/notification-dedup', () => ({
-  tryClaim: vi.fn((key: string, agentId: string, commentId: string, scope: string) =>
-    mockTryClaim(key, agentId, commentId, scope)
-  ),
+  acquireClaim: vi.fn(async (key: string, agentId: string, commentId: string, scope: string) => {
+    const acquired = await mockTryClaim(key, agentId, commentId, scope);
+    return { acquired, token: acquired ? `claim:${key}` : null };
+  }),
+  completeClaim: vi.fn(async (key: string, token: string) => {
+    completedClaims.push({ key, token });
+    return true;
+  }),
+  releaseClaim: vi.fn(async (key: string, token: string) => {
+    releasedClaims.push({ key, token });
+    return true;
+  }),
   writeAudit: vi.fn(async (entry: any) => {
     auditWrites.push(entry);
   }),
@@ -55,6 +73,11 @@ const baseTask = { id: 't-1', title: 'Test task', projectId: 'proj-org-studio', 
 beforeEach(() => {
   sentMessages.length = 0;
   auditWrites.length = 0;
+  completedClaims.length = 0;
+  releasedClaims.length = 0;
+  runtimeDeliveryFails = false;
+  rpcDeliveryFails = false;
+  rpcAttempts = 0;
   mockTryClaim = async () => true;
   _resetDedupCache();
 });
@@ -262,6 +285,153 @@ describe('#1268 — auto-notify dev owner on every (non-system) ticket comment',
       context: { task: baseTask },
     });
     expect(res.notified).toContain('mikey');
+  });
+});
+
+describe('#1780 — human input wakes blocked assignees without auto-unblocking', () => {
+  const blockedTask = {
+    ...baseTask,
+    status: 'blocked',
+    blockedReasonType: 'external-dependency',
+    blockedReason: 'Waiting for the private runtime to reconnect.',
+    blockedBy: [1779],
+  };
+
+  it('ordinary human comment wakes the blocked assignee with current blocker and decision guidance', async () => {
+    const original = structuredClone(blockedTask);
+    const res = await routeCommentNotifications({
+      comment: { id: '1780-blocked', author: 'Basil', content: 'The runtime is back; please verify before resuming.' },
+      scope: { kind: 'task', taskId: blockedTask.id },
+      teammates,
+      context: { task: blockedTask },
+    });
+
+    expect(res.notified).toEqual(['mikey']);
+    const sent = sentMessages.find((message) => message.agentId === 'mikey');
+    expect(sent?.message).toContain('This task is still blocked');
+    expect(sent?.message).toContain('external-dependency');
+    expect(sent?.message).toContain('Waiting for the private runtime to reconnect.');
+    expect(sent?.message).toContain('Blocked by: #1779');
+    expect(sent?.message).toContain('The runtime is back; please verify before resuming.');
+    expect(sent?.message).toMatch(/resume, ask a follow-up, or remain blocked/i);
+    expect(blockedTask).toEqual(original);
+  });
+
+  it('explicit mention wakes a mentioned agent even when the blocked task is unassigned', async () => {
+    const task = { ...blockedTask, assignee: undefined };
+    const res = await routeCommentNotifications({
+      comment: { id: '1780-mention', author: 'Basil', content: '@ana can you inspect this blocker?' },
+      scope: { kind: 'task', taskId: task.id },
+      teammates,
+      context: { task },
+    });
+
+    expect(res.notified).toEqual(['ana']);
+    expect(sentMessages[0]?.message).toMatch(/mentioned you on task/);
+    expect(sentMessages[0]?.message).toContain('This task is still blocked');
+  });
+
+  it('ordinary comment on an unassigned blocked task does not invent a recipient', async () => {
+    const task = { ...blockedTask, assignee: undefined };
+    const res = await routeCommentNotifications({
+      comment: { id: '1780-unassigned', author: 'Basil', content: 'Any owner?' },
+      scope: { kind: 'task', taskId: task.id },
+      teammates,
+      context: { task },
+    });
+
+    expect(res.notified).toEqual([]);
+    expect(sentMessages).toEqual([]);
+  });
+
+  it('preserves ordinary-comment delivery for a done assigned task without blocked instructions', async () => {
+    const task = { ...baseTask, status: 'done' };
+    const res = await routeCommentNotifications({
+      comment: { id: '1780-done', author: 'Basil', content: 'One post-ship question.' },
+      scope: { kind: 'task', taskId: task.id },
+      teammates,
+      context: { task },
+    });
+
+    expect(res.notified).toEqual(['mikey']);
+    expect(sentMessages[0]?.message).toMatch(/Reply on the task, not in chat/);
+    expect(sentMessages[0]?.message).not.toContain('This task is still blocked');
+  });
+
+  it.each(['system', 'bot', 'automation'])('%s comments cannot create wake loops', async (type) => {
+    const res = await routeCommentNotifications({
+      comment: { id: `1780-${type}`, author: 'System', content: 'Automated state note.', type },
+      scope: { kind: 'task', taskId: blockedTask.id },
+      teammates,
+      context: { task: blockedTask },
+    });
+
+    expect(res).toEqual({ notified: [], skipped: [] });
+    expect(sentMessages).toEqual([]);
+  });
+
+  it('does not misroute a Hermes assignee into OpenClaw when Hermes is unavailable', async () => {
+    runtimeDeliveryFails = true;
+    const hermesTeammates: Teammate[] = [
+      ...teammates,
+      { id: 'g', name: 'Gem', agentId: 'hermes-gem', isHuman: false },
+    ];
+    const task = { ...blockedTask, assignee: 'Gem' };
+
+    const res = await routeCommentNotifications({
+      comment: { id: '1780-hermes-down', author: 'Basil', content: '@Gem please inspect.' },
+      scope: { kind: 'task', taskId: task.id },
+      teammates: hermesTeammates,
+      context: { task },
+    });
+
+    expect(res.skipped).toContainEqual({ agentId: 'hermes-gem', reason: 'delivery-failed' });
+    expect(rpcAttempts).toBe(0);
+    expect(releasedClaims).toHaveLength(1);
+  });
+
+  it('releases a failed durable lease and allows the same event to retry after runtime recovery', async () => {
+    runtimeDeliveryFails = true;
+    rpcDeliveryFails = true;
+    const params = {
+      comment: { id: '1780-retry', author: 'Basil', content: 'Please take another look.' },
+      scope: { kind: 'task' as const, taskId: blockedTask.id },
+      teammates,
+      context: { task: blockedTask },
+    };
+
+    const failed = await routeCommentNotifications(params);
+    expect(failed.skipped).toContainEqual({ agentId: 'mikey', reason: 'delivery-failed' });
+    expect(releasedClaims).toHaveLength(1);
+    expect(completedClaims).toHaveLength(0);
+
+    runtimeDeliveryFails = false;
+    rpcDeliveryFails = false;
+    const retried = await routeCommentNotifications(params);
+    expect(retried.notified).toEqual(['mikey']);
+    expect(completedClaims).toHaveLength(1);
+  });
+
+  it('a conflicting pending claim does not poison the local LRU after that claim is released elsewhere', async () => {
+    let first = true;
+    mockTryClaim = async () => {
+      if (first) {
+        first = false;
+        return false;
+      }
+      return true;
+    };
+    const params = {
+      comment: { id: '1780-pending', author: 'Basil', content: 'Pending handoff.' },
+      scope: { kind: 'task' as const, taskId: blockedTask.id },
+      teammates,
+      context: { task: blockedTask },
+    };
+
+    const pending = await routeCommentNotifications(params);
+    expect(pending.skipped).toContainEqual({ agentId: 'mikey', reason: 'duplicate-pg' });
+    const retried = await routeCommentNotifications(params);
+    expect(retried.notified).toEqual(['mikey']);
   });
 });
 

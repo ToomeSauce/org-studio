@@ -133,7 +133,16 @@ export async function POST(request: NextRequest) {
     teammates,
     context: {
       task: task
-        ? { id: task.id, title: task.title, projectId: task.projectId, assignee: task.assignee }
+        ? {
+            id: task.id,
+            title: task.title,
+            projectId: task.projectId,
+            assignee: task.assignee,
+            status: task.status,
+            blockedReason: task.blockedReason,
+            blockedReasonType: task.blockedReasonType,
+            blockedBy: task.blockedBy,
+          }
         : undefined,
       project: routerProject,
       // #1287 — parity with /api/store route: component + version owners

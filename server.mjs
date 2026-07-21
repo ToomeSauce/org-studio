@@ -1170,7 +1170,17 @@ async function initializePostgresListener() {
                   } else {
                     const j = await r.json().catch(() => ({}));
                     if (Array.isArray(j.notified) && j.notified.length > 0) {
-                      console.log(`[LISTEN] notify-comment delivered: ${j.notified.map(n => `${n.agentId}(${n.reason})`).join(', ')} commentId=${changeEvent.commentId || 'none'}`);
+                      console.log(`[LISTEN] notify-comment delivered: ${j.notified.join(', ')} commentId=${changeEvent.commentId || 'none'}`);
+                    }
+                    const deliveryFailures = Array.isArray(j.skipped)
+                      ? j.skipped.filter((entry) => entry?.reason === 'delivery-failed')
+                      : [];
+                    if (deliveryFailures.length > 0) {
+                      console.error(
+                        `[LISTEN] notify-comment runtime delivery failed: ` +
+                        `${deliveryFailures.map((entry) => entry.agentId).join(', ')} ` +
+                        `commentId=${changeEvent.commentId || 'none'}; durable claim released for replay`,
+                      );
                     }
                   }
                 })
@@ -2931,7 +2941,9 @@ server.listen(port, async () => {
         await client.connect();
         try {
           const d = await client.query(
-            `DELETE FROM org_studio_notification_dedup WHERE delivered_at < NOW() - INTERVAL '7 days'`
+            `DELETE FROM org_studio_notification_dedup
+              WHERE (claim_state = 'delivered' AND delivered_at < NOW() - INTERVAL '7 days')
+                 OR (claim_state = 'pending' AND claim_expires_at < NOW() - INTERVAL '1 day')`
           );
           const a = await client.query(
             `DELETE FROM org_studio_notification_audit WHERE occurred_at < NOW() - INTERVAL '30 days'`

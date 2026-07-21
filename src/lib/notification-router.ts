@@ -16,7 +16,12 @@ import { rpc } from '@/lib/gateway-rpc';
 import { parseMentions, getProjectTeammateNames } from '@/lib/mentions';
 import type { Teammate, MentionMatch } from '@/lib/mentions';
 import type { CommentScope } from '@/lib/store';
-import { tryClaim, writeAudit } from '@/lib/notification-dedup';
+import {
+  acquireClaim,
+  completeClaim,
+  releaseClaim,
+  writeAudit,
+} from '@/lib/notification-dedup';
 
 // ---------- Types ----------
 
@@ -48,6 +53,10 @@ export interface RouterTask {
   title: string;
   projectId?: string;
   assignee?: string;
+  status?: string;
+  blockedReason?: string | null;
+  blockedReasonType?: string | null;
+  blockedBy?: Array<string | number>;
 }
 
 export interface RouterProject {
@@ -221,16 +230,35 @@ function buildMessage(
           ? 'commented on your task'
           : 'commented on a task you own';
       const author = comment.author;
-      // Keep the body short — use the snippet, not full content. Long
-      // comments still arrive through the UI; the prompt's job is to
-      // make the agent stop and look.
+      const task = ctx.task;
+      // A human comment on a blocked task is actionable input, but never an
+      // implicit unblock. Carry the current blocker in the wake so the agent
+      // can deliberately resume, ask a follow-up, or leave the task blocked.
+      const blockedContext = task?.status === 'blocked'
+        ? (() => {
+            const reason = task.blockedReason?.trim() || 'No blocker explanation was recorded.';
+            const reasonType = task.blockedReasonType?.trim();
+            const dependencies = (task.blockedBy || []).length > 0
+              ? `\nBlocked by: ${(task.blockedBy || []).map((id) => `#${id}`).join(', ')}`
+              : '';
+            return (
+              `🚧 **This task is still blocked. Do not assume the comment unblocks it.**\n` +
+              `Current blocker${reasonType ? ` (${reasonType})` : ''}: ${reason}${dependencies}\n\n`
+            );
+          })()
+        : '';
+      // Keep the comment body bounded; the task id lets the recipient fetch
+      // the canonical thread before deciding what to do.
       return (
         `💬 **${author}** ${verb}: **${title}**\n\n` +
-        `> ${snippet}\n\n` +
+        blockedContext +
+        `New comment:\n> ${snippet}\n\n` +
         `Task ID: ${taskId}\n\n` +
-        `**Reply on the task, not in chat.** Call \`addComment\` against this task id ` +
-        `so ${author} sees your response on the ticket. Include @${author} in your reply ` +
-        `to notify them.`
+        (task?.status === 'blocked'
+          ? `**Inspect the comment and blocker, then decide whether to resume, ask a follow-up, or remain blocked.** `
+          : `**Reply on the task, not in chat.** `) +
+        `Call \`addComment\` against this task id so ${author} sees your response on the ticket. ` +
+        `Include @${author} in your reply to notify them.`
       );
     }
     case 'board': {
@@ -397,6 +425,10 @@ async function deliverToAgent(
     });
     return true;
   } catch {
+    // Hermes-owned identities must never be redirected into an OpenClaw
+    // session when their runtime is unavailable. Release the delivery lease
+    // instead so the canonical Hermes route can retry later.
+    if (agentId.startsWith('hermes-')) return false;
     // Fallback: direct OpenClaw RPC
     try {
       await rpc('chat.send', {
@@ -428,7 +460,7 @@ export async function routeCommentNotifications(params: RouteParams): Promise<Ro
   // #1268 — system comments are auto-generated (status-rewind reasons,
   // reopen notes, etc.). They must not page anyone; the change they record
   // already produced its own notification (status-change ping, etc.).
-  if (comment.type === 'system') {
+  if (comment.type === 'system' || comment.type === 'bot' || comment.type === 'automation') {
     return result;
   }
 
@@ -503,15 +535,16 @@ export async function routeCommentNotifications(params: RouteParams): Promise<Ro
     const message = buildMessage(scope, comment, params.context, reason);
     const idempotencyKey = `notify-${scope.kind}-${commentId}-${agentId}`;
 
-    // #1513 — Postgres-backed durable dedup. INSERT ... ON CONFLICT DO
-    // NOTHING returns true only for the FIRST claim of this idempotency
-    // key, even across process restarts / LRU resets / multi-emitter races.
-    // Fail-open if Postgres is unavailable (caller's LRU still helps).
-    const claimed = await tryClaim(idempotencyKey, agentId, commentId, scope.kind);
-    if (!claimed) {
+    // #1513/#1780 — acquire a short pending lease before handoff. Only a
+    // successful runtime handoff is completed as durable delivery; failure
+    // releases the lease so a replay can retry. An expired lease can be taken
+    // over after a process crash.
+    const claim = await acquireClaim(idempotencyKey, agentId, commentId, scope.kind);
+    if (!claim.acquired || !claim.token) {
       result.skipped.push({ agentId, reason: 'duplicate-pg' });
-      // Mirror to LRU so subsequent loops in this process don't re-query PG.
-      markNotified(agentId, commentId);
+      // Do not seed the LRU here: another process may only hold a pending
+      // lease and later release it after delivery failure. The durable row is
+      // authoritative for completed duplicates.
       writeAudit({
         commentId,
         sourceCommentCreatedAt: sourceCreatedAt > 0 ? sourceCreatedAt : null,
@@ -525,12 +558,26 @@ export async function routeCommentNotifications(params: RouteParams): Promise<Ro
       continue;
     }
 
-    // Deliver
+    // Deliver. Runtime registry first, OpenClaw RPC fallback second.
     const ok = await deliverToAgent(agentId, message, idempotencyKey);
     if (ok) {
+      const completed = await completeClaim(idempotencyKey, claim.token);
+      if (!completed) {
+        console.warn(
+          `[notification-router] Runtime delivered ${commentId} to ${agentId}, ` +
+          'but the durable claim could not be completed; runtime idempotency remains active.',
+        );
+      }
       markNotified(agentId, commentId);
       result.notified.push(agentId);
     } else {
+      const released = await releaseClaim(idempotencyKey, claim.token);
+      if (!released) {
+        console.warn(
+          `[notification-router] Delivery failed for ${commentId} to ${agentId}; ` +
+          'claim release failed and will remain retryable after lease expiry.',
+        );
+      }
       result.skipped.push({ agentId, reason: 'delivery-failed' });
     }
 
