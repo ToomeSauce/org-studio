@@ -127,13 +127,22 @@ export class HermesRuntime implements AgentRuntime {
   id = 'hermes';
   name = 'Hermes Agent';
   private explicitUrls: string[];
+  private apiKey: string;
   private profileCache: HermesProfile[] | null = null;
 
   constructor() {
     const envUrl = process.env.HERMES_URL || '';
+    this.apiKey = (process.env.HERMES_API_KEY || '').trim();
     this.explicitUrls = envUrl
       ? envUrl.split(',').map(u => u.trim()).filter(Boolean)
       : [];
+  }
+
+  private headers(extra: Record<string, string> = {}): Record<string, string> {
+    return {
+      ...extra,
+      ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
+    };
   }
 
   /**
@@ -184,7 +193,9 @@ export class HermesRuntime implements AgentRuntime {
         // Get model/agent name from the API
         let agentName = profile.soulName || profile.name;
         try {
-          const resp = await fetch(`${profile.url}/v1/models`);
+          const resp = await fetch(`${profile.url}/v1/models`, {
+            headers: this.headers(),
+          });
           if (resp.ok) {
             const data = await resp.json();
             if (data.data?.[0]?.id && data.data[0].id !== 'hermes-agent') {
@@ -244,7 +255,10 @@ export class HermesRuntime implements AgentRuntime {
 
     // Quick pre-flight: verify the agent is reachable
     try {
-      const healthRes = await fetch(`${url}/health`, { signal: AbortSignal.timeout(5000) });
+      const healthRes = await fetch(`${url}/health`, {
+        headers: this.headers(),
+        signal: AbortSignal.timeout(5000),
+      });
       if (!healthRes.ok) {
         throw new Error(`Hermes agent not healthy: ${healthRes.status}`);
       }
@@ -256,7 +270,7 @@ export class HermesRuntime implements AgentRuntime {
     console.log(`[Hermes] Dispatching task to ${agentId} via ${runsUrl}`);
     const runRes = await fetch(runsUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         input: message,
         session_id: opts?.sessionKey || `org-studio-${agentId}`,
@@ -266,7 +280,9 @@ export class HermesRuntime implements AgentRuntime {
 
     if (!runRes.ok) {
       const errText = await runRes.text().catch(() => '');
-      if (opts?.onComplete) opts.onComplete(agentId);
+      // Run creation never succeeded, so there is no completed agent turn.
+      // Do not fire onComplete here: the durable outbox still owns retries and
+      // will clear in-flight only when its final delivery attempt fails.
       throw new Error(`Hermes /v1/runs error ${runRes.status}: ${errText}`);
     }
 
@@ -291,7 +307,10 @@ export class HermesRuntime implements AgentRuntime {
     resetInactivity();
 
     globalThis.setTimeout(() => {
-      fetch(eventsUrl, { signal: controller.signal })
+      fetch(eventsUrl, {
+        headers: this.headers(),
+        signal: controller.signal,
+      })
         .then(async (res) => {
           if (!res.ok || !res.body) {
             console.error(`[Hermes] Agent ${agentId} events stream failed: ${res.status}`);
@@ -392,7 +411,10 @@ export class HermesRuntime implements AgentRuntime {
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 3000);
-      const response = await fetch(`${url}/health`, { signal: controller.signal as any });
+      const response = await fetch(`${url}/health`, {
+        headers: this.headers(),
+        signal: controller.signal as any,
+      });
       clearTimeout(timeout);
       return response.ok;
     } catch {

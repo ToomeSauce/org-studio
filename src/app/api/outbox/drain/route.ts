@@ -22,6 +22,7 @@ interface DrainRequest {
   outboxId: string;
   agentId: string;
   idempotencyKey: string;
+  finalAttempt?: boolean;
   payload: {
     message: string;
     sessionKey: string;
@@ -39,9 +40,13 @@ export async function POST(request: NextRequest) {
   const scopeFail = requireWriteScope(authCtx.context);
   if (scopeFail) return scopeFail;
 
+  let failedAgentId: string | undefined;
+  let finalAttempt = false;
   try {
     const body: DrainRequest = await request.json();
     const { outboxId, agentId, idempotencyKey, payload } = body;
+    failedAgentId = agentId;
+    finalAttempt = body.finalAttempt === true;
 
     if (!agentId || !idempotencyKey || !payload?.message || !payload?.sessionKey) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
@@ -118,6 +123,14 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ ok: true, outboxId });
   } catch (e: any) {
+    // A scheduler dispatch is no longer in flight once its final durable
+    // delivery attempt fails. Clear immediately instead of blocking all later
+    // work for the ten-minute safety timeout. Earlier failures keep the marker
+    // while the same outbox row is still retrying, preventing duplicates.
+    if (finalAttempt && failedAgentId) {
+      clearInFlightAgent(failedAgentId);
+      console.warn(`[Outbox drain] ${failedAgentId} final delivery attempt failed; cleared in-flight`);
+    }
     console.error(`[Outbox drain] sendToAgent failed:`, e?.message || e);
     return NextResponse.json(
       { error: e?.message || 'sendToAgent failed' },

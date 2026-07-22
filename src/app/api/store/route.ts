@@ -6,7 +6,7 @@ import { getStoreProvider, type StoreData } from '@/lib/store-provider';
 import { parseMentions } from '@/lib/mention-notifier';
 import { routeCommentNotifications } from '@/lib/notification-router';
 import { resolveTaskComponent, resolveTaskVersion } from '@/lib/notification-context';
-import { hasConfiguredAgentRuntime } from '@/lib/notification-runtime';
+import { shouldRouteCommentNotificationsInline } from '@/lib/notification-runtime';
 import { syncRoadmapItemForTask } from '@/lib/roadmap-sync';
 import { buildStatusTransition } from '@/lib/task-status';
 import { evaluateBlockedGate } from '@/lib/blocked-gate';
@@ -2362,7 +2362,7 @@ export async function POST(req: NextRequest) {
         // Postgres; the local LISTEN bridge consumes it. Letting both claim
         // caused the cloud process to win, fail delivery, and make the real
         // bridge suppress @mentions as duplicate-pg.
-        if (hasConfiguredAgentRuntime()) {
+        if (shouldRouteCommentNotificationsInline()) {
           routeCommentNotifications({
             comment: {
               id: comment.id,

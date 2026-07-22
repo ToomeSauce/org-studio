@@ -14,3 +14,21 @@ export function hasConfiguredAgentRuntime(
 ): boolean {
   return Boolean(env.GATEWAY_URL?.trim() || env.HERMES_URL?.trim());
 }
+
+/**
+ * Postgres-backed deployments route comment notifications through the single
+ * LISTEN bridge in server.mjs. Routing inline from the request process as well
+ * creates a race: a short-lived/cloud request can acquire the durable claim,
+ * then disappear or fail before delivery while the real bridge suppresses the
+ * event as duplicate-pg. File-mode installs have no LISTEN bridge, so they keep
+ * the inline path when a runtime is configured.
+ */
+export function shouldRouteCommentNotificationsInline(
+  env: RuntimeEnvironment = process.env,
+): boolean {
+  if (env.DATABASE_URL?.trim()) return false;
+  if (['1', 'true'].includes((env.OUTBOX_WORKER_DISABLED || '').trim().toLowerCase())) {
+    return false;
+  }
+  return hasConfiguredAgentRuntime(env);
+}
