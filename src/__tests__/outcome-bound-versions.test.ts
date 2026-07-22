@@ -86,6 +86,10 @@ function makeFakeClient(initialState: {
       if (/FROM\s+org_studio_roadmap_versions[\s\S]*status\s*=\s*'current'/i.test(sql)) {
         return { rows: currentRow ? [currentRow] : [] };
       }
+      // SELECT canonical status for the locked project pointer.
+      if (/SELECT\s+status\s+FROM\s+org_studio_roadmap_versions/i.test(sql)) {
+        return { rows: currentRow ? [{ status: currentRow.status }] : [] };
+      }
       // UPDATE setting status='shipped'
       if (/UPDATE\s+org_studio_roadmap_versions\s+SET\s+status\s*=\s*'shipped'/i.test(sql)) {
         if (currentRow) currentRow.status = 'shipped';
@@ -129,6 +133,10 @@ describe('checkAndAutoAdvance metric gate (#1263)', () => {
   beforeEach(() => {
     // Reset module state between tests.
     vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('does NOT ship when criteria are set and metric is unmet', async () => {
@@ -183,6 +191,41 @@ describe('checkAndAutoAdvance metric gate (#1263)', () => {
 
     expect(fake.updates.find((u) => u.kind === 'shipped')).toBeDefined();
     expect(fake.getCurrentRow()!.status).toBe('shipped');
+  });
+
+  it('emits the shipped nudge only after the lifecycle transaction commits', async () => {
+    const { checkAndAutoAdvance } = await import('../lib/roadmap-sync');
+    const events: string[] = [];
+    const fake = makeFakeClient({
+      currentRow: {
+        id: 'rv-proj-test-0-10',
+        version: '0.10',
+        status: 'current',
+        items: [{ id: 'i1', taskId: 't1', done: true }],
+        sort_order: 1,
+        meta: {},
+      },
+      projectData: {
+        state: 'active',
+        currentVersion: '0.10',
+        components: [{ id: 'sec-main', role: null, approvedVersions: [] }],
+      },
+    });
+    const originalQuery = fake.client.query;
+    fake.client.query = vi.fn(async (sql: string, params: any[] = []) => {
+      if (sql === 'COMMIT') events.push('commit');
+      return originalQuery(sql, params);
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      events.push('fetch');
+      return { ok: true, status: 200, json: async () => ({ settings: { teammates: [] } }) };
+    }));
+
+    await checkAndAutoAdvance('proj-test', fake.client);
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
+
+    expect(events.indexOf('commit')).toBeGreaterThanOrEqual(0);
+    expect(events.indexOf('fetch')).toBeGreaterThan(events.indexOf('commit'));
   });
 
   it('posts system comment exactly once per not-met state (idempotent)', async () => {

@@ -290,7 +290,7 @@ export async function PATCH(
         shadowSync = await syncProjectShadowVersion(client, projectId, 'upsert', version, {
           version,
           items: currentItems,
-        });
+        }, workspaceId);
       } catch (e) {
         console.warn('[PATCH items] shadow sync failed (non-fatal)', (e as Error)?.message);
       }

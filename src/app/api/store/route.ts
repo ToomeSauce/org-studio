@@ -2159,7 +2159,9 @@ export async function POST(req: NextRequest) {
             const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 3 });
             const client = await pool.connect();
             try {
-              const result = await promoteProjectToNextVersion(projectId, client);
+              const result = await promoteProjectToNextVersion(projectId, client, {
+                workspaceId: workspace.id,
+              });
               promoteOutcome = result;
               if (result.promoted) {
                 console.log(

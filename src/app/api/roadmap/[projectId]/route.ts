@@ -5,11 +5,13 @@ import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 import { checkArchivedProject } from '@/lib/archived-project-compat';
 import { versionSortKey, compareVersions, isValidVersion } from '@/lib/version-utils';
 import { renameVersionInProjectData, rvDerivedId } from '@/lib/roadmap-rename';
-import { syncProjectShadowVersion } from '@/lib/roadmap-sync';
-import { recordInternalCallFailure } from '@/lib/dispatch-ledger';
-// #1645 — currentVersion sync goes through the shared service layer instead
-// of an HTTP self-fetch of POST /api/store (the #1640 failure class).
-import { updateProjectService } from '@/lib/store-service';
+import {
+  advanceAfterShipmentLocked,
+  checkAndAutoAdvanceLocked,
+  dispatchRoadmapLifecyclePostCommit,
+  syncProjectShadowVersion,
+  type AdvanceAfterShipmentOutcome,
+} from '@/lib/roadmap-sync';
 import { validateMetricSource } from '@/lib/metric-source';
 
 // #1461 — allow-list for version_type (must match the DB CHECK constraint
@@ -65,6 +67,30 @@ async function resolveDefaultOwnerFromProject(
  *   - The only existing 'current' row IS the version we're updating
  *     (idempotent same-version self-update).
  */
+async function syncCurrentVersionInTransaction(
+  client: any,
+  projectId: string,
+  workspaceId: string,
+  version: string,
+): Promise<void> {
+  const projectRes = await client.query(
+    `SELECT data FROM org_studio_projects
+     WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
+    [projectId, workspaceId],
+  );
+  if (projectRes.rows.length === 0) {
+    throw new Error(`Project ${projectId} not found while syncing currentVersion`);
+  }
+  const projectData = typeof projectRes.rows[0].data === 'string'
+    ? JSON.parse(projectRes.rows[0].data)
+    : projectRes.rows[0].data || {};
+  projectData.currentVersion = version;
+  await client.query(
+    `UPDATE org_studio_projects SET data = $1 WHERE id = $2 AND workspace_id = $3`,
+    [JSON.stringify(projectData), projectId, workspaceId],
+  );
+}
+
 async function guardSingleCurrent(
   client: any,
   projectId: string,
@@ -360,6 +386,24 @@ export async function POST(
       const { Pool } = await import('pg');
       const pool = new Pool({ connectionString: process.env.DATABASE_URL });
       const client = await pool.connect();
+      let lifecycleTransactionOpen = false;
+
+      const beginLifecycleTransaction = async () => {
+        await client.query('BEGIN');
+        lifecycleTransactionOpen = true;
+        await client.query(
+          `SELECT pg_advisory_xact_lock(hashtext($1))`,
+          [`roadmap-lifecycle:${workspaceId}:${projectId}`],
+        );
+      };
+      const commitLifecycleTransaction = async () => {
+        await client.query('COMMIT');
+        lifecycleTransactionOpen = false;
+      };
+      const rollbackLifecycleTransaction = async () => {
+        if (!lifecycleTransactionOpen) return;
+        try { await client.query('ROLLBACK'); } finally { lifecycleTransactionOpen = false; }
+      };
 
       try {
         if (action === 'upsert') {
@@ -377,7 +421,7 @@ export async function POST(
             const newSortOrder = versionSortKey(version);
 
             try {
-              await client.query('BEGIN');
+              await beginLifecycleTransaction();
 
               // Source must exist.
               const srcRes = await client.query(
@@ -388,7 +432,7 @@ export async function POST(
                 [projectId, originalVersion, ws],
               );
               if (srcRes.rows.length === 0) {
-                await client.query('ROLLBACK');
+                await rollbackLifecycleTransaction();
                 return NextResponse.json(
                   {
                     error: 'rename_source_missing',
@@ -405,7 +449,7 @@ export async function POST(
                 [projectId, version, ws],
               );
               if (tgtRes.rows.length > 0) {
-                await client.query('ROLLBACK');
+                await rollbackLifecycleTransaction();
                 return NextResponse.json(
                   {
                     error: 'rename_target_exists',
@@ -422,7 +466,7 @@ export async function POST(
               if (status === 'current') {
                 const guard = await guardSingleCurrent(client, projectId, ws, version);
                 if (guard) {
-                  await client.query('ROLLBACK');
+                  await rollbackLifecycleTransaction();
                   return guard;
                 }
               }
@@ -501,6 +545,7 @@ export async function POST(
                   originalVersion,
                   version,
                 );
+                if (status === 'current') result.data.currentVersion = version;
                 await client.query(
                   `UPDATE org_studio_projects SET data = $1 WHERE id = $2 AND workspace_id = $3`,
                   [JSON.stringify(result.data), projectId, ws],
@@ -514,48 +559,8 @@ export async function POST(
                 };
               }
 
-              await client.query('COMMIT');
-
-              // Sync currentVersion AFTER the rename so the new string is
-              // what gets written to the project record.
-              if (status === 'current') {
-                try {
-                  const storeRes = await fetch(
-                    `http://localhost:${process.env.PORT || 4501}/api/store`,
-                    {
-                      method: 'POST',
-                      headers: {
-                        'Content-Type': 'application/json',
-                        ...(process.env.ORG_STUDIO_API_KEY
-                          ? { Authorization: `Bearer ${process.env.ORG_STUDIO_API_KEY}` }
-                          : {}),
-                      },
-                      body: JSON.stringify({
-                        action: 'updateProject',
-                        id: projectId,
-                        updates: { currentVersion: version },
-                      }),
-                    },
-                  );
-                  if (!storeRes.ok) {
-                    recordInternalCallFailure('roadmap-route:rename-currentVersion-sync', '/api/store', storeRes.status, 'http-status');
-                    console.warn(
-                      `[Roadmap] Failed to sync currentVersion to project after rename: ${storeRes.status}`,
-                    );
-                  }
-                } catch (e) {
-                  recordInternalCallFailure('roadmap-route:rename-currentVersion-sync', '/api/store', null, 'fetch-throw');
-                  console.warn(
-                    '[Roadmap] Failed to sync currentVersion to project after rename:',
-                    e,
-                  );
-                }
-              }
-
-              // NOTIFY: roadmap_update with action:'rename' (extra
-              // originalVersion field for listeners that care) plus a
-              // project_update so cached store refreshes pick up the
-              // jsonb rewrite.
+              // Transactional NOTIFY is delivered only if COMMIT succeeds,
+              // so callers never see a 500 for a rename that already stuck.
               await notifyRoadmapChange(
                 client,
                 projectId,
@@ -565,6 +570,7 @@ export async function POST(
                 workspaceId,
               );
               await notifyProjectChange(client, projectId, workspaceId);
+              await commitLifecycleTransaction();
 
               return NextResponse.json({
                 action: 'renamed',
@@ -579,13 +585,13 @@ export async function POST(
                 projectFieldsRewritten,
               });
             } catch (e) {
-              try {
-                await client.query('ROLLBACK');
-              } catch {}
+              await rollbackLifecycleTransaction();
               throw e;
             }
           }
 
+          await beginLifecycleTransaction();
+          let lifecycleOutcome: AdvanceAfterShipmentOutcome | undefined;
           const versionId = `rv-${projectId}-${version.replace(/\./g, '-')}`;
           const sortOrder = versionSortKey(version);
 
@@ -598,7 +604,10 @@ export async function POST(
           // e.g. proj-catpilot).
           if (status === 'current') {
             const guard = await guardSingleCurrent(client, projectId, workspaceId, version);
-            if (guard) return guard;
+            if (guard) {
+              await rollbackLifecycleTransaction();
+              return guard;
+            }
           }
 
           // Ensure every item has an id. Older items were stored as {title, done, taskId}
@@ -618,9 +627,10 @@ export async function POST(
           // #1263: read existing meta so we can do a partial merge AND emit
           // a measurement-update system comment when only metricCurrent changed.
           const existingMetaRes = await client.query(
-            `SELECT meta FROM org_studio_roadmap_versions WHERE project_id = $1 AND version = $2 AND workspace_id = $3 LIMIT 1`,
+            `SELECT status, meta FROM org_studio_roadmap_versions WHERE project_id = $1 AND version = $2 AND workspace_id = $3 LIMIT 1`,
             [projectId, version, workspaceId],
           );
+          const existingStatus = existingMetaRes.rows[0]?.status;
           const existingMeta: any = (existingMetaRes.rows[0]?.meta && typeof existingMetaRes.rows[0].meta === 'object')
             ? existingMetaRes.rows[0].meta
             : {};
@@ -702,20 +712,9 @@ export async function POST(
             ]
           );
 
-          // Auto-sync: if this version is set to "current", update the project's currentVersion
+          // Canonical row + project pointer are one lifecycle transaction.
           if (status === 'current') {
-            try {
-              // #1645: direct service call (was HTTP self-fetch of /api/store).
-              // Same side-effects: provider write + NOTIFY org_studio_change.
-              const syncRes = await updateProjectService(workspaceId, projectId, { currentVersion: version });
-              if (!syncRes.ok) {
-                recordInternalCallFailure('roadmap-route:upsert-currentVersion-sync', 'store-service:updateProject', syncRes.status, 'service-error');
-                console.warn(`[Roadmap] Failed to sync currentVersion to project: ${syncRes.error}`);
-              }
-            } catch (e) {
-              recordInternalCallFailure('roadmap-route:upsert-currentVersion-sync', 'store-service:updateProject', null, 'service-throw');
-              console.warn('[Roadmap] Failed to sync currentVersion to project:', e);
-            }
+            await syncCurrentVersionInTransaction(client, projectId, workspaceId, version);
           }
 
           // #1314: keep project.sections[].versions and components[].versions
@@ -737,7 +736,7 @@ export async function POST(
               sort_order: sortOrder,
               version_type: resolvedVersionType,
               owner: ownerProvided ? ownerValue : null,
-            });
+            }, workspaceId);
           } catch (e) {
             console.warn('[Roadmap] Shadow sync failed (non-fatal, reconcile cron will heal):', (e as any)?.message || e);
           }
@@ -746,7 +745,35 @@ export async function POST(
           // #1314: emit project_update too so the cached store refreshes the
           // shadow we just rewrote (roadmap_update alone doesn't reload
           // project.sections jsonb on the server-side cache).
-          if (shadowSync.touched) {
+          if (shadowSync.touched || status === 'current') {
+            await notifyProjectChange(client, projectId, workspaceId);
+          }
+
+          // Lifecycle writes must continue the queue, not merely paint a row.
+          // A manual current→shipped edit is an explicit completion decision;
+          // recover/advance immediately. A measurement change on a current
+          // all-done version re-runs the normal outcome gate immediately so a
+          // newly-met metric need not wait for the 15-minute reconciler.
+          let autoAdvance: any = undefined;
+          if (existingStatus === 'current' && status === 'shipped') {
+            await client.query(
+              `UPDATE org_studio_roadmap_versions
+               SET shipped_at = COALESCE(shipped_at, $1)
+               WHERE project_id = $2 AND version = $3 AND workspace_id = $4`,
+              [String(Date.now()), projectId, version, workspaceId],
+            );
+            lifecycleOutcome = await advanceAfterShipmentLocked(
+              projectId,
+              version,
+              client,
+              workspaceId,
+              true,
+            );
+            autoAdvance = lifecycleOutcome.result;
+          } else if (status === 'current' && metaProvided.metricCurrent) {
+            lifecycleOutcome = await checkAndAutoAdvanceLocked(projectId, client, workspaceId);
+          }
+          if (lifecycleOutcome?.result.promoted) {
             await notifyProjectChange(client, projectId, workspaceId);
           }
           // #1382 — nudge callers using upsert as a poor man's per-item
@@ -763,6 +790,8 @@ export async function POST(
           const warning = looksLikeItemLevelEdit
             ? 'Upsert was used for item-level edits (no version-level fields touched). Prefer PATCH /api/roadmap/{projectId}/versions/{version}/items — race-safe per-item add/update/remove instead of replace-all. (#1382)'
             : undefined;
+          await commitLifecycleTransaction();
+          dispatchRoadmapLifecyclePostCommit(projectId, lifecycleOutcome);
           return NextResponse.json({
             action: 'upserted',
             version,
@@ -775,6 +804,7 @@ export async function POST(
             // mint has been live for a while, the response just didn't surface it.
             items: itemsWithIds,
             shadowSync,
+            ...(autoAdvance ? { autoAdvance } : {}),
             ...(warning ? { warning } : {}),
           });
         } else if (action === 'create') {
@@ -803,6 +833,7 @@ export async function POST(
             );
           }
           const resolvedVersionType = (versionType || 'outcome') as AllowedVersionType;
+          await beginLifecycleTransaction();
 
           // Reject duplicate creation explicitly.
           const existsRes = await client.query(
@@ -810,6 +841,7 @@ export async function POST(
             [projectId, version, workspaceId],
           );
           if (existsRes.rows.length > 0) {
+            await rollbackLifecycleTransaction();
             return NextResponse.json(
               {
                 error: 'version_exists',
@@ -822,7 +854,10 @@ export async function POST(
           // Single-current guard.
           if (resolvedStatus === 'current') {
             const guard = await guardSingleCurrent(client, projectId, workspaceId, version);
-            if (guard) return guard;
+            if (guard) {
+              await rollbackLifecycleTransaction();
+              return guard;
+            }
           }
 
           // Resolve owner: explicit > primary-component default > null.
@@ -863,17 +898,7 @@ export async function POST(
           );
 
           if (resolvedStatus === 'current') {
-            try {
-              // #1645: direct service call (was HTTP self-fetch of /api/store).
-              const syncRes = await updateProjectService(workspaceId, projectId, { currentVersion: version });
-              if (!syncRes.ok) {
-                recordInternalCallFailure('roadmap-route:create-currentVersion-sync', 'store-service:updateProject', syncRes.status, 'service-error');
-                console.warn(`[Roadmap #1461 create] currentVersion sync failed: ${syncRes.error}`);
-              }
-            } catch (e) {
-              recordInternalCallFailure('roadmap-route:create-currentVersion-sync', 'store-service:updateProject', null, 'service-throw');
-              console.warn('[Roadmap #1461 create] currentVersion sync failed:', (e as any)?.message || e);
-            }
+            await syncCurrentVersionInTransaction(client, projectId, workspaceId, version);
           }
 
           let shadowSync: { sectionsHit: number; componentsHit: number; touched: boolean } = {
@@ -884,13 +909,16 @@ export async function POST(
               id: newVersionId, version, title: title.trim(), status: resolvedStatus,
               items: itemsWithIds, sort_order: newSortOrder, version_type: resolvedVersionType,
               owner: resolvedOwner,
-            });
+            }, workspaceId);
           } catch (e) {
             console.warn('[Roadmap #1461 create] Shadow sync failed (non-fatal):', (e as any)?.message || e);
           }
 
           await notifyRoadmapChange(client, projectId, 'create', version, undefined, workspaceId);
-          if (shadowSync.touched) await notifyProjectChange(client, projectId, workspaceId);
+          if (shadowSync.touched || resolvedStatus === 'current') {
+            await notifyProjectChange(client, projectId, workspaceId);
+          }
+          await commitLifecycleTransaction();
 
           return NextResponse.json({
             action: 'created',
@@ -905,6 +933,8 @@ export async function POST(
             shadowSync,
           });
         } else if (action === 'patch') {
+          await beginLifecycleTransaction();
+          let lifecycleOutcome: AdvanceAfterShipmentOutcome | undefined;
           // #1461 — COALESCE-by-default partial update. Every field is
           // left alone unless the caller explicitly sends it. Items have an
           // opt-in mode (replace | merge), default 'replace' (matches what
@@ -923,6 +953,7 @@ export async function POST(
             [projectId, version, workspaceId],
           );
           if (existsRes.rows.length === 0) {
+            await rollbackLifecycleTransaction();
             return NextResponse.json(
               {
                 error: 'version_not_found',
@@ -937,18 +968,21 @@ export async function POST(
 
           // Validate any provided enum values up front.
           if (versionType !== undefined && versionType !== null && !ALLOWED_VERSION_TYPES.includes(versionType)) {
+            await rollbackLifecycleTransaction();
             return NextResponse.json(
               { error: 'invalid_version_type', message: `versionType must be one of: ${ALLOWED_VERSION_TYPES.join(', ')}. Got: ${versionType}` },
               { status: 400 },
             );
           }
           if (status !== undefined && status !== null && !['planned', 'current', 'shipped'].includes(status)) {
+            await rollbackLifecycleTransaction();
             return NextResponse.json(
               { error: 'invalid_status', message: `status must be one of: planned, current, shipped. Got: ${status}` },
               { status: 400 },
             );
           }
           if (title !== undefined && title !== null && (typeof title !== 'string' || title.trim().length === 0)) {
+            await rollbackLifecycleTransaction();
             return NextResponse.json(
               { error: 'invalid_title', message: 'title must be a non-empty string when provided.' },
               { status: 400 },
@@ -965,12 +999,16 @@ export async function POST(
           // (and wasn't already current).
           if (newStatus === 'current' && existing.status !== 'current') {
             const guard = await guardSingleCurrent(client, projectId, workspaceId, version);
-            if (guard) return guard;
+            if (guard) {
+              await rollbackLifecycleTransaction();
+              return guard;
+            }
           }
 
           // Items handling.
           const itemsMode = body.items_mode || body.itemsMode || 'replace';
           if (!['replace', 'merge'].includes(itemsMode)) {
+            await rollbackLifecycleTransaction();
             return NextResponse.json(
               { error: 'invalid_items_mode', message: `items_mode must be 'replace' or 'merge'. Got: ${itemsMode}` },
               { status: 400 },
@@ -981,6 +1019,7 @@ export async function POST(
             // No items in payload — keep existing untouched.
             newItems = existingItems;
           } else if (!Array.isArray(items)) {
+            await rollbackLifecycleTransaction();
             return NextResponse.json(
               { error: 'invalid_items', message: 'items must be an array when provided.' },
               { status: 400 },
@@ -1055,17 +1094,7 @@ export async function POST(
           }
 
           if (newStatus === 'current' && existing.status !== 'current') {
-            try {
-              // #1645: direct service call (was HTTP self-fetch of /api/store).
-              const syncRes = await updateProjectService(workspaceId, projectId, { currentVersion: version });
-              if (!syncRes.ok) {
-                recordInternalCallFailure('roadmap-route:patch-currentVersion-sync', 'store-service:updateProject', syncRes.status, 'service-error');
-                console.warn(`[Roadmap #1461 patch] currentVersion sync failed: ${syncRes.error}`);
-              }
-            } catch (e) {
-              recordInternalCallFailure('roadmap-route:patch-currentVersion-sync', 'store-service:updateProject', null, 'service-throw');
-              console.warn('[Roadmap #1461 patch] currentVersion sync failed:', (e as any)?.message || e);
-            }
+            await syncCurrentVersionInTransaction(client, projectId, workspaceId, version);
           }
 
           let shadowSync: { sectionsHit: number; componentsHit: number; touched: boolean } = {
@@ -1076,14 +1105,41 @@ export async function POST(
               id: existing.id, version, title: newTitle, status: newStatus,
               items: newItems, sort_order: newSortOrder, version_type: newVersionType,
               owner: newOwner,
-            });
+            }, workspaceId);
           } catch (e) {
             console.warn('[Roadmap #1461 patch] Shadow sync failed (non-fatal):', (e as any)?.message || e);
           }
 
           await notifyRoadmapChange(client, projectId, 'patch', version, undefined, workspaceId);
-          if (shadowSync.touched) await notifyProjectChange(client, projectId, workspaceId);
+          if (shadowSync.touched || (newStatus === 'current' && existing.status !== 'current')) {
+            await notifyProjectChange(client, projectId, workspaceId);
+          }
 
+          let autoAdvance: any = undefined;
+          if (existing.status === 'current' && newStatus === 'shipped') {
+            await client.query(
+              `UPDATE org_studio_roadmap_versions
+               SET shipped_at = COALESCE(shipped_at, $1)
+               WHERE project_id = $2 AND version = $3 AND workspace_id = $4`,
+              [String(Date.now()), projectId, version, workspaceId],
+            );
+            lifecycleOutcome = await advanceAfterShipmentLocked(
+              projectId,
+              version,
+              client,
+              workspaceId,
+              true,
+            );
+            autoAdvance = lifecycleOutcome.result;
+          } else if (newStatus === 'current' && metaProvided.metricCurrent) {
+            lifecycleOutcome = await checkAndAutoAdvanceLocked(projectId, client, workspaceId);
+          }
+          if (lifecycleOutcome?.result.promoted) {
+            await notifyProjectChange(client, projectId, workspaceId);
+          }
+
+          await commitLifecycleTransaction();
+          dispatchRoadmapLifecyclePostCommit(projectId, lifecycleOutcome);
           return NextResponse.json({
             action: 'patched',
             version,
@@ -1095,6 +1151,7 @@ export async function POST(
             items: newItems,
             items_mode: itemsMode,
             shadowSync,
+            ...(autoAdvance ? { autoAdvance } : {}),
           });
         } else if (action === 'delete') {
           await client.query(
@@ -1108,7 +1165,14 @@ export async function POST(
             sectionsHit: 0, componentsHit: 0, touched: false,
           };
           try {
-            shadowSync = await syncProjectShadowVersion(client, projectId, 'delete', version);
+            shadowSync = await syncProjectShadowVersion(
+              client,
+              projectId,
+              'delete',
+              version,
+              undefined,
+              workspaceId,
+            );
           } catch (e) {
             console.warn('[Roadmap] Shadow sync (delete) failed (non-fatal):', (e as any)?.message || e);
           }
@@ -1134,6 +1198,7 @@ export async function POST(
 
         return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
       } finally {
+        await rollbackLifecycleTransaction();
         client.release();
         await pool.end();
       }

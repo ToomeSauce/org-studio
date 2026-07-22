@@ -90,32 +90,64 @@ export interface PromoteResult {
  *   5. Log `[Promote] <pid>: <from> → <to>`.
  *
  * @param projectId - project to promote
- * @param client    - pg client (caller manages connection + transaction if desired)
+ * @param client    - pg client (caller manages the connection; this funnel owns its transaction)
  * @param opts      - override defaults (e.g. explicit targetVersion for Launch button)
+ */
+export interface PromoteOptions {
+  targetVersion?: string;   // explicit version to promote to (Launch button)
+  workspaceId?: string;
+  // #1594 — when true (the Launch/approve button, an explicit human act),
+  // treat targetVersion as approved: add it to the primary component's
+  // approvedVersions[] so the horizon gate passes, and allow launching an
+  // ALREADY-current version in place (sweep its planning tickets to
+  // backlog) instead of requiring advance-from-a-prior-version. Auto-
+  // advance (checkAndAutoAdvance, component-approval re-trigger) leaves
+  // this false so the horizon gate stays authoritative for unattended
+  // promotion.
+  explicitLaunch?: boolean;
+}
+
+/**
+ * Transactional public funnel. The project-scoped advisory lock serializes
+ * launch, approval re-trigger, auto-advance, and shipped-pointer recovery.
+ * Callers that already hold this transaction+lock use the locked variant.
  */
 export async function promoteProjectToNextVersion(
   projectId: string,
   client: any,
-  opts?: {
-    targetVersion?: string;   // explicit version to promote to (Launch button)
-    workspaceId?: string;
-    // #1594 — when true (the Launch/approve button, an explicit human act),
-    // treat targetVersion as approved: add it to the primary component's
-    // approvedVersions[] so the horizon gate passes, and allow launching an
-    // ALREADY-current version in place (sweep its planning tickets to
-    // backlog) instead of requiring advance-from-a-prior-version. Auto-
-    // advance (checkAndAutoAdvance, component-approval re-trigger) leaves
-    // this false so the horizon gate stays authoritative for unattended
-    // promotion.
-    explicitLaunch?: boolean;
-  },
+  opts?: PromoteOptions,
+): Promise<PromoteResult> {
+  const workspaceId = opts?.workspaceId || 'default-workspace';
+  await client.query('BEGIN');
+  try {
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtext($1))`,
+      [`roadmap-lifecycle:${workspaceId}:${projectId}`],
+    );
+    const result = await promoteProjectToNextVersionLocked(projectId, client, opts);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch { /* best-effort */ }
+    throw err;
+  }
+}
+
+/**
+ * Internal transaction-aware variant. The caller MUST already hold the
+ * roadmap-lifecycle advisory transaction lock for this project.
+ */
+export async function promoteProjectToNextVersionLocked(
+  projectId: string,
+  client: any,
+  opts?: PromoteOptions,
 ): Promise<PromoteResult> {
   const wsId = opts?.workspaceId || 'default-workspace';
   const noop = (reason: string): PromoteResult => ({ promoted: false, from: null, to: null, movedTasks: 0, reason });
 
   // 1. Read project data
   const projRes = await client.query(
-    `SELECT data FROM org_studio_projects WHERE id = $1 AND workspace_id = $2`,
+    `SELECT data FROM org_studio_projects WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
     [projectId, wsId],
   );
   if (projRes.rows.length === 0) return noop('project not found');
@@ -181,12 +213,26 @@ export async function promoteProjectToNextVersion(
       }
     }
 
-    const nextRes = await client.query(
+    // Interrupted promotion recovery: the target row may already be
+    // `current` while project.currentVersion still names the shipped source.
+    // Repair that immediate successor before considering later planned rows;
+    // otherwise a retry could skip 0.7.2 and launch 0.7.3.
+    const inFlightRes = await client.query(
       `SELECT version, sort_order FROM org_studio_roadmap_versions
-       WHERE project_id = $1 AND status = 'planned' AND sort_order > $2 AND workspace_id = $3
-       ORDER BY sort_order ASC LIMIT 1`,
-      [projectId, sortOrderFloor, wsId],
+       WHERE project_id = $1 AND status = 'current' AND version <> $2
+         AND sort_order > $3 AND workspace_id = $4
+       ORDER BY sort_order ASC LIMIT 1 FOR UPDATE`,
+      [projectId, fromVersion, sortOrderFloor, wsId],
     );
+
+    const nextRes = inFlightRes.rows.length > 0
+      ? inFlightRes
+      : await client.query(
+          `SELECT version, sort_order FROM org_studio_roadmap_versions
+           WHERE project_id = $1 AND status = 'planned' AND sort_order > $2 AND workspace_id = $3
+           ORDER BY sort_order ASC LIMIT 1 FOR UPDATE`,
+          [projectId, sortOrderFloor, wsId],
+        );
 
     if (nextRes.rows.length === 0) {
       // #1594 — no next planned version. Before giving up, check whether the
@@ -261,18 +307,28 @@ export async function promoteProjectToNextVersion(
   // metric. If criteria are set and metric is unmet, refuse to advance even
   // if all child tickets are done — checkAndAutoAdvance is the primary
   // gate, but a Launch-button promote could otherwise sneak past it.
-  // #1594 — skip for launch-in-place: we're launching `fromVersion` itself,
-  // not advancing PAST it, so its own metric is irrelevant here.
+  //
+  // A row already marked `shipped` is an explicit completion fact and must
+  // not be re-gated here. This matters for both manual current→shipped edits
+  // and recovery from a missed post-ship dispatch: the project pointer can
+  // still name the shipped version while the next approved version is
+  // waiting in planning. Requiring the old metric again strands the queue.
+  // The unattended path remains safe because checkAndAutoAdvance evaluates
+  // the metric BEFORE it marks the row shipped.
+  //
+  // #1594 — also skip for launch-in-place: we're launching `fromVersion`
+  // itself, not advancing PAST it, so its own metric is irrelevant here.
   if (fromVersion && !launchInPlace) {
     const fromMetaRes = await client.query(
-      `SELECT meta FROM org_studio_roadmap_versions WHERE project_id = $1 AND version = $2 AND workspace_id = $3 LIMIT 1`,
+      `SELECT status, meta FROM org_studio_roadmap_versions WHERE project_id = $1 AND version = $2 AND workspace_id = $3 LIMIT 1`,
       [projectId, fromVersion, wsId],
     );
+    const fromStatus = fromMetaRes.rows[0]?.status;
     const fromMeta: any = (fromMetaRes.rows[0]?.meta && typeof fromMetaRes.rows[0].meta === 'object')
       ? fromMetaRes.rows[0].meta
       : {};
     const criteria = (fromMeta.successCriteria || '').toString().trim();
-    if (criteria) {
+    if (fromStatus !== 'shipped' && criteria) {
       const target = fromMeta.metricTarget;
       const cur = fromMeta.metricCurrent;
       const comp = fromMeta.metricComparator || 'gte';
@@ -284,39 +340,6 @@ export async function promoteProjectToNextVersion(
       }
       if (!met) {
         console.log(`[Promote] ${projectId}: current version ${fromVersion} metric not met — refusing to advance`);
-        return noop('current version metric not met');
-      }
-    }
-  }
-
-  // #1263 — defense-in-depth: do not promote PAST a version whose metric
-  // gate is unmet. checkAndAutoAdvance already refuses to ship in that
-  // case, but this guards the explicit promote path (Launch button, intent
-  // handler) so an outcome-bound `current` version can't be skipped over.
-  // #1594 — skip for launch-in-place (see above): launching the current
-  // version in place is not "promoting past" it.
-  if (fromVersion && !launchInPlace) {
-    const fromRes = await client.query(
-      `SELECT meta FROM org_studio_roadmap_versions
-         WHERE project_id = $1 AND version = $2 AND workspace_id = $3 LIMIT 1`,
-      [projectId, fromVersion, wsId],
-    );
-    const meta: any = (fromRes.rows[0]?.meta && typeof fromRes.rows[0].meta === 'object')
-      ? fromRes.rows[0].meta
-      : {};
-    const criteria = (meta.successCriteria || '').toString().trim();
-    if (criteria) {
-      const target = meta.metricTarget;
-      const cur = meta.metricCurrent;
-      const comp = meta.metricComparator || 'gte';
-      let met = false;
-      if (typeof target === 'number' && typeof cur === 'number') {
-        met = comp === 'lte' ? cur <= target
-            : comp === 'eq' ? cur === target
-            : cur >= target;
-      }
-      if (!met) {
-        console.log(`[Promote] ${projectId}: current ${fromVersion} metric not met — refusing to promote`);
         return noop('current version metric not met');
       }
     }
@@ -496,6 +519,7 @@ export async function promoteProjectToNextVersion(
       }
     } catch (err: any) {
       console.error(`[Promote] Failed to move task ${item.taskId} to backlog:`, err?.message);
+      throw err;
     }
   }
 

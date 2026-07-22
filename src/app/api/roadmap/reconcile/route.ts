@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';
 import { reconcileRoadmapItemDone } from '@/lib/roadmap-sync';
+import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
 
 /**
  * POST /api/roadmap/reconcile
@@ -18,6 +19,7 @@ export async function POST(req: NextRequest) {
   if (authCtx.error) return authCtx.error;
   const scopeFail = requireWriteScope(authCtx.context);
   if (scopeFail) return scopeFail;
+  const workspaceId = await resolveWorkspaceIdForRequest(req);
 
   let projectId: string | undefined;
   try {
@@ -30,7 +32,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const summary = await reconcileRoadmapItemDone(projectId);
+    const summary = await reconcileRoadmapItemDone(projectId, workspaceId);
     return NextResponse.json({ ok: true, projectId: projectId || null, ...summary });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });

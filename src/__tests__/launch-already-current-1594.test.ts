@@ -35,10 +35,13 @@ function makeFakeClient(initial: {
     tasks: JSON.parse(JSON.stringify(initial.tasks)),
   };
 
+  const queries: string[] = [];
   const client = {
     db,
+    queries,
     async query(sql: string, params: any[] = []) {
       const s = sql.replace(/\s+/g, ' ').trim();
+      queries.push(s);
 
       // SELECT data FROM org_studio_projects
       if (/SELECT data FROM org_studio_projects/i.test(s)) {
@@ -54,6 +57,15 @@ function makeFakeClient(initial: {
         const v = db.versions.find((x: any) => x.version === params[1]);
         return { rows: v ? [{ sort_order: v.sort_order }] : [] };
       }
+      // SELECT an already-current successor left by an interrupted promotion.
+      if (/SELECT version, sort_order FROM org_studio_roadmap_versions/i.test(s) && /status = 'current'/i.test(s)) {
+        const fromVersion = params[1];
+        const floor = params[2];
+        const next = db.versions
+          .filter((x: any) => x.status === 'current' && x.version !== fromVersion && x.sort_order > floor)
+          .sort((a: any, b: any) => a.sort_order - b.sort_order)[0];
+        return { rows: next ? [{ version: next.version, sort_order: next.sort_order }] : [] };
+      }
       // SELECT next planned version by sort_order
       if (/SELECT version, sort_order FROM org_studio_roadmap_versions/i.test(s) && /status = 'planned'/i.test(s)) {
         const floor = params[1];
@@ -68,10 +80,10 @@ function makeFakeClient(initial: {
         const n = db.tasks.filter((t: any) => t.version === ver && t.status === 'planning').length;
         return { rows: [{ n }] };
       }
-      // SELECT meta FROM roadmap_versions
-      if (/SELECT meta FROM org_studio_roadmap_versions/i.test(s)) {
+      // SELECT source status/meta FROM roadmap_versions
+      if (/SELECT status, meta FROM org_studio_roadmap_versions/i.test(s)) {
         const v = db.versions.find((x: any) => x.version === params[1]);
-        return { rows: v ? [{ meta: v.meta || {} }] : [] };
+        return { rows: v ? [{ status: v.status, meta: v.meta || {} }] : [] };
       }
       // SELECT id, items FROM roadmap_versions
       if (/SELECT id, items FROM org_studio_roadmap_versions/i.test(s)) {
@@ -197,5 +209,100 @@ describe('#1594 — launch already-current version in place', () => {
     });
     expect(res.promoted).toBe(false);
     expect(res.reason).toMatch(/not approved|no versions approved/);
+  });
+});
+
+
+describe('post-shipment outcome-gate recovery', () => {
+  function recoveryClient(sourceStatus: 'current' | 'shipped', approved = true) {
+    return makeFakeClient({
+      project: {
+        id: PID,
+        state: 'active',
+        currentVersion: '0.7.1',
+        components: [{
+          id: 'cmp-main',
+          name: 'Main',
+          role: null,
+          approvedVersions: approved ? ['0.7.1', '0.7.2'] : ['0.7.1'],
+        }],
+        devOwner: 'Mikey',
+      },
+      versions: [
+        {
+          version: '0.7.1',
+          status: sourceStatus,
+          sort_order: 7001000,
+          items: [{ id: 'done', taskId: 'done-task', done: true }],
+          meta: { successCriteria: 'binary proof', metricCurrent: 0, metricTarget: 1, metricComparator: 'gte' },
+        },
+        {
+          version: '0.7.2',
+          status: 'planned',
+          sort_order: 7002000,
+          items: [{ id: 'next', taskId: 'next-task', done: false }],
+        },
+      ],
+      tasks: [
+        { id: 'done-task', version: '0.7.1', status: 'done' },
+        { id: 'next-task', version: '0.7.2', status: 'planning' },
+      ],
+    });
+  }
+
+  it('advances past an explicitly shipped source even when its old metric is unmet', async () => {
+    const client: any = recoveryClient('shipped');
+    const result = await promoteProjectToNextVersion(PID, client);
+    expect(result.promoted).toBe(true);
+    expect(result.from).toBe('0.7.1');
+    expect(result.to).toBe('0.7.2');
+    expect(client.db.project.currentVersion).toBe('0.7.2');
+    expect(client.db.tasks.find((t: any) => t.id === 'next-task').status).toBe('backlog');
+  });
+
+  it('still blocks unattended promotion while the source is current and its metric is unmet', async () => {
+    const client: any = recoveryClient('current');
+    const result = await promoteProjectToNextVersion(PID, client);
+    expect(result.promoted).toBe(false);
+    expect(result.reason).toBe('current version metric not met');
+    expect(client.db.project.currentVersion).toBe('0.7.1');
+    expect(client.db.tasks.find((t: any) => t.id === 'next-task').status).toBe('planning');
+  });
+
+  it('repairs an already-current immediate successor instead of skipping to a later planned version', async () => {
+    const client: any = recoveryClient('shipped');
+    client.db.versions.find((v: any) => v.version === '0.7.2').status = 'current';
+    client.db.versions.push({
+      version: '0.7.3',
+      status: 'planned',
+      sort_order: 7003000,
+      items: [{ id: 'later', taskId: 'later-task', done: false }],
+    });
+    client.db.tasks.push({ id: 'later-task', version: '0.7.3', status: 'planning' });
+    client.db.project.components[0].approvedVersions.push('0.7.3');
+
+    const result = await promoteProjectToNextVersion(PID, client);
+
+    expect(result.promoted).toBe(true);
+    expect(result.to).toBe('0.7.2');
+    expect(client.db.project.currentVersion).toBe('0.7.2');
+    expect(client.db.tasks.find((t: any) => t.id === 'next-task').status).toBe('backlog');
+    expect(client.db.tasks.find((t: any) => t.id === 'later-task').status).toBe('planning');
+  });
+
+  it('serializes the promote transaction before reading lifecycle state', async () => {
+    const client: any = recoveryClient('shipped');
+    await promoteProjectToNextVersion(PID, client);
+
+    expect(client.queries[0]).toBe('BEGIN');
+    expect(client.queries[1]).toMatch(/pg_advisory_xact_lock/);
+    expect(client.queries.at(-1)).toBe('COMMIT');
+  });
+
+  it('does not let shipped status bypass the approval horizon', async () => {
+    const client: any = recoveryClient('shipped', false);
+    const result = await promoteProjectToNextVersion(PID, client);
+    expect(result.promoted).toBe(false);
+    expect(result.reason).toMatch(/not approved/);
   });
 });
