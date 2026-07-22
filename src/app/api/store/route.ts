@@ -2362,7 +2362,7 @@ export async function POST(req: NextRequest) {
         // Postgres; the local LISTEN bridge consumes it. Letting both claim
         // caused the cloud process to win, fail delivery, and make the real
         // bridge suppress @mentions as duplicate-pg.
-        if (shouldRouteCommentNotificationsInline()) {
+        if (shouldRouteCommentNotificationsInline(process.env, commentScope.kind)) {
           routeCommentNotifications({
             comment: {
               id: comment.id,

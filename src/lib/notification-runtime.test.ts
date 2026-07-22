@@ -17,11 +17,20 @@ describe('hasConfiguredAgentRuntime', () => {
 });
 
 describe('shouldRouteCommentNotificationsInline', () => {
-  it('defers Postgres-backed comments to the single LISTEN bridge', () => {
+  it('defers Postgres-backed task comments to the single LISTEN bridge', () => {
     expect(shouldRouteCommentNotificationsInline({
       DATABASE_URL: 'postgres://db/org_studio',
       GATEWAY_URL: 'ws://127.0.0.1:18789',
-    })).toBe(false);
+    }, 'task')).toBe(false);
+  });
+
+  it('keeps the only delivery path for Postgres-backed non-task comments', () => {
+    for (const scope of ['section', 'board', 'project', 'dm']) {
+      expect(shouldRouteCommentNotificationsInline({
+        DATABASE_URL: 'postgres://db/org_studio',
+        GATEWAY_URL: 'ws://127.0.0.1:18789',
+      }, scope)).toBe(true);
+    }
   });
 
   it('rejects explicitly store-only/worker-disabled processes', () => {

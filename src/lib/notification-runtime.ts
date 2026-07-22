@@ -25,10 +25,14 @@ export function hasConfiguredAgentRuntime(
  */
 export function shouldRouteCommentNotificationsInline(
   env: RuntimeEnvironment = process.env,
+  scopeKind = 'task',
 ): boolean {
-  if (env.DATABASE_URL?.trim()) return false;
   if (['1', 'true'].includes((env.OUTBOX_WORKER_DISABLED || '').trim().toLowerCase())) {
     return false;
   }
+  // The Postgres LISTEN bridge currently reconstructs task comments only.
+  // Non-task scopes (section, board, project, DM) must keep their inline path
+  // or they have no delivery consumer at all.
+  if (env.DATABASE_URL?.trim() && scopeKind === 'task') return false;
   return hasConfiguredAgentRuntime(env);
 }
