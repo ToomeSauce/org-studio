@@ -22,7 +22,7 @@
  */
 
 import { isVersionGreater } from './version-utils';
-import { promoteProjectToNextVersion } from './project-state';
+import { promoteProjectToNextVersionLocked } from './project-state';
 import { sendVersionShippedNudge } from './vision-notify';
 import { internalAuthHeaders } from './read-gate';
 import { recordInternalCallFailure } from './dispatch-ledger';
@@ -189,10 +189,11 @@ export async function syncProjectShadowVersion(
     shipped_at?: number | null;
     progress?: { done: number; total: number };
   },
+  workspaceId = 'default-workspace',
 ): Promise<{ sectionsHit: number; componentsHit: number; touched: boolean }> {
   const projRes = await client.query(
     `SELECT data FROM org_studio_projects WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
-    [projectId, 'default-workspace'],
+    [projectId, workspaceId],
   );
   if (projRes.rows.length === 0) {
     return { sectionsHit: 0, componentsHit: 0, touched: false };
@@ -268,7 +269,7 @@ export async function syncProjectShadowVersion(
   if (dirty) {
     await client.query(
       `UPDATE org_studio_projects SET data = $1 WHERE id = $2 AND workspace_id = $3`,
-      [JSON.stringify(projData), projectId, 'default-workspace'],
+      [JSON.stringify(projData), projectId, workspaceId],
     );
   }
 
@@ -472,6 +473,170 @@ export async function syncRoadmapItemForTask(
 /*  checkAndAutoAdvance                                                */
 /* ------------------------------------------------------------------ */
 
+export interface AdvanceAfterShipmentOutcome {
+  result: import('./project-state').PromoteResult;
+  ownerToWake?: string;
+  pointer?: string;
+  shipped?: {
+    projectData: any;
+    version: string;
+  };
+}
+
+function noPromotion(reason: string): import('./project-state').PromoteResult {
+  return { promoted: false, from: null, to: null, movedTasks: 0, reason };
+}
+
+/**
+ * Locked implementation shared with checkAndAutoAdvance. The caller must hold
+ * the per-project roadmap lifecycle advisory transaction lock.
+ */
+export async function advanceAfterShipmentLocked(
+  projectId: string,
+  shippedVersion: string | undefined,
+  client: any,
+  workspaceId: string,
+  includeShippedEffect = false,
+): Promise<AdvanceAfterShipmentOutcome> {
+  const projRes = await client.query(
+    `SELECT data FROM org_studio_projects
+     WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
+    [projectId, workspaceId],
+  );
+  if (projRes.rows.length === 0) return { result: noPromotion('project not found') };
+  const projData = typeof projRes.rows[0].data === 'string'
+    ? JSON.parse(projRes.rows[0].data)
+    : projRes.rows[0].data || {};
+  const pointer = projData.currentVersion || null;
+  if (!pointer) return { result: noPromotion('project has no currentVersion pointer') };
+  if (shippedVersion && pointer !== shippedVersion) {
+    return { result: noPromotion(`project already moved past ${shippedVersion}`), pointer };
+  }
+
+  const sourceRes = await client.query(
+    `SELECT status FROM org_studio_roadmap_versions
+     WHERE project_id = $1 AND version = $2 AND workspace_id = $3 LIMIT 1`,
+    [projectId, pointer, workspaceId],
+  );
+  if (sourceRes.rows[0]?.status !== 'shipped') {
+    return { result: noPromotion(`currentVersion ${pointer} is not shipped`), pointer };
+  }
+
+  // Only the write path that just transitioned current→shipped should emit
+  // the shipment effect. Durable stale-pointer recovery intentionally leaves
+  // this false so repeated no-op reconciles cannot spam shipment nudges.
+  const shipped = includeShippedEffect
+    ? { projectData: projData, version: pointer }
+    : undefined;
+
+  const result = await promoteProjectToNextVersionLocked(projectId, client, { workspaceId });
+  if (!result.promoted || !result.to) return { result, pointer, shipped };
+
+  const ownerRes = await client.query(
+    `SELECT owner FROM org_studio_roadmap_versions
+     WHERE project_id = $1 AND version = $2 AND workspace_id = $3 LIMIT 1`,
+    [projectId, result.to, workspaceId],
+  );
+  const components: any[] = Array.isArray(projData.components) && projData.components.length > 0
+    ? projData.components
+    : Array.isArray(projData.sections) ? projData.sections : [];
+  const primary = components.find(
+    (c: any) => !c?.role || (c.role !== 'qa' && c.role !== 'support'),
+  ) || components[0];
+  const ownerToWake = ownerRes.rows[0]?.owner || primary?.owner || projData.devOwner;
+  return { result, ownerToWake, pointer, shipped };
+}
+
+/**
+ * Run effects that must only observe committed lifecycle state. Callers that
+ * use a locked helper inside their own transaction must invoke this strictly
+ * after COMMIT.
+ */
+async function queueRoadmapLifecycleChange(
+  client: any,
+  projectId: string,
+  workspaceId: string,
+): Promise<void> {
+  const payload = JSON.stringify({
+    type: 'project_update',
+    projectId,
+    timestamp: Date.now(),
+    source: 'roadmap-lifecycle',
+    workspace_id: workspaceId,
+  });
+  await client.query(`NOTIFY org_studio_change, '${payload.replace(/'/g, "''")}'`);
+}
+
+export function dispatchRoadmapLifecyclePostCommit(
+  projectId: string,
+  outcome?: AdvanceAfterShipmentOutcome,
+): void {
+  if (!outcome) return;
+  if (outcome.shipped) {
+    fireVersionShippedNudge(
+      projectId,
+      outcome.shipped.projectData,
+      outcome.shipped.version,
+    );
+  }
+  if (outcome.result.promoted && outcome.result.to && outcome.ownerToWake) {
+    triggerSchedulerForAgent(outcome.ownerToWake);
+  }
+}
+
+/**
+ * Continue from a canonical version that is already marked shipped while the
+ * project pointer still names it. This is the idempotent recovery seam for
+ * manual current→shipped edits and interrupted post-ship dispatches.
+ *
+ * The whole repair is serialized and committed atomically per project. The
+ * scheduler wake happens only after commit, so it cannot observe half-applied
+ * pointer/task state.
+ */
+export async function advanceAfterShipment(
+  projectId: string,
+  shippedVersion?: string,
+  existingClient?: any,
+  workspaceId = 'default-workspace',
+): Promise<import('./project-state').PromoteResult> {
+  const pool = getPool();
+  if (!existingClient && !pool) return noPromotion('postgres unavailable');
+
+  const client = existingClient || await pool.connect();
+  const ownClient = !existingClient;
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtext($1))`,
+      [`roadmap-lifecycle:${workspaceId}:${projectId}`],
+    );
+    const outcome = await advanceAfterShipmentLocked(
+      projectId,
+      shippedVersion,
+      client,
+      workspaceId,
+    );
+    if (outcome.result.promoted) {
+      await queueRoadmapLifecycleChange(client, projectId, workspaceId);
+    }
+    await client.query('COMMIT');
+
+    if (outcome.result.promoted && outcome.result.to) {
+      dispatchRoadmapLifecyclePostCommit(projectId, outcome);
+      console.log(
+        `[AutoAdvance] ${projectId}: ${outcome.pointer} → ${outcome.result.to} (${outcome.result.movedTasks} tasks moved planning→backlog)`,
+      );
+    }
+    return outcome.result;
+  } catch (err: any) {
+    try { await client.query('ROLLBACK'); } catch { /* best-effort */ }
+    console.error('[AutoAdvance] advanceAfterShipment error (non-fatal):', err?.message || err);
+    return noPromotion(err?.message || 'advance-after-shipment failed');
+  } finally {
+    if (ownClient) client.release();
+  }
+}
+
 /**
  * If the current version has all items done:
  *   • Mark it shipped.
@@ -485,192 +650,223 @@ export async function syncRoadmapItemForTask(
  * @param projectId - the project to check
  * @param existingClient - optional pg client to reuse (avoids extra checkout)
  */
+export async function checkAndAutoAdvanceLocked(
+  projectId: string,
+  client: any,
+  workspaceId: string,
+): Promise<AdvanceAfterShipmentOutcome | undefined> {
+  // 1. Lock the project pointer first. It is the authoritative lifecycle
+  // source. If it names a shipped row while a successor is already current,
+  // repair that successor before evaluating it; otherwise a retry could ship
+  // the successor and skip directly to a later planned version.
+  const projectResult = await client.query(
+    `SELECT data FROM org_studio_projects
+     WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
+    [projectId, workspaceId],
+  );
+  if (projectResult.rows.length === 0) return;
+  const projectData = typeof projectResult.rows[0].data === 'string'
+    ? JSON.parse(projectResult.rows[0].data)
+    : projectResult.rows[0].data || {};
+  const pointer = projectData.currentVersion || null;
+  if (!pointer) return;
+
+  const pointerStatusResult = await client.query(
+    `SELECT status FROM org_studio_roadmap_versions
+     WHERE project_id = $1 AND version = $2 AND workspace_id = $3 LIMIT 1`,
+    [projectId, pointer, workspaceId],
+  );
+  if (pointerStatusResult.rows[0]?.status === 'shipped') {
+    return advanceAfterShipmentLocked(projectId, pointer, client, workspaceId);
+  }
+  if (pointerStatusResult.rows[0]?.status !== 'current') return;
+
+  // Find only the canonical current row named by the locked project pointer.
+  const versionResult = await client.query(
+    `SELECT id, version, status, items, sort_order, meta
+     FROM org_studio_roadmap_versions
+     WHERE project_id = $1 AND status = 'current' AND workspace_id = $2
+       AND version = $3
+     ORDER BY sort_order ASC
+     LIMIT 1 FOR UPDATE`,
+    [projectId, workspaceId, pointer],
+  );
+  if (versionResult.rows.length === 0) return;
+
+  const current = versionResult.rows[0];
+  const items: any[] = current.items || [];
+
+  // All items must be done (zero-item versions are auto-shipped)
+  if (items.length > 0 && !items.every((i: any) => i.done === true)) return;
+
+  // #1263 — outcome-bound gate. If `successCriteria` is set on this
+  // version, ship is gated on `metricCurrent` satisfying the comparator
+  // vs `metricTarget`. When the gate fails, post a one-shot system
+  // comment on the rv-row's `meta.systemComments[]` and return without
+  // shipping. The flag `meta.metricNotMetCommentedAt` makes the comment
+  // idempotent across repeated calls; it's cleared once the metric IS
+  // met (so future regressions get a fresh comment).
+  {
+    const meta: any = (current.meta && typeof current.meta === 'object') ? current.meta : {};
+    const criteria = (meta.successCriteria || '').toString().trim();
+    if (criteria) {
+      const target = meta.metricTarget;
+      const cur = meta.metricCurrent;
+      const comp = meta.metricComparator || 'gte';
+      let met = false;
+      if (typeof target === 'number' && typeof cur === 'number') {
+        met = comp === 'lte' ? cur <= target
+            : comp === 'eq' ? cur === target
+            : cur >= target;
+      }
+      if (!met) {
+        // Post system comment once per transition into the not-met state.
+        if (!meta.metricNotMetCommentedAt) {
+          const xy = `${typeof cur === 'number' ? cur : '?'}/${typeof target === 'number' ? target : '?'}`;
+          const list = Array.isArray(meta.systemComments) ? meta.systemComments : [];
+          list.push({
+            at: Date.now(),
+            text: `All tickets complete; metric not met (${xy}). Propose next experiment.`,
+          });
+          const nextMeta = { ...meta, systemComments: list, metricNotMetCommentedAt: Date.now() };
+          await client.query(
+            `UPDATE org_studio_roadmap_versions SET meta = $1::jsonb WHERE id = $2 AND workspace_id = $3`,
+            [JSON.stringify(nextMeta), current.id, workspaceId],
+          );
+          console.log(`[AutoAdvance] ${projectId}: ${current.version} — metric not met (${xy}); system comment posted, NOT shipping`);
+        } else {
+          console.log(`[AutoAdvance] ${projectId}: ${current.version} — metric still not met; comment already posted, NOT shipping`);
+        }
+        (checkAndAutoAdvance as any)._lastSkipReason = 'metric_not_met';
+        return;
+      }
+      // Metric met — clear the not-met flag if it was set so a future
+      // regression gets a fresh comment.
+      if (meta.metricNotMetCommentedAt) {
+        const nextMeta = { ...meta };
+        delete nextMeta.metricNotMetCommentedAt;
+        await client.query(
+          `UPDATE org_studio_roadmap_versions SET meta = $1::jsonb WHERE id = $2 AND workspace_id = $3`,
+          [JSON.stringify(nextMeta), current.id, workspaceId],
+        );
+      }
+    }
+  }
+
+  // 2. Ship the current version
+  const shippedAt = Date.now();
+  await client.query(
+    `UPDATE org_studio_roadmap_versions SET status = 'shipped', shipped_at = $1
+     WHERE id = $2 AND workspace_id = $3`,
+    [String(shippedAt), current.id, workspaceId],
+  );
+  console.log(`[VersionShip] ${projectId}: ${current.version} shipped`);
+
+  // 3. Read project autonomy from the row locked above.
+  const projData = projectData;
+
+  const approvedVersionsList: string[] = (() => {
+    // #1224: derive from primary component's approvedVersions[] only.
+    // #1314.2 (Basil 2026-05-12): fall back to first container when no
+    // non-support/qa primary exists — prevents single-section support-
+    // role projects from being silently un-advanceable. Same rule applied
+    // in promoteProjectToNextVersion (project-state.ts).
+    const comps: any[] = Array.isArray(projData.components) && projData.components.length > 0
+      ? projData.components
+      : Array.isArray(projData.sections) ? projData.sections : [];
+    const primary =
+      comps.find((c: any) => !c?.role || (c.role !== 'qa' && c.role !== 'support'))
+      || comps[0];
+    return Array.isArray(primary?.approvedVersions) ? primary.approvedVersions : [];
+  })();
+
+  // #1191 — the shipped nudge is deferred until the outer transaction
+  // commits. Sending here could announce a shipment that later rolls back.
+  const shipped = { projectData: projData, version: current.version };
+
+  // 3b. Project state gate: if project is explicitly inactive, the human has
+  // paused auto-advance. Reconcile still ships the completed version (done flags
+  // + status='shipped' are factual), but we do NOT promote a next version.
+  // (#1185 rename: 'stopped' → 'inactive'. Accept both during transition.)
+  if (projData.state === 'inactive' || projData.state === 'stopped') {
+    console.log(
+      `[AutoAdvance] ${projectId}: project inactive — shipped ${current.version} but skipping auto-advance`,
+    );
+    (checkAndAutoAdvance as any)._lastSkipReason = 'inactive';
+    return { result: noPromotion('project inactive'), pointer, shipped };
+  }
+
+  // Legacy compat: also check currentVersion === null for un-migrated projects
+  if (projData.currentVersion === null || projData.currentVersion === undefined) {
+    console.log(
+      `[AutoAdvance] ${projectId}: project paused (currentVersion=null) — shipped ${current.version} but skipping auto-advance`,
+    );
+    (checkAndAutoAdvance as any)._lastSkipReason = 'paused';
+    return { result: noPromotion('project paused'), pointer, shipped };
+  }
+
+  // 4. No approvals = nothing to advance to.
+  // #1187: auto-deactivate REMOVED. Project state is user-controlled only.
+  // We log and return; the project stays active until the user explicitly
+  // deactivates from the UI.
+  if (approvedVersionsList.length === 0) {
+    console.log(
+      `[AutoAdvance] ${projectId}: no versions approved — shipped ${current.version}, awaiting user approval to continue`,
+    );
+    return { result: noPromotion('no versions approved'), pointer, shipped };
+  }
+
+  // 5-10. Delegate to shared promote util (handles finding next version,
+  //       horizon gate, taskId gate, version status update, task moves,
+  //       and currentVersion bump).
+  const outcome = await advanceAfterShipmentLocked(projectId, current.version, client, workspaceId);
+  outcome.shipped = shipped;
+  if (!outcome.result.promoted) {
+    console.log(
+      `[AutoAdvance] ${projectId}: ${current.version} shipped — promote skipped: ${outcome.result.reason}`,
+    );
+
+    // #1187: auto-deactivate REMOVED. Promote skipped means there's no
+    // next approved version to advance to — the project simply stays put
+    // with currentVersion at the just-shipped version. The user can
+    // approve another version to continue, or explicitly deactivate.
+    console.log(
+      `[AutoAdvance] ${projectId}: ${current.version} shipped, no next approved version to promote — awaiting user approval`,
+    );
+  }
+  return outcome;
+}
+
 export async function checkAndAutoAdvance(
   projectId: string,
   existingClient?: any,
+  workspaceId = 'default-workspace',
 ): Promise<void> {
   const pool = getPool();
-  if (!pool) return;
+  if (!existingClient && !pool) return;
 
   const client = existingClient || await pool.connect();
   const ownClient = !existingClient;
-
   try {
-    // 1. Find the current version
-    const versionResult = await client.query(
-      `SELECT id, version, status, items, sort_order, meta
-       FROM org_studio_roadmap_versions
-       WHERE project_id = $1 AND status = 'current' AND workspace_id = $2
-       ORDER BY sort_order ASC
-       LIMIT 1`,
-      [projectId, 'default-workspace'], // TODO(v0.17-multi-workspace): resolve from caller context
-    );
-
-    if (versionResult.rows.length === 0) return; // no current version
-
-    const current = versionResult.rows[0];
-    const items: any[] = current.items || [];
-
-    // All items must be done (zero-item versions are auto-shipped)
-    if (items.length > 0 && !items.every((i: any) => i.done === true)) return;
-
-    // #1263 — outcome-bound gate. If `successCriteria` is set on this
-    // version, ship is gated on `metricCurrent` satisfying the comparator
-    // vs `metricTarget`. When the gate fails, post a one-shot system
-    // comment on the rv-row's `meta.systemComments[]` and return without
-    // shipping. The flag `meta.metricNotMetCommentedAt` makes the comment
-    // idempotent across repeated calls; it's cleared once the metric IS
-    // met (so future regressions get a fresh comment).
-    {
-      const meta: any = (current.meta && typeof current.meta === 'object') ? current.meta : {};
-      const criteria = (meta.successCriteria || '').toString().trim();
-      if (criteria) {
-        const target = meta.metricTarget;
-        const cur = meta.metricCurrent;
-        const comp = meta.metricComparator || 'gte';
-        let met = false;
-        if (typeof target === 'number' && typeof cur === 'number') {
-          met = comp === 'lte' ? cur <= target
-              : comp === 'eq' ? cur === target
-              : cur >= target;
-        }
-        if (!met) {
-          // Post system comment once per transition into the not-met state.
-          if (!meta.metricNotMetCommentedAt) {
-            const xy = `${typeof cur === 'number' ? cur : '?'}/${typeof target === 'number' ? target : '?'}`;
-            const list = Array.isArray(meta.systemComments) ? meta.systemComments : [];
-            list.push({
-              at: Date.now(),
-              text: `All tickets complete; metric not met (${xy}). Propose next experiment.`,
-            });
-            const nextMeta = { ...meta, systemComments: list, metricNotMetCommentedAt: Date.now() };
-            await client.query(
-              `UPDATE org_studio_roadmap_versions SET meta = $1::jsonb WHERE id = $2 AND workspace_id = $3`,
-              [JSON.stringify(nextMeta), current.id, 'default-workspace'],
-            );
-            console.log(`[AutoAdvance] ${projectId}: ${current.version} — metric not met (${xy}); system comment posted, NOT shipping`);
-          } else {
-            console.log(`[AutoAdvance] ${projectId}: ${current.version} — metric still not met; comment already posted, NOT shipping`);
-          }
-          (checkAndAutoAdvance as any)._lastSkipReason = 'metric_not_met';
-          return;
-        }
-        // Metric met — clear the not-met flag if it was set so a future
-        // regression gets a fresh comment.
-        if (meta.metricNotMetCommentedAt) {
-          const nextMeta = { ...meta };
-          delete nextMeta.metricNotMetCommentedAt;
-          await client.query(
-            `UPDATE org_studio_roadmap_versions SET meta = $1::jsonb WHERE id = $2 AND workspace_id = $3`,
-            [JSON.stringify(nextMeta), current.id, 'default-workspace'],
-          );
-        }
-      }
-    }
-
-    // 2. Ship the current version
-    const shippedAt = Date.now();
+    await client.query('BEGIN');
     await client.query(
-      `UPDATE org_studio_roadmap_versions SET status = 'shipped', shipped_at = $1
-       WHERE id = $2 AND workspace_id = $3`,
-      [String(shippedAt), current.id, 'default-workspace'],
+      `SELECT pg_advisory_xact_lock(hashtext($1))`,
+      [`roadmap-lifecycle:${workspaceId}:${projectId}`],
     );
-    console.log(`[VersionShip] ${projectId}: ${current.version} shipped`);
-
-    // 3. Read project autonomy to check horizon
-    const projResult = await client.query(
-      `SELECT data FROM org_studio_projects WHERE id = $1 AND workspace_id = $2`,
-      [projectId, 'default-workspace'],
-    );
-    if (projResult.rows.length === 0) return;
-
-    const projData =
-      typeof projResult.rows[0].data === 'string'
-        ? JSON.parse(projResult.rows[0].data)
-        : projResult.rows[0].data || {};
-
-    const approvedVersionsList: string[] = (() => {
-      // #1224: derive from primary component's approvedVersions[] only.
-      // #1314.2 (Basil 2026-05-12): fall back to first container when no
-      // non-support/qa primary exists — prevents single-section support-
-      // role projects from being silently un-advanceable. Same rule applied
-      // in promoteProjectToNextVersion (project-state.ts).
-      const comps: any[] = Array.isArray(projData.components) && projData.components.length > 0
-        ? projData.components
-        : Array.isArray(projData.sections) ? projData.sections : [];
-      const primary =
-        comps.find((c: any) => !c?.role || (c.role !== 'qa' && c.role !== 'support'))
-        || comps[0];
-      return Array.isArray(primary?.approvedVersions) ? primary.approvedVersions : [];
-    })();
-
-    // 3a. #1191 — Telegram nudge to vision owner: "✅ vX shipped on <project>. Approve next?"
-    // Fire-and-forget; idempotency key keyed off project+version so duplicate
-    // ships (e.g. reconcile race with live sync) don't double-ping. Reads the
-    // teammates list from the project doc's settings or from /api/store —
-    // we don't already have it in scope here, so do a tiny side-channel read.
-    fireVersionShippedNudge(projectId, projData, current.version);
-
-    // 3b. Project state gate: if project is explicitly inactive, the human has
-    // paused auto-advance. Reconcile still ships the completed version (done flags
-    // + status='shipped' are factual), but we do NOT promote a next version.
-    // (#1185 rename: 'stopped' → 'inactive'. Accept both during transition.)
-    if (projData.state === 'inactive' || projData.state === 'stopped') {
-      console.log(
-        `[AutoAdvance] ${projectId}: project inactive — shipped ${current.version} but skipping auto-advance`,
-      );
-      (checkAndAutoAdvance as any)._lastSkipReason = 'inactive';
-      return;
+    const outcome = await checkAndAutoAdvanceLocked(projectId, client, workspaceId);
+    if (outcome?.shipped || outcome?.result.promoted) {
+      await queueRoadmapLifecycleChange(client, projectId, workspaceId);
     }
+    await client.query('COMMIT');
 
-    // Legacy compat: also check currentVersion === null for un-migrated projects
-    if (projData.currentVersion === null || projData.currentVersion === undefined) {
+    dispatchRoadmapLifecyclePostCommit(projectId, outcome);
+    if (outcome?.result.promoted && outcome.result.to) {
       console.log(
-        `[AutoAdvance] ${projectId}: project paused (currentVersion=null) — shipped ${current.version} but skipping auto-advance`,
-      );
-      (checkAndAutoAdvance as any)._lastSkipReason = 'paused';
-      return;
-    }
-
-    // 4. No approvals = nothing to advance to.
-    // #1187: auto-deactivate REMOVED. Project state is user-controlled only.
-    // We log and return; the project stays active until the user explicitly
-    // deactivates from the UI.
-    if (approvedVersionsList.length === 0) {
-      console.log(
-        `[AutoAdvance] ${projectId}: no versions approved — shipped ${current.version}, awaiting user approval to continue`,
-      );
-      return;
-    }
-
-    // 5-10. Delegate to shared promote util (handles finding next version,
-    //       horizon gate, taskId gate, version status update, task moves,
-    //       and currentVersion bump).
-    const result = await promoteProjectToNextVersion(projectId, client);
-    if (result.promoted) {
-      console.log(
-        `[AutoAdvance] ${projectId}: ${current.version} → ${result.to} (${result.movedTasks} tasks moved planning→backlog)`,
-      );
-
-      // Trigger the scheduler for the project's dev owner so the newly
-      // backlogged tasks get dispatched immediately — no poll needed.
-      if (result.movedTasks > 0 && projData.devOwner) {
-        triggerSchedulerForAgent(projData.devOwner);
-      }
-    } else {
-      console.log(
-        `[AutoAdvance] ${projectId}: ${current.version} shipped — promote skipped: ${result.reason}`,
-      );
-
-      // #1187: auto-deactivate REMOVED. Promote skipped means there's no
-      // next approved version to advance to — the project simply stays put
-      // with currentVersion at the just-shipped version. The user can
-      // approve another version to continue, or explicitly deactivate.
-      console.log(
-        `[AutoAdvance] ${projectId}: ${current.version} shipped, no next approved version to promote — awaiting user approval`,
+        `[AutoAdvance] ${projectId}: ${outcome.pointer} → ${outcome.result.to} (${outcome.result.movedTasks} tasks moved planning→backlog)`,
       );
     }
   } catch (err: any) {
+    try { await client.query('ROLLBACK'); } catch { /* best-effort */ }
     console.error('[AutoAdvance] checkAndAutoAdvance error (non-fatal):', err?.message || err);
   } finally {
     if (ownClient) client.release();
@@ -695,10 +891,12 @@ export async function checkAndAutoAdvance(
  * Non-fatal: wraps in try/catch. No-ops in file-store mode.
  *
  * @param projectId - optional project filter; when omitted, scans all projects.
+ * @param workspaceId - request-scoped workspace; reconciliation never crosses tenants.
  * @returns summary counts for logging / API response.
  */
 export async function reconcileRoadmapItemDone(
   projectId?: string,
+  workspaceId = 'default-workspace',
 ): Promise<{ scanned: number; flipped: number; shipped: number; advanced: number; skippedAdvance: number }> {
   const summary = { scanned: 0, flipped: 0, shipped: 0, advanced: 0, skippedAdvance: 0 };
   const pool = getPool();
@@ -707,43 +905,48 @@ export async function reconcileRoadmapItemDone(
   try {
     const client = await pool.connect();
     try {
-      // 1. Find all `current` versions (optionally scoped to one project).
+      // 1. Find all canonical current versions (optionally one project).
       const versionsRes = projectId
         ? await client.query(
             `SELECT id, project_id, version, items FROM org_studio_roadmap_versions
              WHERE status = 'current' AND workspace_id = $1 AND project_id = $2`,
-            ['default-workspace', projectId],
+            [workspaceId, projectId],
           )
         : await client.query(
             `SELECT id, project_id, version, items FROM org_studio_roadmap_versions
              WHERE status = 'current' AND workspace_id = $1`,
-            ['default-workspace'],
+            [workspaceId],
           );
 
       summary.scanned = versionsRes.rows.length;
+      const completed: Array<{ projectId: string; version: string }> = [];
 
-      // 2. For each version: lock it, fetch linked task statuses, flip drifted items.
-      const shippedProjectIds: string[] = [];
+      // 2. Reconcile item flags only. Do NOT mark a version shipped here:
+      // checkAndAutoAdvance owns the outcome gate and must see the row while
+      // it is still current. The old reconcile path shipped first, bypassed
+      // the metric gate, then called a function that could no longer find a
+      // current row to advance.
       for (const v of versionsRes.rows) {
         try {
           await client.query('BEGIN');
-
-          // Re-fetch under FOR UPDATE to avoid racing with live syncs.
           const locked = await client.query(
             `SELECT id, project_id, version, items FROM org_studio_roadmap_versions
              WHERE id = $1 AND status = 'current' AND workspace_id = $2 FOR UPDATE`,
-            [v.id, 'default-workspace'],
+            [v.id, workspaceId],
           );
-          if (locked.rows.length === 0) { await client.query('COMMIT'); continue; }
+          if (locked.rows.length === 0) {
+            await client.query('COMMIT');
+            continue;
+          }
+
           const row = locked.rows[0];
           const items: any[] = row.items || [];
-
           const taskIds = items.map((i: any) => i.taskId).filter(Boolean);
           const statusMap = new Map<string, string>();
           if (taskIds.length > 0) {
             const tRes = await client.query(
               `SELECT id, status FROM org_studio_tasks WHERE id = ANY($1) AND workspace_id = $2`,
-              [taskIds, 'default-workspace'],
+              [taskIds, workspaceId],
             );
             for (const t of tRes.rows) statusMap.set(t.id, t.status);
           }
@@ -752,7 +955,7 @@ export async function reconcileRoadmapItemDone(
           for (const item of items) {
             if (!item.taskId) continue;
             const actualStatus = statusMap.get(item.taskId);
-            if (actualStatus === undefined) continue; // orphan taskId — leave as-is
+            if (actualStatus === undefined) continue;
             const shouldBeDone = actualStatus === 'done';
             if (item.done !== shouldBeDone) {
               item.done = shouldBeDone;
@@ -765,43 +968,18 @@ export async function reconcileRoadmapItemDone(
 
           if (localFlipped > 0) {
             await client.query(
-              `UPDATE org_studio_roadmap_versions SET items = $1 WHERE id = $2`,
-              [JSON.stringify(items), row.id],
+              `UPDATE org_studio_roadmap_versions
+               SET items = $1
+               WHERE id = $2 AND workspace_id = $3`,
+              [JSON.stringify(items), row.id, workspaceId],
             );
             summary.flipped += localFlipped;
           }
 
-          // 3. If all items done and there's at least one, ship this version.
-          let didShip = false;
           if (items.length > 0 && items.every((i: any) => i.done === true)) {
-            const shippedAt = Date.now();
-            await client.query(
-              `UPDATE org_studio_roadmap_versions SET status = 'shipped', shipped_at = $1
-               WHERE id = $2 AND workspace_id = $3 AND status = 'current'`,
-              [String(shippedAt), row.id, 'default-workspace'],
-            );
-            console.log(`[VersionShip] ${row.project_id}: ${row.version} shipped (reconcile)`);
-            summary.shipped++;
-            didShip = true;
-            // #1191 — fire nudge from reconcile path too. Read project doc
-            // (already locked above for the version row, but project doc is
-            // a separate row — a fresh read is fine).
-            try {
-              const pdRes = await client.query(
-                `SELECT data FROM org_studio_projects WHERE id = $1 AND workspace_id = $2`,
-                [row.project_id, 'default-workspace'],
-              );
-              if (pdRes.rows.length > 0) {
-                const pd = typeof pdRes.rows[0].data === 'string'
-                  ? JSON.parse(pdRes.rows[0].data)
-                  : pdRes.rows[0].data || {};
-                fireVersionShippedNudge(row.project_id, pd, row.version);
-              }
-            } catch { /* non-fatal */ }
+            completed.push({ projectId: row.project_id, version: row.version });
           }
-
           await client.query('COMMIT');
-          if (didShip) shippedProjectIds.push(row.project_id);
         } catch (vErr: any) {
           try { await client.query('ROLLBACK'); } catch { /* best-effort */ }
           console.error(
@@ -811,56 +989,91 @@ export async function reconcileRoadmapItemDone(
         }
       }
 
-      // 4. For each shipped project, run auto-advance (paused projects will skip internally).
-      for (const pid of shippedProjectIds) {
+      // 3. Let the normal lifecycle path evaluate each completed current row.
+      for (const candidate of completed) {
         try {
-          // Snapshot the paused state BEFORE calling advance, so we can classify.
-          const projRes = await client.query(
+          const beforeProject = await client.query(
             `SELECT data FROM org_studio_projects WHERE id = $1 AND workspace_id = $2`,
-            [pid, 'default-workspace'],
+            [candidate.projectId, workspaceId],
           );
-          const projData =
-            projRes.rows.length === 0
-              ? {}
-              : typeof projRes.rows[0].data === 'string'
-                ? JSON.parse(projRes.rows[0].data)
-                : projRes.rows[0].data || {};
-          const wasStopped = projData.state === 'inactive' || projData.state === 'stopped' || projData.currentVersion === null || projData.currentVersion === undefined;
+          const beforeData = beforeProject.rows.length === 0
+            ? {}
+            : typeof beforeProject.rows[0].data === 'string'
+              ? JSON.parse(beforeProject.rows[0].data)
+              : beforeProject.rows[0].data || {};
+          const wasPaused = beforeData.state === 'inactive' || beforeData.state === 'stopped' ||
+            beforeData.currentVersion === null || beforeData.currentVersion === undefined;
 
-          if (wasStopped) {
-            console.log(
-              `[AutoAdvance] ${pid}: project stopped/paused — shipped via reconcile but skipping auto-advance`,
-            );
-            summary.skippedAdvance++;
-            continue;
-          }
+          await checkAndAutoAdvance(candidate.projectId, client, workspaceId);
 
-          await checkAndAutoAdvance(pid);
+          const sourceAfter = await client.query(
+            `SELECT status FROM org_studio_roadmap_versions
+             WHERE project_id = $1 AND version = $2 AND workspace_id = $3 LIMIT 1`,
+            [candidate.projectId, candidate.version, workspaceId],
+          );
+          if (sourceAfter.rows[0]?.status === 'shipped') summary.shipped++;
 
-          // Re-read to see if currentVersion moved — proxy for a successful advance.
-          const after = await client.query(
+          const afterProject = await client.query(
             `SELECT data FROM org_studio_projects WHERE id = $1 AND workspace_id = $2`,
-            [pid, 'default-workspace'],
+            [candidate.projectId, workspaceId],
           );
-          const afterData =
-            after.rows.length === 0
-              ? {}
-              : typeof after.rows[0].data === 'string'
-                ? JSON.parse(after.rows[0].data)
-                : after.rows[0].data || {};
-          if (afterData.currentVersion && afterData.currentVersion !== projData.currentVersion) {
+          const afterData = afterProject.rows.length === 0
+            ? {}
+            : typeof afterProject.rows[0].data === 'string'
+              ? JSON.parse(afterProject.rows[0].data)
+              : afterProject.rows[0].data || {};
+          if (afterData.currentVersion && afterData.currentVersion !== beforeData.currentVersion) {
             summary.advanced++;
-          } else if (!afterData.currentVersion || afterData.currentVersion === projData.currentVersion) {
-            // #1187: auto-stop check REMOVED. checkAndAutoAdvance didn't advance,
-            // which means either no approved next version exists or the user has
-            // not approved past the current shipped version. Either way, the
-            // project stays as-is until the user explicitly approves more work
-            // or deactivates the project.
+          } else if (wasPaused && sourceAfter.rows[0]?.status === 'shipped') {
+            summary.skippedAdvance++;
           }
         } catch (advErr: any) {
           console.error(
-            `[RoadmapReconcile] auto-advance ${pid} error (non-fatal):`,
+            `[RoadmapReconcile] lifecycle ${candidate.projectId} error (non-fatal):`,
             advErr?.message || advErr,
+          );
+        }
+      }
+
+      // 4. Recovery: find projects whose pointer still names a canonical
+      // shipped row. This is the durable self-heal for a manual ship or an
+      // interrupted older lifecycle path. advanceAfterShipment is idempotent:
+      // after a successful move the pointer no longer matches this row.
+      const staleRes = projectId
+        ? await client.query(
+            `SELECT p.id AS project_id, p.data->>'currentVersion' AS version
+             FROM org_studio_projects p
+             JOIN org_studio_roadmap_versions v
+               ON v.project_id = p.id
+              AND v.workspace_id = p.workspace_id
+              AND v.version = p.data->>'currentVersion'
+             WHERE p.workspace_id = $1 AND p.id = $2 AND v.status = 'shipped'`,
+            [workspaceId, projectId],
+          )
+        : await client.query(
+            `SELECT p.id AS project_id, p.data->>'currentVersion' AS version
+             FROM org_studio_projects p
+             JOIN org_studio_roadmap_versions v
+               ON v.project_id = p.id
+              AND v.workspace_id = p.workspace_id
+              AND v.version = p.data->>'currentVersion'
+             WHERE p.workspace_id = $1 AND v.status = 'shipped'`,
+            [workspaceId],
+          );
+
+      for (const stale of staleRes.rows) {
+        try {
+          const result = await advanceAfterShipment(
+            stale.project_id,
+            stale.version,
+            client,
+            workspaceId,
+          );
+          if (result.promoted) summary.advanced++;
+        } catch (recoverErr: any) {
+          console.error(
+            `[RoadmapReconcile] shipped-pointer recovery ${stale.project_id} error (non-fatal):`,
+            recoverErr?.message || recoverErr,
           );
         }
       }

@@ -180,7 +180,7 @@ export async function updateProjectService(
           const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 3 });
           const client = await pool.connect();
           try {
-            const result = await promoteProjectToNextVersion(projectId, client);
+            const result = await promoteProjectToNextVersion(projectId, client, { workspaceId });
             if (result.promoted) {
               console.log(`[ProjectState] Restart promote ${projectId}: ${result.from} → ${result.to} (${result.movedTasks} tasks → backlog)`);
               const freshStore = await getStoreProvider(workspaceId).read();
