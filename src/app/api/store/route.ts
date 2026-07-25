@@ -1562,11 +1562,18 @@ export async function POST(req: NextRequest) {
             throw providerErr;
           }
 
-          // Sync roadmap item done flag when task status changes
+          // Sync the roadmap item and await the canonical lifecycle transaction.
+          // On a final-task close this commits either normal shipment/promotion
+          // or a durable, idempotent unmet-metric owner handoff before the API
+          // returns. The helper remains non-fatal for unrelated task updates.
           if (updates.status && updated.projectId) {
             const isDone = updates.status === 'done';
-            // Fire async — never block the response
-            syncRoadmapItemForTask(updated.projectId, payload.id, isDone).catch(() => {});
+            await syncRoadmapItemForTask(
+              updated.projectId,
+              payload.id,
+              isDone,
+              workspace.id,
+            );
           }
 
           // #1351 slice 2 — re-run the duplicate-detection hook when the
@@ -1651,6 +1658,14 @@ export async function POST(req: NextRequest) {
               fallbackUpdates.loopPauseReason = null;
             }
             await provider.updateTask(payload.id, fallbackUpdates);
+            if (fallbackUpdates.status && freshTask.projectId) {
+              await syncRoadmapItemForTask(
+                freshTask.projectId,
+                payload.id,
+                fallbackUpdates.status === 'done',
+                workspace.id,
+              );
+            }
             console.log(`[updateTask] #948 fallback path matched task ${payload.id} via fresh read`);
             return NextResponse.json({ ok: true, viaFallback: true });
           } catch (e: any) {

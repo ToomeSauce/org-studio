@@ -26,6 +26,8 @@ import { promoteProjectToNextVersionLocked } from './project-state';
 import { sendVersionShippedNudge } from './vision-notify';
 import { internalAuthHeaders } from './read-gate';
 import { recordInternalCallFailure } from './dispatch-ledger';
+import { buildProposeNextPrompt } from './done-but-unmet';
+import { createHash } from 'crypto';
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -356,12 +358,15 @@ export async function syncRoadmapItemForTask(
   projectId: string,
   taskId: string,
   isDone: boolean,
+  workspaceId = 'default-workspace',
+  existingClient?: any,
 ): Promise<void> {
   try {
     const pool = getPool();
-    if (!pool) return; // file-store mode — no-op for now (file-based roadmaps rare)
+    if (!existingClient && !pool) return; // file-store mode — no-op for now (file-based roadmaps rare)
 
-    const client = await pool.connect();
+    const client = existingClient || await pool.connect();
+    const ownClient = !existingClient;
     let changed = false;
     let shouldCheckAdvance = false;
     try {
@@ -377,7 +382,7 @@ export async function syncRoadmapItemForTask(
          WHERE project_id = $1 AND workspace_id = $2
          ORDER BY sort_order ASC
          FOR UPDATE`,
-        [projectId, 'default-workspace'], // TODO(v0.17-multi-workspace): resolve from caller context
+        [projectId, workspaceId],
       );
 
       const flippedVersions: string[] = [];
@@ -394,8 +399,8 @@ export async function syncRoadmapItemForTask(
 
         if (rowChanged) {
           await client.query(
-            `UPDATE org_studio_roadmap_versions SET items = $1 WHERE id = $2`,
-            [JSON.stringify(items), row.id],
+            `UPDATE org_studio_roadmap_versions SET items = $1 WHERE id = $2 AND workspace_id = $3`,
+            [JSON.stringify(items), row.id, workspaceId],
           );
           changed = true;
           flippedVersions.push(row.version);
@@ -415,7 +420,7 @@ export async function syncRoadmapItemForTask(
         const projRes = await client.query(
           `SELECT data FROM org_studio_projects
            WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
-          [projectId, 'default-workspace'],
+          [projectId, workspaceId],
         );
         const projRow = projRes.rows[0];
         if (projRow?.data) {
@@ -439,7 +444,7 @@ export async function syncRoadmapItemForTask(
           if (docChanged) {
             await client.query(
               `UPDATE org_studio_projects SET data = $1 WHERE id = $2 AND workspace_id = $3`,
-              [JSON.stringify(projData), projectId, 'default-workspace'],
+              [JSON.stringify(projData), projectId, workspaceId],
             );
             console.log(
               `[RoadmapSync] ${projectId}: project doc embedded items synced for task ${taskId} → done=${isDone}`,
@@ -458,11 +463,14 @@ export async function syncRoadmapItemForTask(
       try { await client.query('ROLLBACK'); } catch { /* best-effort */ }
       throw txErr;
     } finally {
-      client.release();
+      if (ownClient) client.release();
     }
 
     if (shouldCheckAdvance) {
-      await checkAndAutoAdvance(projectId);
+      // Await the canonical lifecycle transaction. The task-close response must
+      // not win the race against an unmet outcome handoff: checkAndAutoAdvance
+      // durably queues that handoff before it commits and returns.
+      await checkAndAutoAdvance(projectId, existingClient, workspaceId);
     }
   } catch (err: any) {
     console.error('[RoadmapSync] syncRoadmapItemForTask error (non-fatal):', err?.message || err);
@@ -481,10 +489,178 @@ export interface AdvanceAfterShipmentOutcome {
     projectData: any;
     version: string;
   };
+  unmetHandoff?: {
+    versionId: string;
+    version: string;
+    idempotencyKey: string;
+    owner?: string;
+    agentId?: string;
+    queued: boolean;
+    reason?: 'duplicate' | 'no-responsible-owner';
+  };
 }
 
 function noPromotion(reason: string): import('./project-state').PromoteResult {
   return { promoted: false, from: null, to: null, movedTasks: 0, reason };
+}
+
+function primaryProjectOwner(projectData: any): string[] {
+  const components: any[] = Array.isArray(projectData?.components) && projectData.components.length > 0
+    ? projectData.components
+    : Array.isArray(projectData?.sections) ? projectData.sections : [];
+  const primary = components.find(
+    (component: any) => !component?.role || (component.role !== 'qa' && component.role !== 'support'),
+  ) || components[0];
+  const candidates = [
+    primary?.owner,
+    projectData?.devOwner,
+    projectData?.owner,
+    projectData?.visionOwner,
+  ];
+  return candidates.filter((owner, index, all) => {
+    const normalized = (owner || '').toString().trim().toLowerCase();
+    return normalized && all.findIndex((candidate) =>
+      (candidate || '').toString().trim().toLowerCase() === normalized,
+    ) === index;
+  }).map((owner) => owner.toString().trim());
+}
+
+function outcomeHandoffKey(
+  workspaceId: string,
+  projectId: string,
+  current: any,
+  meta: any,
+): string {
+  const itemSignature = (current.items || [])
+    .map((item: any) => `${item.id || ''}:${item.taskId || ''}:${item.done === true ? '1' : '0'}`)
+    .sort();
+  const state = JSON.stringify({
+    workspaceId,
+    projectId,
+    versionId: current.id,
+    version: current.version,
+    items: itemSignature,
+    successCriteria: (meta.successCriteria || '').toString().trim(),
+    metricCurrent: typeof meta.metricCurrent === 'number' ? meta.metricCurrent : null,
+    metricTarget: typeof meta.metricTarget === 'number' ? meta.metricTarget : null,
+    metricComparator: meta.metricComparator || 'gte',
+  });
+  return `outcome-unmet-${createHash('sha256').update(state).digest('hex')}`;
+}
+
+async function resolveOutcomeOwner(
+  client: any,
+  workspaceId: string,
+  candidates: string[],
+): Promise<{ owner: string; agentId: string } | undefined> {
+  if (candidates.length === 0) return undefined;
+  const settingsResult = await client.query(
+    `SELECT data FROM org_studio_settings
+     WHERE id = $1 AND workspace_id = $2 LIMIT 1`,
+    ['default', workspaceId],
+  );
+  const raw = settingsResult.rows[0]?.data;
+  const settings = raw == null ? {} : typeof raw === 'string' ? JSON.parse(raw) : raw;
+  const teammates: any[] = Array.isArray(settings?.teammates) ? settings.teammates : [];
+  for (const owner of candidates) {
+    const normalized = owner.toLowerCase();
+    const teammate = teammates.find((entry: any) =>
+      (entry?.name || '').toString().trim().toLowerCase() === normalized ||
+      (entry?.agentId || '').toString().trim().toLowerCase() === normalized,
+    );
+    if (teammate?.agentId) return { owner, agentId: teammate.agentId };
+  }
+  return undefined;
+}
+
+async function queueUnmetOutcomeHandoff(
+  client: any,
+  workspaceId: string,
+  projectId: string,
+  projectData: any,
+  current: any,
+  meta: any,
+): Promise<{ handoff: NonNullable<AdvanceAfterShipmentOutcome['unmetHandoff']>; nextMeta: any }> {
+  const idempotencyKey = outcomeHandoffKey(workspaceId, projectId, current, meta);
+  if (meta.lastOutcomeHandoffKey === idempotencyKey && meta.lastOutcomeHandoffAt) {
+    return {
+      handoff: {
+        versionId: current.id,
+        version: current.version,
+        idempotencyKey,
+        queued: false,
+        reason: 'duplicate',
+      },
+      nextMeta: meta,
+    };
+  }
+  const candidates = [
+    (current.owner || '').toString().trim(),
+    ...primaryProjectOwner(projectData),
+  ].filter(Boolean);
+  const resolved = await resolveOutcomeOwner(client, workspaceId, candidates);
+  if (!resolved) {
+    return {
+      handoff: {
+        versionId: current.id,
+        version: current.version,
+        idempotencyKey,
+        queued: false,
+        reason: 'no-responsible-owner',
+      },
+      nextMeta: meta,
+    };
+  }
+
+  const prompt = buildProposeNextPrompt({
+    id: current.id,
+    version: current.version,
+    status: current.status,
+    owner: resolved.owner,
+    successCriteria: meta.successCriteria,
+    metricCurrent: meta.metricCurrent,
+    metricTarget: meta.metricTarget,
+    metricComparator: meta.metricComparator,
+    loopPaused: meta.loopPaused,
+    items: current.items || [],
+  });
+  const outboxId = `outcome-${createHash('sha256').update(idempotencyKey).digest('hex').slice(0, 32)}`;
+  const inserted = await client.query(
+    `INSERT INTO org_studio_outbox
+       (id, idempotency_key, agent_id, payload, status, attempts,
+        next_attempt_at, created_at, updated_at, workspace_id)
+     VALUES ($1, $2, $3, $4::jsonb, 'pending', 0, NOW(), NOW(), NOW(), $5)
+     ON CONFLICT (idempotency_key) DO NOTHING`,
+    [
+      outboxId,
+      idempotencyKey,
+      resolved.agentId,
+      JSON.stringify({ message: prompt, sessionKey: `agent:${resolved.agentId}:main` }),
+      workspaceId,
+    ],
+  );
+  const now = Date.now();
+  const queued = (inserted.rowCount || 0) > 0;
+  return {
+    handoff: {
+      versionId: current.id,
+      version: current.version,
+      idempotencyKey,
+      owner: resolved.owner,
+      agentId: resolved.agentId,
+      queued,
+      ...(queued ? {} : { reason: 'duplicate' as const }),
+    },
+    // This durable stamp makes the periodic sweep recovery-only. It is
+    // committed atomically with the outbox row; if the transaction rolls
+    // back, neither survives and the sweep remains free to recover.
+    nextMeta: {
+      ...meta,
+      lastProposeNudgeAt: now,
+      lastOutcomeHandoffKey: idempotencyKey,
+      lastOutcomeHandoffAt: now,
+    },
+  };
 }
 
 /**
@@ -683,7 +859,7 @@ export async function checkAndAutoAdvanceLocked(
 
   // Find only the canonical current row named by the locked project pointer.
   const versionResult = await client.query(
-    `SELECT id, version, status, items, sort_order, meta
+    `SELECT id, version, status, items, sort_order, owner, meta
      FROM org_studio_roadmap_versions
      WHERE project_id = $1 AND status = 'current' AND workspace_id = $2
        AND version = $3
@@ -720,31 +896,59 @@ export async function checkAndAutoAdvanceLocked(
             : cur >= target;
       }
       if (!met) {
-        // Post system comment once per transition into the not-met state.
+        const now = Date.now();
+        const xy = `${typeof cur === 'number' ? cur : '?'}/${typeof target === 'number' ? target : '?'}`;
+        // Keep the existing roadmap-visible one-shot comment, but also queue
+        // the responsible owner's actionable handoff in THIS transaction.
+        // The outbox row is invisible until COMMIT, so delivery cannot race
+        // ahead of the canonical gate result or survive a rollback.
+        let nextMeta = { ...meta };
         if (!meta.metricNotMetCommentedAt) {
-          const xy = `${typeof cur === 'number' ? cur : '?'}/${typeof target === 'number' ? target : '?'}`;
-          const list = Array.isArray(meta.systemComments) ? meta.systemComments : [];
+          const list = Array.isArray(meta.systemComments) ? [...meta.systemComments] : [];
           list.push({
-            at: Date.now(),
-            text: `All tickets complete; metric not met (${xy}). Propose next experiment.`,
+            at: now,
+            text: `All tickets complete; metric not met (${xy}). Record attributable evidence or propose the next experiment.`,
           });
-          const nextMeta = { ...meta, systemComments: list, metricNotMetCommentedAt: Date.now() };
-          await client.query(
-            `UPDATE org_studio_roadmap_versions SET meta = $1::jsonb WHERE id = $2 AND workspace_id = $3`,
-            [JSON.stringify(nextMeta), current.id, workspaceId],
-          );
-          console.log(`[AutoAdvance] ${projectId}: ${current.version} — metric not met (${xy}); system comment posted, NOT shipping`);
-        } else {
-          console.log(`[AutoAdvance] ${projectId}: ${current.version} — metric still not met; comment already posted, NOT shipping`);
+          nextMeta = { ...nextMeta, systemComments: list, metricNotMetCommentedAt: now };
         }
+        const queued = await queueUnmetOutcomeHandoff(
+          client,
+          workspaceId,
+          projectId,
+          projectData,
+          current,
+          nextMeta,
+        );
+        nextMeta = queued.nextMeta;
+        await client.query(
+          `UPDATE org_studio_roadmap_versions SET meta = $1::jsonb WHERE id = $2 AND workspace_id = $3`,
+          [JSON.stringify(nextMeta), current.id, workspaceId],
+        );
+        console.log(
+          `[AutoAdvance] ${projectId}: ${current.version} — metric not met (${xy}); ` +
+          `${queued.handoff.queued ? `handoff queued for ${queued.handoff.agentId}` : `handoff ${queued.handoff.reason}`}, NOT shipping`,
+        );
         (checkAndAutoAdvance as any)._lastSkipReason = 'metric_not_met';
-        return;
+        return {
+          result: noPromotion('metric not met'),
+          pointer,
+          unmetHandoff: queued.handoff,
+        };
       }
-      // Metric met — clear the not-met flag if it was set so a future
-      // regression gets a fresh comment.
-      if (meta.metricNotMetCommentedAt) {
+      // Metric met — clear the not-met state so a future regression gets
+      // a fresh comment and a fresh closeout handoff. This never changes the
+      // metric itself; it only resets notification idempotency after success.
+      if (
+        meta.metricNotMetCommentedAt ||
+        meta.lastOutcomeHandoffKey ||
+        meta.lastOutcomeHandoffAt ||
+        meta.lastProposeNudgeAt
+      ) {
         const nextMeta = { ...meta };
         delete nextMeta.metricNotMetCommentedAt;
+        delete nextMeta.lastOutcomeHandoffKey;
+        delete nextMeta.lastOutcomeHandoffAt;
+        delete nextMeta.lastProposeNudgeAt;
         await client.query(
           `UPDATE org_studio_roadmap_versions SET meta = $1::jsonb WHERE id = $2 AND workspace_id = $3`,
           [JSON.stringify(nextMeta), current.id, workspaceId],
@@ -854,12 +1058,17 @@ export async function checkAndAutoAdvance(
       [`roadmap-lifecycle:${workspaceId}:${projectId}`],
     );
     const outcome = await checkAndAutoAdvanceLocked(projectId, client, workspaceId);
-    if (outcome?.shipped || outcome?.result.promoted) {
+    if (outcome?.shipped || outcome?.result.promoted || outcome?.unmetHandoff) {
       await queueRoadmapLifecycleChange(client, projectId, workspaceId);
     }
     await client.query('COMMIT');
 
     dispatchRoadmapLifecyclePostCommit(projectId, outcome);
+    if (outcome?.unmetHandoff?.queued) {
+      console.log(
+        `[OutcomeGate] ${projectId} ${outcome.unmetHandoff.version}: durable owner handoff committed for ${outcome.unmetHandoff.agentId}`,
+      );
+    }
     if (outcome?.result.promoted && outcome.result.to) {
       console.log(
         `[AutoAdvance] ${projectId}: ${outcome.pointer} → ${outcome.result.to} (${outcome.result.movedTasks} tasks moved planning→backlog)`,

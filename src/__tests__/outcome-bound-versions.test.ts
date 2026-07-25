@@ -72,11 +72,14 @@ function makeFakeClient(initialState: {
   currentRow?: any;
   projectData?: any;
   promoteResult?: any;
+  teammates?: any[];
+  existingOutboxKeys?: string[];
 }) {
   const queries: Array<{ sql: string; params: any[] }> = [];
   let currentRow = initialState.currentRow ? { ...initialState.currentRow } : null;
   const projectData = initialState.projectData || { state: 'active', currentVersion: '0.10', components: [{ id: 'sec-main', role: null, approvedVersions: [] }] };
   const updates: any[] = [];
+  const outboxKeys = new Set(initialState.existingOutboxKeys || []);
 
   const client: any = {
     query: vi.fn(async (sql: string, params: any[] = []) => {
@@ -86,9 +89,20 @@ function makeFakeClient(initialState: {
       if (/FROM\s+org_studio_roadmap_versions[\s\S]*status\s*=\s*'current'/i.test(sql)) {
         return { rows: currentRow ? [currentRow] : [] };
       }
+      // syncRoadmapItemForTask locks all project versions before flipping the
+      // just-closed task's linked item.
+      if (/SELECT\s+id,\s*version,\s*status,\s*items,\s*sort_order[\s\S]*FROM\s+org_studio_roadmap_versions/i.test(sql)) {
+        return { rows: currentRow ? [currentRow] : [] };
+      }
       // SELECT canonical status for the locked project pointer.
       if (/SELECT\s+status\s+FROM\s+org_studio_roadmap_versions/i.test(sql)) {
         return { rows: currentRow ? [{ status: currentRow.status }] : [] };
+      }
+      // UPDATE a linked item's done flag on final-task close.
+      if (/UPDATE\s+org_studio_roadmap_versions\s+SET\s+items/i.test(sql)) {
+        if (currentRow) currentRow.items = JSON.parse(params[0]);
+        updates.push({ kind: 'items', params });
+        return { rows: [], rowCount: 1 };
       }
       // UPDATE setting status='shipped'
       if (/UPDATE\s+org_studio_roadmap_versions\s+SET\s+status\s*=\s*'shipped'/i.test(sql)) {
@@ -109,13 +123,29 @@ function makeFakeClient(initialState: {
       if (/FROM\s+org_studio_projects/i.test(sql)) {
         return { rows: [{ data: projectData }] };
       }
-      // No-op for other queries (NOTIFY, etc).
-      return { rows: [] };
+      if (/FROM\s+org_studio_settings/i.test(sql)) {
+        return { rows: [{ data: { teammates: initialState.teammates || [] } }] };
+      }
+      if (/INSERT\s+INTO\s+org_studio_outbox/i.test(sql)) {
+        const key = params[1];
+        const duplicate = outboxKeys.has(key);
+        if (!duplicate) outboxKeys.add(key);
+        updates.push({ kind: 'outbox', params, duplicate });
+        return { rows: [], rowCount: duplicate ? 0 : 1 };
+      }
+      // No-op for other queries (BEGIN/COMMIT/NOTIFY, etc).
+      return { rows: [], rowCount: 0 };
     }),
     release: vi.fn(),
   };
 
-  return { client, queries, updates, getCurrentRow: () => currentRow };
+  return {
+    client,
+    queries,
+    updates,
+    getCurrentRow: () => currentRow,
+    getOutboxKeys: () => [...outboxKeys],
+  };
 }
 
 // Mock the pg pool inside roadmap-sync via vi.mock on `pg`.
@@ -252,6 +282,124 @@ describe('checkAndAutoAdvance metric gate (#1263)', () => {
 
     expect(fake.getCurrentRow()!.meta.systemComments).toHaveLength(1);
     expect(fake.getCurrentRow()!.meta.metricNotMetCommentedAt).toBe(firstFlag);
+  });
+
+  it('final-task close durably queues the unmet outcome handoff before returning', async () => {
+    const { syncRoadmapItemForTask } = await import('../lib/roadmap-sync');
+    const fake = makeFakeClient({
+      currentRow: {
+        id: 'rv-proj-test-0-10',
+        version: '0.10',
+        status: 'current',
+        owner: 'Mikey',
+        items: [{ id: 'i1', taskId: 't1', done: false }],
+        sort_order: 1,
+        meta: { successCriteria: 'Activation evidence', metricTarget: 10, metricCurrent: 5 },
+      },
+      projectData: {
+        state: 'active',
+        currentVersion: '0.10',
+        components: [{ id: 'sec-main', role: null, owner: 'Mikey', approvedVersions: [] }],
+      },
+      teammates: [{ name: 'Mikey', agentId: 'mikey' }],
+    });
+
+    await syncRoadmapItemForTask('proj-test', 't1', true, 'workspace-a', fake.client);
+
+    expect(fake.getCurrentRow()!.items[0].done).toBe(true);
+    expect(fake.getCurrentRow()!.status).toBe('current'); // metric gate remains closed
+    const outbox = fake.updates.filter((u) => u.kind === 'outbox');
+    expect(outbox).toHaveLength(1);
+    expect(outbox[0].params[2]).toBe('mikey');
+    expect(outbox[0].params[4]).toBe('workspace-a');
+    const payload = JSON.parse(outbox[0].params[3]);
+    expect(payload.message).toMatch(/record the measured value now/i);
+    expect(payload.message).toMatch(/propose the next experiment/i);
+    expect(fake.getCurrentRow()!.meta.metricCurrent).toBe(5); // never inferred from ticket completion
+    const outboxQueryIndex = fake.queries.findIndex((q) => /INSERT\s+INTO\s+org_studio_outbox/i.test(q.sql));
+    const finalCommitIndex = fake.queries.map((q) => q.sql).lastIndexOf('COMMIT');
+    expect(outboxQueryIndex).toBeGreaterThanOrEqual(0);
+    expect(finalCommitIndex).toBeGreaterThan(outboxQueryIndex);
+  });
+
+  it('deduplicates the same unmet closeout state across lifecycle retries', async () => {
+    const { checkAndAutoAdvance } = await import('../lib/roadmap-sync');
+    const fake = makeFakeClient({
+      currentRow: {
+        id: 'rv-proj-test-0-10',
+        version: '0.10',
+        status: 'current',
+        owner: 'Mikey',
+        items: [{ id: 'i1', taskId: 't1', done: true }],
+        sort_order: 1,
+        meta: { successCriteria: 'Activation evidence', metricTarget: 10, metricCurrent: 5 },
+      },
+      projectData: {
+        state: 'active',
+        currentVersion: '0.10',
+        components: [{ id: 'sec-main', role: null, owner: 'Mikey', approvedVersions: [] }],
+      },
+      teammates: [{ name: 'Mikey', agentId: 'mikey' }],
+    });
+
+    await checkAndAutoAdvance('proj-test', fake.client, 'workspace-a');
+    await checkAndAutoAdvance('proj-test', fake.client, 'workspace-a');
+
+    expect(fake.updates.filter((u) => u.kind === 'outbox')).toHaveLength(1);
+    expect(fake.getCurrentRow()!.meta.lastOutcomeHandoffKey).toMatch(/^outcome-unmet-/);
+    expect(fake.getCurrentRow()!.meta.lastProposeNudgeAt).toBeTypeOf('number');
+  });
+
+  it('falls back from a missing version owner to the primary component owner', async () => {
+    const { checkAndAutoAdvance } = await import('../lib/roadmap-sync');
+    const fake = makeFakeClient({
+      currentRow: {
+        id: 'rv-proj-test-0-10',
+        version: '0.10',
+        status: 'current',
+        items: [{ id: 'i1', taskId: 't1', done: true }],
+        sort_order: 1,
+        meta: { successCriteria: 'Activation evidence', metricTarget: 10, metricCurrent: 5 },
+      },
+      projectData: {
+        state: 'active',
+        currentVersion: '0.10',
+        components: [{ id: 'sec-main', role: null, owner: 'Ana', approvedVersions: [] }],
+      },
+      teammates: [{ name: 'Ana', agentId: 'ana' }],
+    });
+
+    await checkAndAutoAdvance('proj-test', fake.client, 'workspace-b');
+
+    const outbox = fake.updates.find((u) => u.kind === 'outbox');
+    expect(outbox?.params[2]).toBe('ana');
+    expect(outbox?.params[4]).toBe('workspace-b');
+  });
+
+  it('ships a met final state without creating an unmet handoff', async () => {
+    const { checkAndAutoAdvance } = await import('../lib/roadmap-sync');
+    const fake = makeFakeClient({
+      currentRow: {
+        id: 'rv-proj-test-0-10',
+        version: '0.10',
+        status: 'current',
+        owner: 'Mikey',
+        items: [{ id: 'i1', taskId: 't1', done: true }],
+        sort_order: 1,
+        meta: { successCriteria: 'Activation evidence', metricTarget: 10, metricCurrent: 10 },
+      },
+      projectData: {
+        state: 'active',
+        currentVersion: '0.10',
+        components: [{ id: 'sec-main', role: null, owner: 'Mikey', approvedVersions: [] }],
+      },
+      teammates: [{ name: 'Mikey', agentId: 'mikey' }],
+    });
+
+    await checkAndAutoAdvance('proj-test', fake.client, 'workspace-a');
+
+    expect(fake.getCurrentRow()!.status).toBe('shipped');
+    expect(fake.updates.filter((u) => u.kind === 'outbox')).toHaveLength(0);
   });
 });
 

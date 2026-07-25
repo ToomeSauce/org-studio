@@ -107,9 +107,10 @@ export function buildProposeNextPrompt(v: DoneUnmetVersionLike): string {
   const tgt = typeof v.metricTarget === 'number' ? v.metricTarget : '?';
   const cmp = v.metricComparator === 'lte' ? '≤' : v.metricComparator === 'eq' ? '=' : '≥';
   return (
-    `🧪 **Done-but-unmet (#1585).** Every ticket in \`${v.version}\` is shipped, but the metric still misses target ` +
-    `(${cur} ${cmp} ${tgt} — goal: ${(v.successCriteria || '').toString().trim()}). The hypothesis didn't move the number yet. ` +
-    `Your call as owner: **propose the next experiment** for this version (add a ticket and keep the loop going), or conclude ` +
-    `the hypothesis and adjust the goal. I'm not spawning anything — this is yours to decide. (One nudge; I won't repeat until the state changes.)`
+    `🧪 **Outcome measurement handoff.** Every ticket in \`${v.version}\` is complete, but the metric still misses target ` +
+    `(${cur} ${cmp} ${tgt} — goal: ${(v.successCriteria || '').toString().trim()}). ` +
+    `If the completed work produced attributable evidence, **record the measured value now**. Otherwise, as owner, ` +
+    `**propose the next experiment** for this version or conclude the hypothesis and adjust the goal. ` +
+    `I am not inferring success, and I'm not spawning anything automatically — the outcome gate remains closed until evidence satisfies it.`
   );
 }
