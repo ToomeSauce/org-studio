@@ -31,6 +31,7 @@ import { ensureSkillInstallsSchema, runDriftCheck } from './lib/skill-installs.m
 import { initHealthAlerts, sendHealthAlert, isHealthAlertsEnabled } from './lib/health-alerts.mjs';
 import { startHostSampler } from './lib/host-sampler.mjs';
 import { verifyWebhookSignature, resolveWebhookSecret } from './lib/webhook-auth.mjs';
+import { shouldRunNotificationListenBridge } from './lib/runtime-ownership.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const port = parseInt(process.env.PORT || '4501');
@@ -1140,8 +1141,17 @@ async function initializePostgresListener() {
           // and update state in the same cycle
           await processIntent(changeEvent);
 
-          // Process @mentions from comments added via remote (staging) UI
-          if (changeEvent.type === 'comment_added' && changeEvent.taskId) {
+          // Process comments only on a runtime-connected bridge. Cloud/store
+          // replicas also receive this LISTEN event for cache freshness, but
+          // cannot reach agents. If they call /api/notify/comment they can win
+          // the durable lease and make the real bridge suppress the wake as a
+          // duplicate. Ticket #1809 exposed this second ownership race after
+          // the direct store-route path had already been gated.
+          if (
+            changeEvent.type === 'comment_added' &&
+            changeEvent.taskId &&
+            shouldRunNotificationListenBridge(process.env)
+          ) {
             console.log(`[LISTEN] comment_added taskId=${changeEvent.taskId} commentId=${changeEvent.commentId || 'none'}`);
 
             // #1268 — Bridge to unified notification router so comments inserted

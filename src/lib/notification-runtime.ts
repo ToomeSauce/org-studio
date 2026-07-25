@@ -1,3 +1,8 @@
+import {
+  hasConfiguredAgentRuntime as hasConfiguredAgentRuntimeShared,
+  shouldRunNotificationListenBridge as shouldRunNotificationListenBridgeShared,
+} from '../../lib/runtime-ownership.mjs';
+
 type RuntimeEnvironment = Record<string, string | undefined>;
 
 /**
@@ -12,7 +17,18 @@ type RuntimeEnvironment = Record<string, string | undefined>;
 export function hasConfiguredAgentRuntime(
   env: RuntimeEnvironment = process.env,
 ): boolean {
-  return Boolean(env.GATEWAY_URL?.trim() || env.HERMES_URL?.trim());
+  return hasConfiguredAgentRuntimeShared(env);
+}
+
+/**
+ * True only for the single runtime-connected LISTEN bridge that may acquire
+ * durable task-comment delivery leases. Cloud/store replicas still consume
+ * LISTEN events for cache refreshes, but must leave delivery to this owner.
+ */
+export function shouldRunNotificationListenBridge(
+  env: RuntimeEnvironment = process.env,
+): boolean {
+  return shouldRunNotificationListenBridgeShared(env);
 }
 
 /**
