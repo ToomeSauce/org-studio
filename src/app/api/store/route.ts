@@ -1565,7 +1565,8 @@ export async function POST(req: NextRequest) {
           // Sync the roadmap item and await the canonical lifecycle transaction.
           // On a final-task close this commits either normal shipment/promotion
           // or a durable, idempotent unmet-metric owner handoff before the API
-          // returns. The helper remains non-fatal for unrelated task updates.
+          // returns. Done transitions fail closed if that durable handoff
+          // cannot commit; non-done roadmap sync remains best-effort.
           if (updates.status && updated.projectId) {
             const isDone = updates.status === 'done';
             await syncRoadmapItemForTask(

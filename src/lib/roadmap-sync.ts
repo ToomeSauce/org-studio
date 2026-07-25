@@ -391,7 +391,11 @@ export async function syncRoadmapItemForTask(
         let rowChanged = false;
 
         for (const item of items) {
-          if (item.taskId === taskId && item.done !== isDone) {
+          if (item.taskId !== taskId) continue;
+          // A retry after the item transaction committed but the lifecycle
+          // transaction failed must still re-enter the gate/outbox path.
+          if (isDone) shouldCheckAdvance = true;
+          if (item.done !== isDone) {
             item.done = isDone;
             rowChanged = true;
           }
@@ -455,10 +459,11 @@ export async function syncRoadmapItemForTask(
 
       await client.query('COMMIT');
 
-      // If we flipped an item to done, check whether the entire version completed.
-      // Run AFTER commit so checkAndAutoAdvance observes the flushed state and can
-      // take its own row locks cleanly.
-      if (changed && isDone) shouldCheckAdvance = true;
+      // If this task is linked and done, check whether the entire version
+      // completed. This intentionally runs on retries even when item.done was
+      // already true, so an earlier lifecycle/outbox rollback is recoverable.
+      // Run AFTER commit so checkAndAutoAdvance observes the flushed state and
+      // can take its own row locks cleanly.
     } catch (txErr: any) {
       try { await client.query('ROLLBACK'); } catch { /* best-effort */ }
       throw txErr;
@@ -470,10 +475,14 @@ export async function syncRoadmapItemForTask(
       // Await the canonical lifecycle transaction. The task-close response must
       // not win the race against an unmet outcome handoff: checkAndAutoAdvance
       // durably queues that handoff before it commits and returns.
-      await checkAndAutoAdvance(projectId, existingClient, workspaceId);
+      await checkAndAutoAdvance(projectId, existingClient, workspaceId, true);
     }
   } catch (err: any) {
-    console.error('[RoadmapSync] syncRoadmapItemForTask error (non-fatal):', err?.message || err);
+    console.error('[RoadmapSync] syncRoadmapItemForTask error:', err?.message || err);
+    // Closing a task to done is the durability boundary. Fail the API request
+    // rather than acknowledging a close whose outcome handoff did not commit.
+    // Non-done transitions keep the historical best-effort behavior.
+    if (isDone) throw err;
   }
 }
 
@@ -489,6 +498,7 @@ export interface AdvanceAfterShipmentOutcome {
     projectData: any;
     version: string;
   };
+  roadmapChanged?: boolean;
   unmetHandoff?: {
     versionId: string;
     version: string;
@@ -920,10 +930,13 @@ export async function checkAndAutoAdvanceLocked(
           nextMeta,
         );
         nextMeta = queued.nextMeta;
-        await client.query(
-          `UPDATE org_studio_roadmap_versions SET meta = $1::jsonb WHERE id = $2 AND workspace_id = $3`,
-          [JSON.stringify(nextMeta), current.id, workspaceId],
-        );
+        const roadmapChanged = JSON.stringify(nextMeta) !== JSON.stringify(meta);
+        if (roadmapChanged) {
+          await client.query(
+            `UPDATE org_studio_roadmap_versions SET meta = $1::jsonb WHERE id = $2 AND workspace_id = $3`,
+            [JSON.stringify(nextMeta), current.id, workspaceId],
+          );
+        }
         console.log(
           `[AutoAdvance] ${projectId}: ${current.version} — metric not met (${xy}); ` +
           `${queued.handoff.queued ? `handoff queued for ${queued.handoff.agentId}` : `handoff ${queued.handoff.reason}`}, NOT shipping`,
@@ -932,6 +945,7 @@ export async function checkAndAutoAdvanceLocked(
         return {
           result: noPromotion('metric not met'),
           pointer,
+          roadmapChanged,
           unmetHandoff: queued.handoff,
         };
       }
@@ -1045,6 +1059,7 @@ export async function checkAndAutoAdvance(
   projectId: string,
   existingClient?: any,
   workspaceId = 'default-workspace',
+  throwOnError = false,
 ): Promise<void> {
   const pool = getPool();
   if (!existingClient && !pool) return;
@@ -1058,7 +1073,7 @@ export async function checkAndAutoAdvance(
       [`roadmap-lifecycle:${workspaceId}:${projectId}`],
     );
     const outcome = await checkAndAutoAdvanceLocked(projectId, client, workspaceId);
-    if (outcome?.shipped || outcome?.result.promoted || outcome?.unmetHandoff) {
+    if (outcome?.shipped || outcome?.result.promoted || outcome?.roadmapChanged) {
       await queueRoadmapLifecycleChange(client, projectId, workspaceId);
     }
     await client.query('COMMIT');
@@ -1076,7 +1091,8 @@ export async function checkAndAutoAdvance(
     }
   } catch (err: any) {
     try { await client.query('ROLLBACK'); } catch { /* best-effort */ }
-    console.error('[AutoAdvance] checkAndAutoAdvance error (non-fatal):', err?.message || err);
+    console.error('[AutoAdvance] checkAndAutoAdvance error:', err?.message || err);
+    if (throwOnError) throw err;
   } finally {
     if (ownClient) client.release();
   }

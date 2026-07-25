@@ -74,12 +74,14 @@ function makeFakeClient(initialState: {
   promoteResult?: any;
   teammates?: any[];
   existingOutboxKeys?: string[];
+  failOutboxOnce?: boolean;
 }) {
   const queries: Array<{ sql: string; params: any[] }> = [];
   let currentRow = initialState.currentRow ? { ...initialState.currentRow } : null;
   const projectData = initialState.projectData || { state: 'active', currentVersion: '0.10', components: [{ id: 'sec-main', role: null, approvedVersions: [] }] };
   const updates: any[] = [];
   const outboxKeys = new Set(initialState.existingOutboxKeys || []);
+  let failOutboxOnce = initialState.failOutboxOnce === true;
 
   const client: any = {
     query: vi.fn(async (sql: string, params: any[] = []) => {
@@ -127,6 +129,10 @@ function makeFakeClient(initialState: {
         return { rows: [{ data: { teammates: initialState.teammates || [] } }] };
       }
       if (/INSERT\s+INTO\s+org_studio_outbox/i.test(sql)) {
+        if (failOutboxOnce) {
+          failOutboxOnce = false;
+          throw new Error('simulated outbox failure');
+        }
         const key = params[1];
         const duplicate = outboxKeys.has(key);
         if (!duplicate) outboxKeys.add(key);
@@ -322,6 +328,38 @@ describe('checkAndAutoAdvance metric gate (#1263)', () => {
     expect(finalCommitIndex).toBeGreaterThan(outboxQueryIndex);
   });
 
+  it('fails a done closeout when durable queueing fails, then retries even if the item flag already committed', async () => {
+    const { syncRoadmapItemForTask } = await import('../lib/roadmap-sync');
+    const fake = makeFakeClient({
+      currentRow: {
+        id: 'rv-proj-test-0-10',
+        version: '0.10',
+        status: 'current',
+        owner: 'Mikey',
+        items: [{ id: 'i1', taskId: 't1', done: false }],
+        sort_order: 1,
+        meta: { successCriteria: 'Activation evidence', metricTarget: 10, metricCurrent: 5 },
+      },
+      projectData: {
+        state: 'active',
+        currentVersion: '0.10',
+        components: [{ id: 'sec-main', role: null, owner: 'Mikey', approvedVersions: [] }],
+      },
+      teammates: [{ name: 'Mikey', agentId: 'mikey' }],
+      failOutboxOnce: true,
+    });
+
+    await expect(
+      syncRoadmapItemForTask('proj-test', 't1', true, 'workspace-a', fake.client),
+    ).rejects.toThrow('simulated outbox failure');
+    expect(fake.getCurrentRow()!.items[0].done).toBe(true);
+
+    // Retry sees item.done=true, but must still re-enter the lifecycle gate.
+    await syncRoadmapItemForTask('proj-test', 't1', true, 'workspace-a', fake.client);
+    expect(fake.updates.filter((u) => u.kind === 'outbox')).toHaveLength(1);
+    expect(fake.getCurrentRow()!.meta.lastOutcomeHandoffKey).toMatch(/^outcome-unmet-/);
+  });
+
   it('deduplicates the same unmet closeout state across lifecycle retries', async () => {
     const { checkAndAutoAdvance } = await import('../lib/roadmap-sync');
     const fake = makeFakeClient({
@@ -346,6 +384,8 @@ describe('checkAndAutoAdvance metric gate (#1263)', () => {
     await checkAndAutoAdvance('proj-test', fake.client, 'workspace-a');
 
     expect(fake.updates.filter((u) => u.kind === 'outbox')).toHaveLength(1);
+    expect(fake.updates.filter((u) => u.kind === 'meta')).toHaveLength(1);
+    expect(fake.queries.filter((q) => /^NOTIFY\s+org_studio_change/i.test(q.sql))).toHaveLength(1);
     expect(fake.getCurrentRow()!.meta.lastOutcomeHandoffKey).toMatch(/^outcome-unmet-/);
     expect(fake.getCurrentRow()!.meta.lastProposeNudgeAt).toBeTypeOf('number');
   });
