@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   hasConfiguredAgentRuntime,
+  shouldRunNotificationListenBridge,
   shouldRouteCommentNotificationsInline,
 } from './notification-runtime';
 
@@ -13,6 +14,29 @@ describe('hasConfiguredAgentRuntime', () => {
   it('allows either supported runtime bridge', () => {
     expect(hasConfiguredAgentRuntime({ GATEWAY_URL: 'ws://127.0.0.1:18789', HERMES_URL: undefined })).toBe(true);
     expect(hasConfiguredAgentRuntime({ GATEWAY_URL: undefined, HERMES_URL: 'http://127.0.0.1:8642' })).toBe(true);
+  });
+});
+
+describe('shouldRunNotificationListenBridge', () => {
+  it('rejects the cloud/store LISTEN consumer even though it has Postgres', () => {
+    expect(shouldRunNotificationListenBridge({
+      DATABASE_URL: 'postgres://db/org_studio',
+      OUTBOX_WORKER_DISABLED: 'true',
+    })).toBe(false);
+  });
+
+  it('allows the runtime-connected local LISTEN bridge', () => {
+    expect(shouldRunNotificationListenBridge({
+      DATABASE_URL: 'postgres://db/org_studio',
+      GATEWAY_URL: 'ws://127.0.0.1:18789',
+    })).toBe(true);
+  });
+
+  it('lets the worker-disabled flag override an accidentally configured runtime URL', () => {
+    expect(shouldRunNotificationListenBridge({
+      GATEWAY_URL: 'ws://127.0.0.1:18789',
+      OUTBOX_WORKER_DISABLED: '1',
+    })).toBe(false);
   });
 });
 

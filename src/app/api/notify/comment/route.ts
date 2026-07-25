@@ -24,6 +24,7 @@ import { resolveWorkspaceIdForRequest } from '@/lib/workspace-auth';
 import { routeCommentNotifications } from '@/lib/notification-router';
 import { resolveTaskComponent, resolveTaskVersion } from '@/lib/notification-context';
 import { computeRecipientLastReplies } from '@/lib/notification-recency';
+import { shouldRunNotificationListenBridge } from '@/lib/notification-runtime';
 
 export async function POST(request: NextRequest) {
   const bridgeStart = Date.now();
@@ -31,6 +32,18 @@ export async function POST(request: NextRequest) {
   if (authCtx.error) return authCtx.error;
   const scopeFail = requireWriteScope(authCtx.context);
   if (scopeFail) return scopeFail;
+
+  // Defense in depth: server.mjs already avoids calling this endpoint from a
+  // store-only LISTEN consumer, but the endpoint itself must never acquire a
+  // durable delivery lease unless this process can reach an agent runtime.
+  // Otherwise a cloud replica can strand a pending claim and the real local
+  // bridge will suppress the human's @mention as duplicate-pg (#1809).
+  if (!shouldRunNotificationListenBridge(process.env)) {
+    return NextResponse.json(
+      { ok: true, deferred: true, reason: 'runtime-bridge-not-owner' },
+      { status: 202 },
+    );
+  }
 
   let body: any;
   try {
