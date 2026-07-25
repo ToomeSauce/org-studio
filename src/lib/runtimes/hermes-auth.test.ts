@@ -19,7 +19,7 @@ describe('HermesRuntime API authentication', () => {
   });
 
   it('authenticates discovery probes and model reads', async () => {
-    const fetchMock = vi.fn(async (input: string | URL) => {
+    const fetchMock = vi.fn(async (input: string | URL, _init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/health')) return new Response('{}', { status: 200 });
       if (url.endsWith('/v1/models')) {
@@ -43,7 +43,7 @@ describe('HermesRuntime API authentication', () => {
   });
 
   it('authenticates run creation', async () => {
-    const fetchMock = vi.fn(async (input: string | URL) => {
+    const fetchMock = vi.fn(async (input: string | URL, _init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/health')) return new Response('{}', { status: 200 });
       if (url.endsWith('/v1/runs')) {
@@ -67,7 +67,7 @@ describe('HermesRuntime API authentication', () => {
 
   it('does not report completion when run creation is rejected', async () => {
     const onComplete = vi.fn();
-    const fetchMock = vi.fn(async (input: string | URL) => {
+    const fetchMock = vi.fn(async (input: string | URL, _init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/health')) return new Response('{}', { status: 200 });
       if (url.endsWith('/v1/runs')) return new Response('unauthorized', { status: 401 });
