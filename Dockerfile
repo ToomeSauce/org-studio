@@ -30,6 +30,10 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV PORT=4501
+# Containers must listen outside loopback. Runtime startup requires
+# ORG_STUDIO_API_KEY unless the operator deliberately opts into
+# ALLOW_INSECURE_REMOTE=true on an isolated network.
+ENV ORG_STUDIO_HOST=0.0.0.0
 
 # Prod-only node_modules.
 COPY --from=prod-deps /app/node_modules ./node_modules

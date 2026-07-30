@@ -1,6 +1,6 @@
 # Contributing to Org Studio
 
-Thanks for your interest in contributing! Here's how to get started.
+Thanks for your interest in contributing. Org Studio is intentionally focused on persistent, named OpenClaw and Hermes teams in trusted self-hosted environments. Read [docs/vision.md](docs/vision.md) before proposing a new product surface.
 
 ## Development Setup
 
@@ -68,18 +68,21 @@ Tests use [Vitest](https://vitest.dev/). Test files live alongside source:
 
 ## What We'd Love Help With
 
-- **Runtime adapters** — integrations for CrewAI, LangGraph, AutoGen, etc.
+- **OpenClaw and Hermes compatibility** — discovery, dispatch, health, metadata, and onboarding
+- **Self-hosting durability** — installation, upgrades, backups, recovery, and Docker workflows
+- **Organizational learning** — memory, decision provenance, outcome loops, coaching, and culture
 - **UI improvements** — accessibility, mobile responsiveness, animations
 - **Tests** — especially integration tests for the scheduler flow
 - **Documentation** — guides, tutorials, architecture deep-dives
-- **Docker** — `docker-compose.yml` for one-command setup
 - **i18n** — internationalization support
+
+Direct coding engines, stateless worker orchestration, model-tier routing, worker provisioning, and runtime-independent messaging are being extracted to Materialyze. Do not add new dependencies on those transitional surfaces in Org Studio.
 
 ## Code Style
 
 - TypeScript everywhere
 - Tailwind v4 for styling — use CSS custom properties (`var(--bg-primary)`) not hardcoded colors
-- Dark theme first, light theme second
+- Preserve the shared theme system and verify both Solarized Light and dark modes
 - Components in `src/components/`, page-specific code in `src/app/`
 
 ## Reporting Issues

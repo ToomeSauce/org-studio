@@ -1,6 +1,6 @@
-# Org Studio: Org design for AI agents
+# Org Studio: an operating studio for named agent teams
 
-**Stop assigning tasks to your AI agents.** Give them a mission, domain boundaries, and a feedback loop — they'll figure out the rest.
+**Define the organization once. Give every teammate a durable identity, domain, culture, vision, and leash.**
 
 <p align="center">
   <img src="docs/images/demo.gif" alt="Org Studio — Home dashboard, team management, project roadmap" width="800" />
@@ -8,24 +8,24 @@
 
 ## What Is Org Studio?
 
-Org Studio is an opinionated management layer for teams of OpenClaw/Hermes agents. Instead of prompting agents session by session, you define team structure, culture, domain boundaries, and a roadmap — then let the system run. Agents work autonomously, ship versions, and improve over time through a persistent feedback loop.
+Org Studio is the open-source operating studio for persistent, named OpenClaw and Hermes agent teams. Instead of prompting agents session by session, you define team structure, culture, domain boundaries, vision, and an approval leash. Runtime agents carry that organizational context into their ongoing work.
 
-Works with [OpenClaw](https://github.com/openclaw/openclaw) and [Hermes Agent](https://hermes-agent.nousresearch.com) out of the box. Extensible to any agent runtime via the `AgentRuntime` interface.
+Org Studio is designed for trusted, self-hosted environments: personal agent teams, home labs, indie products, and research. [OpenClaw](https://github.com/openclaw/openclaw) and [Hermes Agent](https://hermes-agent.nousresearch.com) are first-class dependencies, not incidental adapters.
 
-**The shift:** Stop managing agents. Start designing your org.
+**The shift:** stop managing isolated sessions; start designing a durable agent organization.
 
 ## Features
 
 - **Team topology** — Teammates, roles, domain boundaries (Owns/Defers), domains
 - **Mission & Values** — Shared context auto-synced to every agent via ORG.md
-- **Task board** — Simple kanban: **backlog → in-progress → done** by default. Review is opt-in (for irreversible, cross-domain, or mission-level work). Planning + QA are optional lanes when needed.
+- **Task board** — Simple kanban: **backlog → in-progress → done** by default. Use `blocked` for external dependencies or irreversible/security-sensitive work awaiting human sign-off. Planning + QA are optional lanes when needed.
 - **Performance metrics** — Delivery stats (cycle time, first-pass quality, clean streaks) auto-computed
 - **Performance dashboard** — Full `/performance` page with team health, quality scorecards, cultural alignment, coaching insights, weekly digests, and CSV export
 - **Coaching insights** — Auto-generated coaching from metric patterns — agents see their performance trends and improvement suggestions every session
 - **Weekly team digest** — Auto-generated summary delivered to Telegram or viewed in-app
 - **Agent comparison** — Sortable table with SVG sparklines and CSV export
 - **Kudos & Flags** — Value-tagged feedback that shapes agent behavior via Operating Principles
-- **Vision cycles** — Agent proposes roadmap, tasks auto-create, work executes. Humans set direction; agents deliver.
+- **Vision and roadmap** — Agents may propose changes; humans retain mission-level direction and approval authority.
 - **Outcome-bound versions** — Optionally gate a version on a measurable goal. The version stays open until the metric is hit, even when every child ticket is done. Built-in caps (open experiments, daily spike-ticket limit) keep the loop sane; backward-compatible — versions without success criteria behave exactly as before.
 - **Continuous delivery by default** — Agents ship reversible work in their owned domain directly to done. Human-in-loop only for blockers, irreversible decisions, and cross-domain changes.
 - **Start/Stop** — One toggle per project controls run-gating. Agents only get dispatched for `started` projects.
@@ -57,7 +57,7 @@ npm run deploy -- --no-restart   # build only
 
 The service runs in production mode (`dev = false` in `server.mjs`), so a plain `systemctl restart` alone serves the previously compiled `.next/` bundle. `npm run deploy` exists specifically to make `git push && deploy` idempotent.
 
-Works without a database (file-backed). Optional PostgreSQL for production.
+File mode provides a zero-database local start. PostgreSQL is available for durable multi-user installations.
 
 ## Learn More
 
@@ -76,7 +76,7 @@ Works without a database (file-backed). Optional PostgreSQL for production.
 1. Define team structure: add teammates (human or agent), set roles and domain boundaries (Owns / Defers)
 2. Write a vision doc for each project (North Star + Roadmap) and set the **approval horizon** (how far ahead agents can ship without asking)
 3. Click **Start** on a project → agents pull from backlog and deliver autonomously
-4. Agents self-flag `needsReview` when work is irreversible, cross-domain, or mission-level — those land in the review lane
+4. For work that cannot be safely handled by revert + redeploy, agents move tasks to `blocked` with a typed reason for human sign-off
 5. Routine work flows straight to done — the commit is the record
 6. Click **Stop** anytime to pause a project; **Start** to resume
 
@@ -85,7 +85,7 @@ Works without a database (file-backed). Optional PostgreSQL for production.
 1. Read ORG.md at session start: mission, values, domains, team structure, performance feedback
 2. Read assigned task and related context
 3. Execute within Owns/Defers boundaries
-4. **Default:** move to done when shipped. Set `needsReview: true` only when the change is irreversible, cross-domain, mission-level, or security-sensitive.
+4. **Default:** move to `done` when shipped. Use `blocked` with `blockedReasonType` and `blockedReason` when the work is irreversible, security-sensitive, externally dependent, or needs human judgment.
 5. Next session: read updated ORG.md (new feedback if performance changed)
 
 The feedback loop is the core: agents improve over time because they literally read their kudos/flags at the start of every session.
@@ -102,7 +102,7 @@ The feedback loop is the core: agents improve over time because they literally r
 
 ### Multi-Runtime Support
 
-Org Studio connects to multiple agent runtimes simultaneously via a runtime abstraction layer. Each runtime implements `discover()`, `send()`, and `health()`.
+Org Studio connects to OpenClaw and Hermes simultaneously through an internal runtime interface. Each supported runtime owns discovery, dispatch, health, and metadata.
 
 **Built-in runtimes:**
 - **OpenClaw** — WebSocket RPC, event-driven scheduling, ORG.md auto-sync, vision cycles
@@ -110,7 +110,7 @@ Org Studio connects to multiple agent runtimes simultaneously via a runtime abst
 
 Set `GATEWAY_URL` for OpenClaw, `HERMES_URL` for Hermes in `.env.local`. See [Configuration](docs/configuration.md).
 
-**Custom runtimes:** Implement the `AgentRuntime` interface (see `src/lib/runtimes/types.ts`) and register in the registry.
+The internal `AgentRuntime` interface keeps the implementation clean; Org Studio does not market or test itself as a universal execution fabric.
 
 ### REST API
 
@@ -152,9 +152,8 @@ When the skill content changes (new endpoints, new actions, behavioural docs), c
 
 - **Frontend:** Next.js 16 + React 19 + TypeScript + Tailwind CSS v4
 - **Server:** Custom Node.js server with WebSocket
-- **Storage:** Local JSON (default) or PostgreSQL (production)
+- **Storage:** File mode for a zero-database local start; PostgreSQL for durable multi-user installations
 - **Real-time:** WebSocket push, zero client polling
-- **No database required.** Works standalone. Optional Postgres for scaling.
 
 ## Contributing
 

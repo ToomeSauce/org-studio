@@ -4,16 +4,17 @@
  * This file implements the connection between Org Studio and the agent runtime.
  * By default it connects to an OpenClaw Gateway via WebSocket.
  *
- * To integrate a different runtime (CrewAI, LangGraph, AutoGen, etc.):
- * 1. Replace the connect/rpc functions with your runtime's protocol
- * 2. Ensure RPC methods return compatible shapes:
+ * OpenClaw and Hermes are the supported runtimes. The internal adapter
+ * boundary keeps their protocols isolated from API handlers; it is not a
+ * compatibility promise for arbitrary agent frameworks.
+ *
+ * Compatible adapters return these shapes:
  *    - sessions.list → { sessions: [{ key, updatedAt, model, ... }] }
  *    - agents.list   → { agents: [{ id, identity: { name, emoji } }] }
  *    - cron.list     → { jobs: [{ id, enabled, schedule, ... }] }
  *    - status        → { heartbeat, sessions, ... }
- * 3. Or implement a REST adapter and skip WebSocket entirely
  *
- * See README.md for the generic REST API spec.
+ * See docs/architecture.md for the supported runtime architecture.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithContext, requireWriteScope } from '@/lib/auth';

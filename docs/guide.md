@@ -7,8 +7,8 @@ Org design for AI agents. Define your team's culture, mission, and structure —
 ## Getting Started
 
 ### Prerequisites
-- Node.js 18+
-- An agent runtime: [OpenClaw](https://github.com/openclaw/openclaw), [Hermes Agent](https://hermes-agent.nousresearch.com), or any runtime with REST API support
+- Node.js 20.9+ (Node.js 22 recommended)
+- A supported agent runtime: [OpenClaw](https://github.com/openclaw/openclaw) or [Hermes Agent](https://hermes-agent.nousresearch.com)
 
 ### Quick Start
 
@@ -100,7 +100,7 @@ Tasks flow through a simple 4-column kanban plus a **Blocked** status. The defau
 | **Done** | — | **Default destination for finished work.** |
 | **Blocked** (status) | — | Cannot proceed without external input. Two cases: waiting on a teammate / dependency, OR awaiting human sign-off on irreversible/security-sensitive work. |
 
-> **Note (#1290, 2026-05-08):** The Review column was removed. It kept getting misused as a generic sanity-check shelf. Default destination is now Done; for the rare irreversible/security-sensitive case, use Blocked + a `blockedReason` like `"awaiting human sign-off — <why>"`.
+> **Note (#1290, 2026-05-08):** The Review column was removed. It kept getting misused as a generic sanity-check shelf. Default destination is now Done; for rare irreversible/security-sensitive work, use Blocked + `blockedReasonType: "irreversible-decision"` and include a short `blockedReason` with what is staged for sign-off.
 
 ### QA is a component, not a column
 
@@ -110,7 +110,7 @@ QA work runs through the **same columns** as every other ticket. A project may h
 - **Default path is backlog → in-progress → done.** Ship reversible work straight to done.
 - **Planning is agent-encouraged.** Agents pull from planning, flesh out acceptance criteria, then move to backlog.
 - **Backlog is the intake queue.** Agents pick from the top first.
-- **Use Blocked for two cases.** (a) Waiting on another task/teammate (use `blockedBy: [<ticket-numbers>]` for auto-unblock). (b) Awaiting human sign-off on irreversible work — DB migrations, destructive deletes, money/billing, auth/secrets, public launches (set `blockedReason` and post a comment summarizing what's been staged).
+- **Use Blocked for two cases.** (a) Waiting on another task/teammate (use `blockedBy: [<ticket-numbers>]` and `blockedReasonType: "external-dependency"` for auto-unblock semantics). (b) Awaiting human sign-off on irreversible work — DB migrations, destructive deletes, money, auth/secrets, or public launches (set `blockedReasonType: "irreversible-decision"` and post a comment summarizing what's been staged).
 - **Cross-domain coordination is via comment pings**, not column hops. Direction changes happen in the vision doc / roadmap.
 - Task order determines priority within a column.
 
@@ -128,7 +128,7 @@ Every task gets tested before leaving in-progress. The agent self-tests, documen
 - Write a brief test plan (in `testPlan` or a comment).
 - Execute it yourself: curl endpoints, check builds, verify output, run the relevant UI path.
 - Document results in `reviewNotes` or a final comment.
-- Move to **done** (or review if `needsReview` applies).
+- Move to **done**. For irreversible/security-sensitive work that cannot be safely reverted, move to **blocked** with `blockedReasonType: "irreversible-decision"` until human sign-off lands.
 
 ### QA component projects
 
@@ -184,7 +184,7 @@ The scheduler prompt is built from 8 configurable sections:
 |---------|---------|
 | task-management | How to fetch and prioritize tasks |
 | column-workflow | What each column means |
-| review-guidance | When to use review vs done, testing rules |
+| review-guidance | Done-vs-blocked gate semantics and testing rules |
 | work-loop | The main execution loop |
 | api-reference | Store API endpoints |
 | rules | Behavioral constraints |
@@ -568,17 +568,13 @@ Set these environment variables in your OpenClaw configuration:
 - `GATEWAY_URL` — your gateway endpoint
 - `GATEWAY_TOKEN` — authentication token
 
-The scheduler uses the gateway RPC to create and manage cron jobs.
+The scheduler uses the Gateway for discovery, dispatch, health, metadata, and context delivery.
 
-### Any Framework
+### Hermes Agent
 
-Use the REST API directly:
-1. `GET /api/store` to read tasks and settings
-2. `POST /api/store` to create/update tasks
-3. `POST /api/activity-status` to report progress
-4. `POST /api/scheduler` to manage work loops
+Set `HERMES_URL` to the Hermes API server. Org Studio can discover local Hermes configuration from `~/.hermes/config.yaml` when it is present.
 
-No SDK required — any HTTP client works.
+OpenClaw and Hermes are the supported runtime compatibility surface. The internal runtime interface is an implementation boundary, not a promise that every agent framework is interchangeable.
 
 ---
 
@@ -590,7 +586,7 @@ No SDK required — any HTTP client works.
 |----------|-------------|
 | `PORT` | Server port (default: 4501) |
 | `WORKSPACE_BASE` | Base directory for agent workspaces |
-| `ORG_STUDIO_API_KEY` | Optional API authentication key |
+| `ORG_STUDIO_API_KEY` | API authentication key; required for any non-loopback deployment |
 
 ### Store-Based Config
 
@@ -607,31 +603,6 @@ If `ORG_STUDIO_API_KEY` is set, all write (POST/PUT) requests must include eithe
 - Header: `Authorization: Bearer <key>`
 - Header: `X-API-Key: <key>`
 
-When not set, the API is open (suitable for local development).
+When not set, the API is open and the server must remain loopback-only. Set an API key before binding to another interface.
 
 ---
-
-## Audit a worker pipeline receipt
-
-Fetch one workspace-scoped ticket receipt and use `jq` to inspect its planner provenance, model/token/cost attribution, and extracted worker-run/PR links without manual joins:
-
-```bash
-curl -sS \
-  -H "Authorization: Bearer $ORG_STUDIO_API_KEY" \
-  "http://localhost:4501/api/observability/worker-receipts/1707" |
-jq '{
-  provenance: {
-    ticketNumber, taskId, plannerSourceTaskId, parentId, roadmapItemId,
-    projectId, version, statusPath, modelTierSnapshot
-  },
-  attribution: {
-    models: .modelHistory,
-    tokensIn: .attribution.tokensIn,
-    tokensOut: .attribution.tokensOut,
-    cacheReadTokens: .attribution.cacheReadTokens,
-    cacheWriteTokens: .attribution.cacheWriteTokens,
-    costUsd: .attribution.costUsd
-  },
-  evidence: .evidenceLinks
-}'
-```

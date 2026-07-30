@@ -184,18 +184,18 @@ The Settings page (`src/app/(dashboard)/settings/page.tsx`) includes a **Workspa
 
 | Limitation | Target Version |
 |---|---|
-| No workspace creation flow (new workspaces) | v1.0+ |
-| No admin roles/permissions | v1.0+ |
+| No workspace creation flow (new workspaces) | Future 0.x |
+| No admin roles/permissions | Future 0.x |
 | No shared cross-workspace resources | Parking lot |
-| Workspace data stored in settings (not own table for queries) | v1.0+ migration |
-| No workspace invitations UI | v1.0+ |
+| Workspace data stored in settings (not own table for queries) | Future 0.x |
+| No workspace invitations UI | Future 0.x |
 | Comments table not workspace-scoped yet | v0.17+ |
 
 ## Migration Path
 
 1. **v0.16 (current)**: Workspace_id columns added, API filtering enforced, UI switcher
 2. **v0.17**: Comments table workspace_id, roadmap versions workspace_id
-3. **v1.0**: Workspace creation flow, invitations, admin roles, billing per workspace
+3. **Future OSS**: Optional workspace creation and invitation flow for trusted multi-user self-hosting
 
 ## workspace_id backfill + NOT NULL (#1622, F-13) — Runbook
 

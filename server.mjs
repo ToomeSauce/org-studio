@@ -35,7 +35,23 @@ import { shouldRunNotificationListenBridge } from './lib/runtime-ownership.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const port = parseInt(process.env.PORT || '4501');
+const bindHost = process.env.ORG_STUDIO_HOST || '127.0.0.1';
 const dev = false;
+
+const isLoopbackHost = (host) =>
+  host === '127.0.0.1' || host === 'localhost' || host === '::1';
+
+if (
+  !process.env.ORG_STUDIO_API_KEY &&
+  !isLoopbackHost(bindHost) &&
+  process.env.ALLOW_INSECURE_REMOTE !== 'true'
+) {
+  throw new Error(
+    `Refusing unauthenticated non-loopback bind on ${bindHost}. ` +
+      'Set ORG_STUDIO_API_KEY, bind ORG_STUDIO_HOST to loopback, or explicitly set ' +
+      'ALLOW_INSECURE_REMOTE=true for a trusted isolated network.',
+  );
+}
 
 // --- Telegram comms guard (v0.15) ---
 const ENABLE_TELEGRAM_COMMS = (() => {
@@ -2627,9 +2643,10 @@ async function checkListenStale() {
 }
 
 // --- Start ---
-server.listen(port, async () => {
-  console.log(`▲ Org Studio ready on http://localhost:${port}`);
-  console.log(`  WebSocket: ws://localhost:${port}/ws`);
+server.listen(port, bindHost, async () => {
+  const displayHost = isLoopbackHost(bindHost) ? 'localhost' : bindHost;
+  console.log(`▲ Org Studio ready on http://${displayHost}:${port}`);
+  console.log(`  WebSocket: ws://${displayHost}:${port}/ws`);
 
   // #1387 A.3 decision #4: warn loudly when the transition flag is set in
   // cloud mode — it disables auth on /api/store GET, which is fine for

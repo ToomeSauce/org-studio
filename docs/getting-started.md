@@ -1,6 +1,6 @@
 # Getting Started with Org Studio
 
-Welcome! Org Studio is an org design tool for teams that use agents. This guide will walk you through setup in 5 minutes.
+Welcome! Org Studio is the self-hosted operating studio for named OpenClaw and Hermes agent teams. This guide walks from a clean checkout to the first owned domain.
 
 ## Install
 
@@ -50,7 +50,7 @@ HERMES_URL=http://127.0.0.1:8642
 
 Both runtimes can run simultaneously — agents from each appear on the same Team page and can @mention each other in task comments.
 
-Without a runtime, Org Studio still works — you manually move tasks through the board, and it's a great org design tool on its own.
+Without a configured runtime, you can explore the board and define the organization manually. Persistent agent execution requires OpenClaw or Hermes.
 
 ## Step 3: Create Your First Project
 
@@ -135,9 +135,9 @@ Every task gets tested before leaving in-progress.
 - For projects with a QA component, the QA owner's tickets live in the normal backlog → in-progress → done flow. If a dev wants the QA owner to cross-check something before shipping, they ping the QA owner in a comment.
 - Basic failures (500s, build breaks) should be caught before marking done — if they slip through, file a bug ticket or comment on the original rather than reopening.
 
-## Step 7: Invite Agents (Advanced)
+## Step 7: Connect Runtime Agents
 
-If you're using an agent runtime (OpenClaw, CrewAI, LangGraph, etc.), agents can:
+With OpenClaw or Hermes connected, named agents can:
 - Automatically pick up tasks from your backlog
 - Move tasks as they complete
 - Add comments and collaborate with humans
@@ -145,7 +145,7 @@ If you're using an agent runtime (OpenClaw, CrewAI, LangGraph, etc.), agents can
 
 Set `GATEWAY_URL` in `.env.local` to connect.
 
-Without a runtime, Org Studio is still fully functional — you'll just manually move tasks.
+Without a runtime, the organizational surfaces remain available, but automatic discovery, dispatch, health, and context delivery do not run.
 
 ## The Home Dashboard
 
@@ -158,13 +158,13 @@ Click **Home** to see:
 
 ## Remote Access (PostgreSQL)
 
-By default, Org Studio stores data in `data/store.json` (local file). To access from multiple devices:
+For a zero-database local installation, Org Studio stores data in `data/store.json`. For durable multi-user access, configure PostgreSQL:
 
 ```env
 DATABASE_URL=postgresql://user:pass@host:5432/org_studio_db
 ```
 
-Org Studio will auto-create the schema. Now your org is accessible from anywhere.
+Org Studio will initialize the schema. Secure the host, configure `ORG_STUDIO_API_KEY`, and expose the service only through a trusted network or authenticated reverse proxy.
 
 ## Connecting Agent Runtimes
 
@@ -213,9 +213,7 @@ Org Studio supports multiple agent runtimes simultaneously.
 
 Set both `GATEWAY_URL` and `HERMES_URL`. Agents from both runtimes appear on the same Team page, can be assigned to the same tasks, and can @mention each other in task comments.
 
-### Custom Runtimes
-
-Implement the `AgentRuntime` interface (`src/lib/runtimes/types.ts`) and register in the registry. See [Architecture](../docs/architecture.md) for details.
+The internal `AgentRuntime` interface keeps OpenClaw and Hermes integration code isolated. Other frameworks are not part of the supported compatibility surface.
 
 ## What Happens Next
 
@@ -236,19 +234,19 @@ The key shift: you're not assigning every micro-task. You're setting direction a
 ## Troubleshooting
 
 **Q: Where's my data stored?**  
-By default: `data/store.json`. Optional: set `DATABASE_URL` for PostgreSQL.
+File mode stores local data in `data/store.json`. Set `DATABASE_URL` for a durable multi-user PostgreSQL installation.
 
 **Q: Can I use this without agents?**  
-Yes! Org Studio is a standalone org design tool. Agents are optional.
+You can explore and edit the organizational board without a runtime. Persistent agent execution requires OpenClaw or Hermes.
 
 **Q: How do I connect an agent?**  
-Set `GATEWAY_URL` and `GATEWAY_TOKEN` in `.env.local`. Any framework with HTTP/WebSocket support works.
+Set `GATEWAY_URL` and `GATEWAY_TOKEN` for OpenClaw, or `HERMES_URL` for Hermes.
 
 **Q: Can I export my data?**  
 Yes. `GET /api/store` returns the full JSON. You can also download `data/store.json` directly.
 
 **Q: Does this require a database?**  
-No. File-backed by default. PostgreSQL is optional for multi-device access.
+No. File mode is the zero-database local start. PostgreSQL is the supported durable multi-user option.
 
 ## Questions?
 

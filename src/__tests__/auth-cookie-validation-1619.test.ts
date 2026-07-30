@@ -16,6 +16,7 @@
  */
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
+import { createHash } from 'crypto';
 
 // In-memory session rows for the fake pg client.
 const db = vi.hoisted(() => ({
@@ -93,17 +94,41 @@ describe('timingSafeEqualStr (#1619 F-7)', () => {
   });
 });
 
-describe('verifyPassword constant-time (#1619 F-7)', () => {
+describe('password hashing and verification', () => {
   test('accepts the correct password', async () => {
-    const { hashPassword, verifyPassword } = await import('@/lib/auth');
+    const { hashPassword, passwordNeedsRehash, verifyPassword } = await import('@/lib/auth');
     const h = hashPassword('correct horse battery staple');
+    expect(h).toMatch(/^scrypt\$16384\$8\$1\$[a-f0-9]{32}\$[a-f0-9]{64}$/);
+    expect(passwordNeedsRehash(h)).toBe(false);
     expect(verifyPassword('correct horse battery staple', h)).toBe(true);
   });
+
+  test('uses a unique salt for each hash', async () => {
+    const { hashPassword } = await import('@/lib/auth');
+    const first = hashPassword('same password');
+    const second = hashPassword('same password');
+    expect(first).not.toBe(second);
+  });
+
   test('rejects the wrong password', async () => {
     const { hashPassword, verifyPassword } = await import('@/lib/auth');
     const h = hashPassword('correct horse battery staple');
     expect(verifyPassword('Tr0ub4dor&3', h)).toBe(false);
   });
+
+  test('accepts legacy SHA-256 and marks it for transparent upgrade', async () => {
+    const { passwordNeedsRehash, verifyPassword } = await import('@/lib/auth');
+    const legacy = createHash('sha256').update('legacy password').digest('hex');
+    expect(verifyPassword('legacy password', legacy)).toBe(true);
+    expect(passwordNeedsRehash(legacy)).toBe(true);
+  });
+
+  test('rejects malformed or unreasonably expensive scrypt records', async () => {
+    const { verifyPassword } = await import('@/lib/auth');
+    expect(verifyPassword('whatever', 'scrypt$1073741824$8$1$00$00')).toBe(false);
+    expect(verifyPassword('whatever', 'scrypt$16384$8$1$odd$00')).toBe(false);
+  });
+
   test('rejects against an empty/undefined stored hash without throwing', async () => {
     const { verifyPassword } = await import('@/lib/auth');
     expect(verifyPassword('whatever', '')).toBe(false);

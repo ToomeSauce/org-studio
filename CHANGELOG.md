@@ -2,6 +2,47 @@
 
 All notable changes to Org Studio. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is SemVer (pre-1.0 — minor bumps may include breaking changes).
 
+## [0.4.1] — 2026-07-30
+
+Maintenance release aligning the repository with the 2026-07-16 product
+direction reset and hardening the long-lived 0.x release line.
+
+### Changed
+
+- Reframed Org Studio as the MIT, self-hosted operating studio for named
+  OpenClaw and Hermes teams in trusted environments.
+- Synchronized `docs/vision.md` with the live vision and added a daily/manual
+  drift check.
+- Added a transfer-first Materialyze extraction inventory and equivalence
+  gates. Transitional worker, planner, model-routing, provisioning, receipt,
+  and runtime-independent messaging code remains in place until a destination
+  repository receives it and passes those gates.
+- Clarified file mode as the zero-database local start and PostgreSQL as the
+  durable multi-user option.
+- Kept repository releases on SemVer 0.x; roadmap and approval-horizon
+  versions remain separate.
+
+### Security
+
+- The custom server now binds to loopback by default and refuses an
+  unauthenticated non-loopback bind unless the operator explicitly enables the
+  isolated-network escape hatch.
+- PostgreSQL mode now defaults workspace enforcement to strict while
+  single-workspace file mode remains permissive by default.
+- New passwords use salted scrypt records. Successful login transparently
+  upgrades legacy unsalted SHA-256 records.
+- Upgraded Next.js to 16.2.12 and `ws` to 8.21.1; constrained vulnerable
+  transitive dependencies to patched releases. The full npm dependency audit
+  is clean.
+
+### CI and fixes
+
+- Added gating macOS tests, production-dependency audit, and Docker build.
+- Made skill synchronization compatible with the Bash 3.2 shipped by macOS.
+- Corrected stale Review-lane guidance and two source comments contributed by
+  open maintenance pull requests.
+- Declared the actual Node.js floor (`>=20.9.0`; Node.js 22 recommended).
+
 ## [0.4.0] — 2026-05-23
 
 Three-week stabilization pass between 0.3.3 and 0.4.0 focused on **scheduler reliability**, **dispatch read-path performance**, **comment-storage hardening**, and **observability**. 30 commits across 5 themed clusters. No public-API breakages.

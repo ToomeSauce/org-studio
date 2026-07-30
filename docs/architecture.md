@@ -53,6 +53,10 @@ interface AgentRuntime {
 - **OpenClaw** (`openclaw.ts`) — WebSocket RPC to Gateway on port 18789. Implements discover via `agents.list`, send via `chat.send`.
 - **Hermes** (`hermes.ts`) — HTTP to OpenAI-compatible API server on port 8642. Implements discover via `/health` + `/v1/models`, send via `/v1/chat/completions`.
 
+OpenClaw and Hermes are the supported product integrations. The interface is
+an internal implementation boundary, not a claim that arbitrary agent
+frameworks are supported.
+
 **Registry** (`registry.ts`) — Singleton that holds all runtimes. `discoverAll()` aggregates agents from every runtime. `send()` routes to the correct runtime based on agent ID.
 
 **Server-side mirror** (`lib/runtimes.mjs`) — Plain ESM version for `server.mjs` (which can’t import TypeScript directly).

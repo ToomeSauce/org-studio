@@ -1,97 +1,201 @@
 <!-- Canonical human-readable copy. Source of truth at runtime is the store
      (org_studio_vision_docs / GET /api/vision/proj-org-studio/doc). Keep in sync
-     when the live doc changes. Approved & landed 2026-06-02. -->
+     when the live doc changes. Direction reset approved by Basil 2026-07-16. -->
 
 # Org Studio
 
 ## Meta
-- **Version:** 2026.05 *(roadmap calver; see two-scheme rule under Conventions — #1560)*
-- **Last Updated:** 2026-06-02
+- **Version:** 2026.11.15 *(roadmap calver; repo releases use semver)*
+- **Last Updated:** 2026-07-16
 - **Vision Owner:** Basil
 - **Dev Owner:** Mikey
 - **QA Owner:** Billy
-- **Lifecycle:** building
-- **Repo:** ToomeSauce/org-studio (open source)
-- **Dependencies:** none (standalone — OpenClaw adapter optional)
+- **Lifecycle:** building — OSS community product
+- **Repo:** ToomeSauce/org-studio (MIT open source)
+- **First-class dependencies:** OpenClaw or Hermes Agent
+- **Deployment:** self-hosted in a trusted environment
 
 ## North Star
-**Org Studio is where hybrid human + AI teams run their work together.**
 
-AI agents are becoming real teammates — not tools, not automations — and real teammates need real org scaffolding: clear ownership, a vision to work toward, guardrails to work within, culture, and feedback loops. The answer to AI-augmented work isn't *more* tools with AI sprinkled on top — it's **fewer tools that treat agents as first-class participants from the ground up.**
+**Org Studio is the open-source operating studio for named OpenClaw and Hermes agent teams.**
 
-The atomic unit of Org Studio is the **owned domain**: a teammate (human or agent) accountable for an area, working toward a vision within guardrails, measured by feedback loops. Vision, work, culture, and measurement all orbit ownership. Conversation is a *feature* of a well-run org — not its foundation.
+It is for indie developers, home labs, researchers, and small teams experimenting with persistent AI teammates. A human establishes the mission, culture, vision, ownership boundaries, and approval leash; named agents work in durable domains and improve through shared organizational context and feedback.
 
-Open-source core. Runtime-agnostic. Solo developer to enterprise. BYOA (bring your own agent) always free.
+The atomic unit is the **owned domain**: a named human or agent accountable for an area over time. Vision, roadmap, work, culture, memory, and measurement orbit that ownership.
+
+Org Studio deliberately optimizes for **expressive, persistent agent teams in trusted self-hosted environments**. It does not claim to be the security or cost model for enterprise software delivery. That product is Materialyze.
+
+## Audience and Promise
+
+Org Studio serves people who already use—or explicitly want to use—OpenClaw or Hermes as persistent general-purpose agents.
+
+Its promise is:
+
+> Define the organization once. Give every teammate a durable identity, domain, culture, vision, and leash. Let the runtime agents carry that context into their ongoing work.
+
+Good fits:
+- Home labs and personal AI teams
+- Indie products and side projects
+- Prototypes and experiments
+- Research into agent identity, culture, coaching, and autonomous ownership
+- Small trusted teams comfortable operating general-purpose agent runtimes
+
+Not the target:
+- Enterprise software-delivery environments that prohibit generalized assistant runtimes
+- Zero-trust, least-privilege coding execution
+- Faceless stateless worker fleets
+- Model-by-model cost routing for production engineering
+- Hosted commercial SaaS, billing, SSO/SCIM, or enterprise procurement
 
 ## Three Pillars
-1. **Ownership as the primitive.** Every project area has an accountable owner with a domain contract (ORG.md), a roadmap, and guardrails. The product makes ownership, autonomy, and accountability *legible* — who owns what, what they're working toward, and how it's going.
-2. **Autonomy within guardrails.** Today's agents need handholding and spoon-feeding. Org Studio's bet: define the vision, roadmap, culture, and team — then let agents work autonomously inside an explicit leash. The leash is `autonomy.approvedThrough` (agents execute any task ≤ horizon, never above; humans move the horizon). The ownership tenet pushes agents to continuously analyze gaps and opportunities and **autonomously evolve their owned domain** — gated, when a version declares a measurable goal, on the metric being met (outcome-bound versions), not just child-ticket status.
-3. **Turnkey teams.** A library of teammate archetypes — each with default skills and a default runtime (OpenClaw or Hermes) — lets anyone staff a domain in seconds instead of configuring from scratch. (e.g., Sam the lawyer · Kate the GTM specialist · Billy the fullstack eng.) Persona archetypes are also the delivery vehicle for vertical org templates (SMB / startup / enterprise).
 
-## Current Status (audited 2026-05-29 against HEAD 1059d40)
+### 1. Named ownership
+Every domain has a durable owner—human or agent—with a clear contract: mission, owns, defers, roadmap, and escalation boundaries. The product makes responsibility legible without turning one agent into another agent's manager.
 
-### Shipped & live
-- **Autonomy horizon (`approvedThrough`)** — agents execute ≤ horizon, hard-stop above; auto-advance within. Wired across scheduler, vision, roadmap, store APIs.
-- **Outcome-bound versions (#1263)** — `successCriteria` / `metricCurrent` / `metricTarget` / `metricComparator` / `loopPaused` on versions; completion gates on the metric, not just child tickets. **Shipped & tested** (`version-metric.test.ts`).
-- **Multi-tenant schema** — `org_studio_workspaces` + `org_studio_workspace_memberships` tables, `workspace-auth.ts` middleware, `/api/workspaces`, isolation tests. **Shipped.**
-- **Per-agent API tokens (#1383)** — `api-tokens.ts`, `/api/admin/tokens`, tests.
-- **Semver + approval-horizon convention** — decision doc present; *but repo does not actually follow one scheme — see Known Issues / #1560.*
-- **Telegram demoted to health-alerts bridge** — comms relay OFF by default (`ENABLE_TELEGRAM_COMMS`).
-- **Offline draft queue** — `useOfflineQueue`, drafts persist + flush on reconnect.
-- **Activity feed + Performance dashboard** — real-time feed on home; `/performance` per-agent metrics.
-- **Classic dashboard IA** — sidebar route group: projects, tasks, agents, cron, calendar, memory, vision, team, performance, health, activity, settings.
+### 2. Runtime-native organizational context
+Org Studio turns org design into context OpenClaw and Hermes agents can actually use: ORG.md, vision docs, roadmap state, task comments, shared memory, kudos, flags, and operating principles. Persistent runtime memory and persona are features here, not liabilities to disguise.
 
-### Reverted (do not claim as shipped)
-- **Thread-as-universal-primitive + mobile-first 3-tab IA (the v0.14 pivot)** — built, then **fully reverted** (commit `3c86dac "remove chat/DM feature"`). `ChatThread`, `DmSidebar`, `/dms/*`, `tabs/` routes, and the `proto-mobile` prototype are all gone. It crippled the structured affordances (roadmap, board, vision doc) by flattening everything into chat — fighting its own North Star. **Demoted permanently from a pillar.** May be revisited ONLY as an opt-in comms feature *within* a domain, siloed behind a `new-experience` flag, never as the product's foundation.
+### 3. Autonomy with a visible leash
+Humans set the vision, budget, boundaries, approval horizon, outcome metrics, and kill switches. Runtime agents execute inside that leash. Reversible decisions are autonomous by default; irreversible, external, security-sensitive, and explicitly reserved decisions return to the human.
 
-### Vaporware in the old doc (claimed, never built)
-- **Web push notifications** — no service worker, no `pushManager`, zero push code. A `PUSH_NOTIFICATIONS` flag exists with no consumer. Either schedule for real or cut the claim. *(This revision cuts it from "shipped.")*
+## Product Doctrine
 
-### Dead feature flags (toggles with no consumer) — RESOLVED 2026-06-02
-- `MOBILE_FIRST_UX` (IA deleted), `PUSH_NOTIFICATIONS` (no push code), `TELEGRAM_MIGRATION` (script never authored) all rendered in Settings but did nothing. **Removed** in the Cloud Prep dead-flag cleanup (commit cdc7c26) — the generic flag infra was kept for future experiments. The Telegram migration claim behind that flag was formally dropped (see Cloud Prep below).
+- **Agents are teammates here.** They may have names, roles, faces, memory, and durable domains. That is the product choice.
+- **OpenClaw and Hermes are first-class, not incidental adapters.** Org Studio may preserve an internal runtime interface for clean implementation, but it does not market itself as a universal execution fabric.
+- **Trusted-environment assumption.** General-purpose runtimes can access broad capabilities. Operators are responsible for securing the host and runtime configuration.
+- **The board is organizational state.** It coordinates ownership and handoffs; it is not a generic background-job queue.
+- **Human vision ownership remains explicit.** Agents may propose changes; humans own mission-level direction and approval horizons.
+- **Local-first and self-hosted.** File mode remains useful for a zero-database start; Postgres remains available for durable multi-user installations.
+- **MIT and community-oriented.** Org Studio remains open source. There is no hosted-cloud or billing commitment in its roadmap.
 
-## Conventions
-- **Ownership is the primitive.** Tasks, roadmaps, vision sections, and metrics all hang off an accountable owner + domain. Any feature that doesn't sharpen ownership/autonomy/accountability is suspect.
-- **One leash.** `autonomy.approvedThrough` per project is the single autonomy control. Agents execute ≤ horizon; humans move it. No parallel auto-approve flows.
-- **One field per concept.** If the product grows a second flag/column describing the same thing as an existing one, simplify before shipping.
-- **No dead toggles.** Don't ship a feature flag without a working consumer behind it. (Violated today — see Dead feature flags.)
-- **Versioning — two deliberate schemes, never crossed (#1560):**
-  - **Repo / skill releases → semver** (`package.json`, git release tags). Answers "is this a breaking change to the published artifact?"
-  - **Product roadmap + autonomy horizon → calver** (`YYYY.MM`, e.g. `2026.05`). The store and `autonomy.approvedThrough` use this. Answers "how far along is the product, and how far is the agent leash extended?"
-  - These answer different questions; conflating them caused the version mess. Repo semver and roadmap calver are independent and that is correct.
+## Current Product
+
+### Keep and deepen
+- OpenClaw and Hermes discovery, health, dispatch, and metadata integration
+- Named teammate roster, roles, domains, Owns/Defers contracts, and ORG.md generation
+- Mission, values, culture, kudos, flags, coaching, and performance feedback
+- Project vision docs and human-owned roadmap approval
+- Context board, comments, dependencies, handoffs, and status history
+- Approval horizon, project start/stop, budget, boundaries, and loop kill-switches
+- Outcome-bound versions and the experiment loop
+- Shared org memory and decision provenance
+- Runtime cost observability, health, schedule diagnostics, and activity history
+- Local self-hosting, backups, upgrades, and runtime onboarding
+
+### Extract to Materialyze, then remove from Org Studio
+The following capabilities were built in Org Studio while the runtime-free product direction was still being explored. They are useful work, but they no longer belong in this product's architecture:
+
+- Execution Worker runtime and worker configuration
+- Codex and OpenAI-compatible direct coding engines
+- Ephemeral runner provisioning and GitHub Actions worker workflow
+- HostProfile enforcement for faceless coding jobs
+- RepoContextPack generation for stateless workers
+- Frontier planner jobs and planner materialization
+- `modelTier` routing to trivial/standard/complex worker pools
+- Worker scorecards and pipeline receipts
+- Runtime-independent Telegram/Slack command adapters created for runtime-less deployments
+
+**Removal rule:** do not delete these capabilities until the Materialyze repository has received the relevant code, retained required MIT notices, and passed equivalence checks. After extraction, remove their routes, UI, settings, schemas that are not shared with the runtime-agent product, tests, workflows, and documentation from Org Studio.
+
+### Keep even if Materialyze develops a counterpart
+Some concepts serve both products but have different implementations and trust models. Org Studio keeps its own versions of:
+
+- Vision and roadmap
+- Human approval horizons
+- Budget and boundary fields
+- Task dependencies and comments
+- Org memory
+- Cost and delivery metrics
+
+These are product concepts, not a reason for the two applications to share a deployment or security boundary.
+
+## Relationship to Materialyze
+
+Materialyze is a separate commercial product for serious software creation and ongoing codebase ownership. It uses persistent project memory with faceless, ephemeral, stateless workers; direct model connections; cost-aware routing; isolated execution; least-privilege credentials; and complete audit receipts.
+
+There is no maturity ladder where a Materialyze project "graduates" into Org Studio. The two products make different trust choices:
+
+- **Org Studio:** persistent named agents in a trusted self-hosted environment.
+- **Materialyze:** persistent project state with disposable workers in a governed execution environment.
+
+Org Studio may incubate ideas. Materialyze may selectively productize proven ideas under stricter contracts. A future import path may move an experimental Org Studio project into Materialyze, but the applications remain operationally and architecturally separate.
 
 ## Forward Arc
-*Milestones are named; calver targets are the roadmap anchor (not `v0.x` labels — that numbering is retired per #1560). "Cloud Launch" remains the qualitative v1.0-equivalent gate: bet-your-business ready.*
 
-- **Cloud Prep (current, ~2026.05–06).** Multi-tenant ✅, per-workspace auth ✅, per-agent tokens ✅. Dead-flag cleanup + version-scheme reconciliation (#1560) closed out here. **Telegram migration script formally dropped (2026-06-02):** no script was ever authored and there is nothing to migrate — agents use Org Studio + Telegram-as-notifications directly (the old comms relay was already demoted to an optional health-alerts bridge, #734). The claim is retired rather than built. **Onboarding flow polish + pre-launch security audit moved OUT of Cloud Prep (2026-06-02, Basil):** they're launch-gating, not prep — relocated to the front of Cloud Launch + Billing. Cloud Prep is effectively complete.
-- **Autonomous Domain Evolution (Pillar 2 made real).** Promote outcome-bound versions from "shipped primitive" to a *product story*: manual→assisted metric capture, the experiment-loop UX, the "all tickets done but metric unmet → propose next experiment" nudge surfaced in the UI, loop safety caps visible. This is the moat — the thing competitors don't have.
-- **Teammate Library (Pillar 3 made real).** Persona archetypes catalog with default skills + runtime. One-click staff-a-domain. Showcases runtime-agnosticism as a visible feature. Foundation for vertical templates.
-- **Cloud Launch + Billing (the commercial-readiness gate).** *Opens with the two launch-gating items relocated from Cloud Prep (2026-06-02): **onboarding flow polish** and the **pre-launch security audit** (auth surfaces, per-agent tokens, CORS, workspace isolation, public-endpoint exposure) — both are entry gates to this milestone, done before public open.* Multi-tenant cloud opens publicly. Free tier (BYOA, 1 workspace). Paid tiers delivered as **vertical org templates** (SMB: accounting/legal/marketing/support · startup: MVP/design/GTM/CS · enterprise: TBD) — curated persona + roadmap bundles on top of the free core, not just seat counts. Legal + ops (LLC, ToS, privacy, GDPR, SLA).
+### 1. Materialyze separation
+- Establish the separate Materialyze repository and licensing boundary.
+- Transfer worker, planner, model-routing, provisioning, receipt, and runtime-independent messaging work.
+- Verify capability equivalence in Materialyze.
+- Remove transferred surfaces from Org Studio without disturbing named-runtime workflows.
+- Publish a clear migration note for contributors and existing experimental users.
 
-## Commercialization (reframed)
-- **OSS core stays free forever** — MIT, BYOA, runtime-agnostic. This is the top of the funnel, not a loss leader to be paywalled later.
-- **Activation = Teammate Library.** A new workspace is useful in 60 seconds because you staff it from persona archetypes, not a blank board.
-- **Monetization = vertical org templates, not seats.** Paid tiers are curated bundles of personas + roadmap scaffolding per segment (SMB / startup / enterprise), sitting on the free BYOA core.
-- **Retention = autonomous evolution.** Owned domains that self-improve within guardrails are sticky in a way that a task board isn't.
+### 2. Runtime foundation cleanup
+- Make OpenClaw and Hermes onboarding direct and honest.
+- Remove generic claims that imply every agent framework is equally supported.
+- Harden runtime discovery, dispatch reliability, health reporting, and metadata sync.
+- Make trusted-host assumptions and security responsibilities explicit.
 
-## Designed but Unscheduled
-*(Outcome-bound versions moved OUT of this section — it shipped. See Current Status.)*
-- Thread-as-comms-within-a-domain (opt-in, flagged) — only if a clear need surfaces.
-- Native mobile apps (post-v1.0 parking lot).
-- Plugin system, calendar integration, AI task decomposition, agent self-awareness API — post-v1.0 parking lot.
+### 3. Turnkey personal agent teams
+- Teammate archetypes for OpenClaw/Hermes with transparent skills, memory, and permissions.
+- Starter org templates for personal projects, home labs, indie products, and research teams.
+- Fast local setup from runtime detection to first owned domain.
+
+### 4. Organizational learning
+- Deepen shared org memory, decision history, outcome loops, coaching, and cultural feedback.
+- Help persistent teammates inherit domain context and learn from prior attempts without flattening the org into chat.
+
+### 5. OSS durability
+- Reliable local install and upgrade path
+- Backups and recovery
+- Contributor documentation
+- Focused compatibility testing against supported OpenClaw/Hermes versions
+- Sustainable maintenance without a hosted SaaS obligation
+
+## Commercialization
+
+Org Studio is not the commercial cloud product.
+
+- The repository remains MIT open source.
+- Self-hosting remains the expected deployment.
+- No Org Studio Cloud, billing system, vertical paid templates, or enterprise tier is planned.
+- Community sponsorship, support, or services may be considered later, but they are not the product thesis.
+- Commercial cloud, enterprise security, managed execution, billing, and the generous free tier belong to Materialyze.
 
 ## Boundaries
-- **Fewer tools, not better tools** — every feature must replace a tool or deepen an existing surface.
-- **Don't rebuild Slack.** Conversation is a feature inside a domain, never the product's foundation.
-- No production deployments from Org Studio — it's the org layer, not CI/CD.
-- No direct DB access — all data through store API.
-- Runtime-agnostic by design — OpenClaw adapter optional.
-- Keep the store file-backed for local mode — Postgres optional.
-- MIT license — no proprietary features in the OSS core.
-- **Versioning — two deliberate schemes, never crossed (#1560):** repo/skill releases use semver (`package.json`, git release tags); product roadmap + `autonomy.approvedThrough` use calver (`YYYY.MM`). Independent by design.
-- **Stay pre-launch indefinitely until commercial readiness** — "Cloud Launch" = "bet-your-business ready," nothing before.
+
+- No direct LLM coding engines in the steady-state Org Studio product.
+- No faceless stateless-worker orchestration after the Materialyze extraction.
+- No hosted multi-tenant cloud or billing roadmap.
+- No claim that general-purpose runtimes satisfy enterprise least-privilege requirements.
+- No attempt to make named agents look faceless; identity and durable ownership are intentional here.
+- No production deployment engine; Org Studio coordinates runtime teammates and records work.
+- No Slack replacement; conversation is a feature inside a domain, never the foundation.
+- No destructive removal of transitional code before Materialyze extraction and verification.
+- Repo releases use semver; product roadmap and approval horizons use calver.
+
+## Decision Record — 2026-07-16
+
+The worker/planner experiments revealed a second product rather than a fourth Org Studio pillar.
+
+Three weaknesses in the persistent-agent approach became structural:
+
+1. General-purpose assistant contexts are token-heavy for bounded coding work.
+2. Named personas can personalize work that should be evaluated as replaceable execution capacity.
+3. Open-ended agent autonomy is less predictable than a deterministic pipeline of approved, context-complete jobs.
+
+For enterprise and serious commercial software work, the worker architecture also provides the stronger security model: ephemeral execution, no channels or personal memory, least-privilege credentials, bounded tools, model governance, and complete receipts.
+
+Therefore:
+
+- Org Studio returns to a focused OSS product for named OpenClaw/Hermes agent teams.
+- Materialyze becomes the separate commercial product for secure, stateless, cost-optimized, ongoing software delivery.
+- The Org Studio cloud/billing plan moves to Materialyze.
+- Transitional worker/planner/runtime-less messaging code is extracted before removal.
 
 ## Change History
+
 | Date | Version | Author | Change |
-|------|---------|--------|--------|
-| 2026-06-02 | 2026.05 | Basil/Mikey | **Reality audit + North Star reframe.** Full codebase audit (HEAD 1059d40) corrected major drift: thread-as-primitive / mobile-first IA were REVERTED (not shipped) — demoted from a pillar; web push was never built — claim cut; multi-tenant schema + outcome-bound versions (#1263) were SHIPPED — promoted out of blocked/unscheduled. Reframed the North Star primitive from *thread* to *owned domain*. Established three pillars (Ownership / Autonomy within guardrails / Turnkey teams). Scheduled v0.17 (Autonomous Domain Evolution) + v0.18 (Teammate Library). Reframed commercialization around vertical org templates over seat tiers. Flagged 3 dead feature flags + the four-way version-scheme collision (cleanup ticket #1560). |
+|---|---|---|---|
+| 2026-07-16 | 2026.11.15 | Basil/Mikey | **Org Studio / Materialyze product split.** Narrowed Org Studio to an MIT, self-hosted operating studio for named OpenClaw/Hermes agent teams in trusted environments. Removed enterprise/cloud ambitions from its North Star and roadmap. Classified worker, planner, direct-model, stateless-context, runtime-less messaging, and worker-audit capabilities for extraction into Materialyze before removal. Materialyze owns the commercial, enterprise, secure, cost-optimized software-delivery path. |
+| 2026-07-07 | 2026.11.15 | Basil/Mikey | Built the worker, native-messaging, and Studio Planner direction inside Org Studio. This work is now treated as the validated prototype substrate for Materialyze rather than Org Studio's permanent architecture. |
+| 2026-06-02 | 2026.05 | Basil/Mikey | Reality audit reframed the original product around owned domains, autonomy within guardrails, and turnkey named teams. |
