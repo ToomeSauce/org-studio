@@ -1,6 +1,6 @@
 {
   "name": "org-studio",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Org design and management for human-in-the-loop agent organizations",
   "license": "MIT",
   "bin": {
@@ -9,6 +9,9 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/ToomeSauce/org-studio"
+  },
+  "engines": {
+    "node": ">=20.9.0"
   },
   "keywords": [
     "agents",
@@ -35,6 +38,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "version-check": "node scripts/check-version-schemes.mjs",
+    "vision-check": "node scripts/check-vision-sync.mjs",
     "build:skill": "bash scripts/build-skill.sh && bash scripts/sync-skills.sh --quiet",
     "sync-skills": "bash scripts/sync-skills.sh"
   },
@@ -43,7 +47,7 @@
     "clsx": "^2.1.1",
     "geist": "^1.7.0",
     "lucide-react": "^0.576.0",
-    "next": "^16.2.2",
+    "next": "^16.2.12",
     "pg": "^8.20.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
@@ -51,7 +55,7 @@
     "react-toastify": "^11.0.5",
     "remark-gfm": "^4.0.1",
     "semver": "^7.7.4",
-    "ws": "^8.19.0"
+    "ws": "^8.21.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -62,7 +66,7 @@
     "@types/semver": "^7.7.1",
     "@types/ws": "^8.18.1",
     "eslint": "^9",
-    "eslint-config-next": "16.1.6",
+    "eslint-config-next": "^16.2.12",
     "gif-encoder-2": "^1.0.5",
     "png-js": "^1.0.0",
     "pngjs": "^7.0.0",
@@ -70,5 +74,12 @@
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^4.1.0"
+  },
+  "overrides": {
+    "brace-expansion": "^5.0.9",
+    "next": {
+      "postcss": "^8.5.25",
+      "sharp": "^0.35.3"
+    }
   }
 }

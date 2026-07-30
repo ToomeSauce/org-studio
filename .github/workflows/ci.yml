@@ -49,8 +49,12 @@ jobs:
   # Tests are gating as of #1145 — the suite is green and we want regressions
   # to block PRs.
   test:
-    name: test (gating)
-    runs-on: ubuntu-latest
+    name: test (${{ matrix.os }}, gating)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -61,6 +65,48 @@ jobs:
       - run: npm ci
       - name: Vitest
         run: npm test
+
+  # Keep a stable aggregate check name for the main-branch ruleset while the
+  # matrix provides platform-specific evidence.
+  test-gate:
+    name: test (gating)
+    if: ${{ always() }}
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require every matrix leg
+        env:
+          MATRIX_RESULT: ${{ needs.test.result }}
+        run: |
+          if [ "$MATRIX_RESULT" != "success" ]; then
+            echo "One or more test matrix jobs did not pass."
+            exit 1
+          fi
+
+  # Catch vulnerable production dependency trees before they ship. Dev-only
+  # advisories remain visible locally without blocking a runtime release.
+  security-audit:
+    name: production dependency audit (gating)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm audit --omit=dev --audit-level=high
+
+  docker-build:
+    name: docker build (gating)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t org-studio:ci .
 
   # Version-scheme guard (#1561). NON-GATING again (2026-05-29): Ana found my
   # first gating flip was premature — the guard under-scanned (it ignored

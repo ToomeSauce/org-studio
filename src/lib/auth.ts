@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { randomBytes, timingSafeEqual } from 'crypto';
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'crypto';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { withPgClient } from '@/lib/pg-pool';
@@ -63,12 +63,31 @@ export interface AuthUser {
   passwordHash: string;
 }
 
+const SCRYPT_N = 16_384;
+const SCRYPT_R = 8;
+const SCRYPT_P = 1;
+const SCRYPT_KEYLEN = 32;
+
 /**
- * Hash a password (simple SHA-256)
+ * Hash a password with a per-user salt and an intentionally expensive KDF.
+ *
+ * Format: scrypt$N$r$p$saltHex$derivedKeyHex
  */
 export function hashPassword(password: string): string {
-  const crypto = require('crypto');
-  return crypto.createHash('sha256').update(password).digest('hex');
+  const salt = randomBytes(16);
+  const derived = scryptSync(password, salt, SCRYPT_KEYLEN, {
+    N: SCRYPT_N,
+    r: SCRYPT_R,
+    p: SCRYPT_P,
+  });
+  return [
+    'scrypt',
+    SCRYPT_N,
+    SCRYPT_R,
+    SCRYPT_P,
+    salt.toString('hex'),
+    derived.toString('hex'),
+  ].join('$');
 }
 
 /**
@@ -91,10 +110,56 @@ export function timingSafeEqualStr(a: string, b: string): boolean {
  * Verify a password against a hash
  */
 export function verifyPassword(password: string, hash: string): boolean {
-  // Constant-time compare of the two SHA-256 hex digests (#1619, F-7).
-  // NOTE: the hash itself is still unsalted SHA-256 — migrating the KDF is
-  // tracked separately under the sign-off-gated ticket #1626 (audit F-1).
-  return timingSafeEqualStr(hashPassword(password), hash || '');
+  if (!hash) return false;
+
+  if (hash.startsWith('scrypt$')) {
+    const parts = hash.split('$');
+    if (parts.length !== 6) return false;
+    const [, nRaw, rRaw, pRaw, saltHex, expectedHex] = parts;
+    const N = Number(nRaw);
+    const r = Number(rRaw);
+    const p = Number(pRaw);
+    if (
+      !Number.isSafeInteger(N) ||
+      !Number.isSafeInteger(r) ||
+      !Number.isSafeInteger(p) ||
+      N < 2 ||
+      N > 1_048_576 ||
+      r < 1 ||
+      r > 32 ||
+      p < 1 ||
+      p > 16 ||
+      saltHex.length < 32 ||
+      saltHex.length % 2 !== 0 ||
+      expectedHex.length !== SCRYPT_KEYLEN * 2 ||
+      !/^[a-f0-9]+$/i.test(saltHex) ||
+      !/^[a-f0-9]+$/i.test(expectedHex)
+    ) {
+      return false;
+    }
+    try {
+      const derived = scryptSync(password, Buffer.from(saltHex, 'hex'), expectedHex.length / 2, {
+        N,
+        r,
+        p,
+      });
+      return timingSafeEqualStr(derived.toString('hex'), expectedHex);
+    } catch {
+      return false;
+    }
+  }
+
+  // Backward-compatible verification for legacy unsalted SHA-256 records.
+  // Successful login upgrades these records in place.
+  if (/^[a-f0-9]{64}$/i.test(hash)) {
+    const legacy = createHash('sha256').update(password).digest('hex');
+    return timingSafeEqualStr(legacy, hash);
+  }
+  return false;
+}
+
+export function passwordNeedsRehash(hash: string | undefined): boolean {
+  return !hash?.startsWith(`scrypt$${SCRYPT_N}$${SCRYPT_R}$${SCRYPT_P}$`);
 }
 
 /**

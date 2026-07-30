@@ -176,12 +176,16 @@ export async function listAllWorkspaceIds(): Promise<string[]> {
  *
  * Values:
  *   'strict'     — return 403 on cross-workspace access
- *   'permissive' — log but allow, fall back to default-workspace (DEFAULT)
+ *   'permissive' — log but allow, fall back to default-workspace
+ *
+ * Default: strict for PostgreSQL/multi-user mode; permissive for the
+ * single-workspace file provider.
  */
 function getEnforceMode(): 'strict' | 'permissive' {
   const val = process.env.WORKSPACE_ENFORCE;
   if (val === 'strict') return 'strict';
-  return 'permissive'; // default
+  if (val === 'permissive') return 'permissive';
+  return process.env.DATABASE_URL ? 'strict' : 'permissive';
 }
 
 /**

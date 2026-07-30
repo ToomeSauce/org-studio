@@ -25,7 +25,14 @@
 // keeps the server stateless and the wire format simple. The selector UI
 // just hangs onto the password in memory between the two calls.
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyPassword, createSession, getSession, getSessionTokenFromCookie } from '@/lib/auth';
+import {
+  verifyPassword,
+  hashPassword,
+  passwordNeedsRehash,
+  createSession,
+  getSession,
+  getSessionTokenFromCookie,
+} from '@/lib/auth';
 import { getStoreProviderAllWorkspaces } from '@/lib/store-provider'; // login: pre-workspace bootstrap
 import {
   WORKSPACE_COOKIE_KEY,
@@ -81,7 +88,8 @@ export async function POST(req: NextRequest) {
     }
 
     // Get users from settings
-    const store = await getStoreProviderAllWorkspaces().read();
+    const provider = getStoreProviderAllWorkspaces();
+    const store = await provider.read();
     const users = store.settings?.users || [];
 
     // Find user by username
@@ -99,6 +107,23 @@ export async function POST(req: NextRequest) {
         { error: 'Invalid credentials' },
         { status: 401 },
       );
+    }
+
+    // Transparently upgrade legacy unsalted SHA-256 records after a
+    // successful credential check. The plaintext password never leaves this
+    // request and the old hash remains valid until this write succeeds.
+    if (passwordNeedsRehash(user.passwordHash)) {
+      const upgradedHash = hashPassword(password);
+      const upgradedUsers = users.map((candidate: any) =>
+        candidate.username === user.username
+          ? { ...candidate, passwordHash: upgradedHash }
+          : candidate,
+      );
+      await provider.updateSettings({
+        ...store.settings,
+        users: upgradedUsers,
+      });
+      user.passwordHash = upgradedHash;
     }
 
     // membership lookup via org_studio_workspace_memberships

@@ -1,6 +1,6 @@
 # Configuration
 
-Org Studio is configured via environment variables. All are optional except `ORG_STUDIO_API_KEY` if using remote access.
+Org Studio is configured through environment variables. File mode and loopback access need no credentials; any non-loopback deployment requires `ORG_STUDIO_API_KEY` unless the operator deliberately enables the insecure escape hatch on an isolated network.
 
 ## Core Settings
 
@@ -13,6 +13,19 @@ HTTP port for the web interface and API server.
 ```bash
 PORT=3000
 ```
+
+### `ORG_STUDIO_HOST`
+
+**Default:** `127.0.0.1`
+
+Network interface for the web and WebSocket server. Keep the loopback default for a local installation. Containers and reverse-proxy deployments commonly set:
+
+```bash
+ORG_STUDIO_HOST=0.0.0.0
+ORG_STUDIO_API_KEY=a-long-random-secret
+```
+
+Startup fails closed when the host is non-loopback and `ORG_STUDIO_API_KEY` is missing. `ALLOW_INSECURE_REMOTE=true` bypasses that check and is only appropriate on a deliberately isolated trusted network.
 
 ### `DATABASE_URL`
 
@@ -48,7 +61,7 @@ When set, Org Studio auto-generates `ORG.md` in each agent's workspace and syncs
 
 ### `ORG_STUDIO_API_KEY`
 
-**Default:** None (no auth required for local access)
+**Default:** None (permitted only for loopback access)
 
 API key for remote access. If set, all API calls must include the header:
 
@@ -61,7 +74,7 @@ Authorization: Bearer {ORG_STUDIO_API_KEY}
 ORG_STUDIO_API_KEY=sk_org_1234567890abcdef
 ```
 
-Use when deploying Org Studio on a VPS or any remote server. Protect this value — don't commit to git.
+Required when binding `ORG_STUDIO_HOST` beyond loopback. Protect this value—do not commit it to git.
 
 ## Remote Integration
 
@@ -249,6 +262,7 @@ Org Studio debounces file watchers by 150ms to prevent thrashing. For high-frequ
 ## Security
 
 - **Never commit `.env.local`** — it contains secrets
+- **Keep the default loopback bind** unless the service is authenticated and intentionally exposed
 - **Rotate `ORG_STUDIO_API_KEY`** quarterly on production
 - **Use strong Postgres passwords** and restrict network access
 - **Limit Gateway access** to trusted networks

@@ -72,7 +72,10 @@ log ""
 
 # Build list of canonical files to mirror (SKILL.md + references/*.md only).
 # Anything else in the source dir is ignored.
-mapfile -t CANONICAL_FILES < <(
+CANONICAL_FILES=()
+while IFS= read -r canonical_file; do
+  CANONICAL_FILES+=("$canonical_file")
+done < <(
   cd "$SRC_DIR" && {
     [[ -f SKILL.md ]] && echo "SKILL.md"
     [[ -d references ]] && find references -maxdepth 1 -type f -name '*.md' | sort
@@ -86,7 +89,10 @@ fi
 
 # Discover target workspaces. Only those that ALREADY have the skill dir —
 # we don't bootstrap installs here.
-mapfile -t TARGETS < <(
+TARGETS=()
+while IFS= read -r target_workspace; do
+  TARGETS+=("$target_workspace")
+done < <(
   find "$WORKSPACES_ROOT" -mindepth 1 -maxdepth 1 -type d -name 'workspace-*' 2>/dev/null \
     | while read -r ws; do
         [[ -d "$ws/skills/org-studio-api" ]] && echo "$ws"
