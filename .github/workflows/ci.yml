@@ -66,6 +66,24 @@ jobs:
       - name: Vitest
         run: npm test
 
+  # Keep a stable aggregate check name for the main-branch ruleset while the
+  # matrix provides platform-specific evidence.
+  test-gate:
+    name: test (gating)
+    if: ${{ always() }}
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require every matrix leg
+        env:
+          MATRIX_RESULT: ${{ needs.test.result }}
+        run: |
+          if [ "$MATRIX_RESULT" != "success" ]; then
+            echo "One or more test matrix jobs did not pass."
+            exit 1
+          fi
+
   # Catch vulnerable production dependency trees before they ship. Dev-only
   # advisories remain visible locally without blocking a runtime release.
   security-audit:
